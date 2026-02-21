@@ -47,7 +47,7 @@ public struct Gemma3Config: Codable, Sendable {
         attentionHeads: Int = 16,
         headDim: Int = 256,
         rmsNormEps: Float = 1e-6,
-        vocabularySize: Int = 262144,
+        vocabularySize: Int = 262208,
         kvHeads: Int = 8,
         ropeTheta: Float = 1_000_000.0,
         ropeLocalBaseFreq: Float = 10_000.0,
@@ -122,7 +122,7 @@ public struct Gemma3Config: Codable, Sendable {
         attentionHeads = try container.decodeIfPresent(Int.self, forKey: .attentionHeads) ?? 16
         headDim = try container.decodeIfPresent(Int.self, forKey: .headDim) ?? 256
         rmsNormEps = try container.decodeIfPresent(Float.self, forKey: .rmsNormEps) ?? 1e-6
-        vocabularySize = try container.decodeIfPresent(Int.self, forKey: .vocabularySize) ?? 262144
+        vocabularySize = try container.decodeIfPresent(Int.self, forKey: .vocabularySize) ?? 262208
         kvHeads = try container.decodeIfPresent(Int.self, forKey: .kvHeads) ?? 8
         ropeTheta = try container.decodeIfPresent(Float.self, forKey: .ropeTheta) ?? 1_000_000.0
         ropeLocalBaseFreq = try container.decodeIfPresent(Float.self, forKey: .ropeLocalBaseFreq) ?? 10_000.0

@@ -42,12 +42,64 @@ public class LoRAAdapter {
         }
 
         LTXDebug.log("LoRA would modify \(modifiedCount) layers")
-
-        // Note: Actual weight fusion would require using update() with NestedDictionary
-        // For now, we just compute and return the count
-        // The deltas can be accessed via computeDeltas() for manual application
-
         return modifiedCount
+    }
+
+    /// Fuse LoRA weights into the transformer model's weights
+    ///
+    /// Formula: W' = W + scale * (B @ A)
+    ///
+    /// - Parameters:
+    ///   - model: The transformer to fuse into
+    /// - Returns: Dictionary of original weights (for unfusing later)
+    @discardableResult
+    public func fuseWeights(into model: LTXTransformer) -> [String: MLXArray] {
+        var originalWeights: [String: MLXArray] = [:]
+        var fusedCount = 0
+
+        // Get model parameters as a flat dictionary
+        let modelParams = Dictionary(uniqueKeysWithValues: model.parameters().flattened())
+
+        // Compute deltas and apply them
+        for layer in loraWeights.layers {
+            guard let delta = loraWeights.getDelta(for: layer.originalKey) else { continue }
+
+            // Map to Swift key and find the weight
+            let swiftKey = layer.originalKey + ".weight"
+            guard let currentWeight = modelParams[swiftKey] else {
+                LTXDebug.log("LoRA fuse: no model weight for \(swiftKey), skipping")
+                continue
+            }
+
+            // Save original for unfusing
+            originalWeights[swiftKey] = currentWeight
+
+            // Fuse: W' = W + delta (delta already includes scale)
+            let newWeight = currentWeight + delta
+            MLX.eval(newWeight)
+
+            // Apply via nested key path update
+            setParameterByPath(model: model, keyPath: swiftKey, value: newWeight)
+            fusedCount += 1
+        }
+
+        LTXDebug.log("LoRA fused \(fusedCount) layers (saved \(originalWeights.count) originals)")
+        return originalWeights
+    }
+
+    /// Unfuse previously fused LoRA weights by restoring originals
+    ///
+    /// - Parameters:
+    ///   - originalWeights: Dictionary returned by `fuseWeights(into:)`
+    ///   - model: The transformer to restore
+    public static func unfuseWeights(from originalWeights: [String: MLXArray], into model: LTXTransformer) {
+        var restoredCount = 0
+        for (keyPath, originalWeight) in originalWeights {
+            setParameterByPath(model: model, keyPath: keyPath, value: originalWeight)
+            restoredCount += 1
+        }
+        MLX.eval(model.parameters())
+        LTXDebug.log("LoRA unfused: restored \(restoredCount) layers")
     }
 
     /// Count layers that would be modified by this LoRA
@@ -179,7 +231,7 @@ public class MultiLoRAAdapter {
 // MARK: - Convenience Extensions
 
 extension LTXTransformer {
-    /// Apply a LoRA to this transformer
+    /// Apply a LoRA to this transformer (count only — for compatibility)
     ///
     /// - Parameters:
     ///   - loraPath: Path to the LoRA .safetensors file
@@ -204,4 +256,53 @@ extension LTXTransformer {
             schedulerOverrides: adapter.schedulerOverrides
         )
     }
+
+    /// Apply a LoRA to this transformer with real weight fusion
+    ///
+    /// - Parameters:
+    ///   - loraPath: Path to the LoRA .safetensors file
+    ///   - scale: Scale factor (default: 1.0)
+    /// - Returns: Dictionary of original weights (for unfusing), and application result
+    @discardableResult
+    public func fuseLoRA(
+        from loraPath: String,
+        scale: Float = 1.0
+    ) throws -> (originalWeights: [String: MLXArray], result: LoRAApplicationResult) {
+        let config = LoRAConfig(weightsPath: loraPath, scale: scale)
+        let weights = try LoRALoader.load(from: loraPath, config: config)
+        let adapter = LoRAAdapter(loraWeights: weights, fused: true)
+
+        let originals = adapter.fuseWeights(into: self)
+
+        let result = LoRAApplicationResult(
+            modifiedLayerCount: originals.count,
+            loraName: weights.info.name,
+            scale: scale,
+            fused: true,
+            schedulerOverrides: adapter.schedulerOverrides
+        )
+
+        return (originals, result)
+    }
+
+    /// Unfuse previously fused LoRA weights
+    public func unfuseLoRA(originalWeights: [String: MLXArray]) {
+        LoRAAdapter.unfuseWeights(from: originalWeights, into: self)
+    }
+}
+
+// MARK: - Parameter Path Helper
+
+/// Set a parameter on a Module by dot-separated key path
+/// Navigates the Module tree using key components to find and update the target parameter.
+private func setParameterByPath(model: Module, keyPath: String, value: MLXArray) {
+    let components = keyPath.split(separator: ".").map(String.init)
+    guard !components.isEmpty else { return }
+
+    // Build a NestedDictionary update for Module.update()
+    // We need to build: {"component1": {"component2": {"leaf": value}}}
+    // Use NestedDictionary.unflattened to build from the flat key path
+    let flatKey = components.joined(separator: ".")
+    let params = ModuleParameters.unflattened([(flatKey, value)])
+    model.update(parameters: params)
 }

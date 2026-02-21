@@ -24,8 +24,11 @@ public class RMSNorm: Module, UnaryLayer {
 }
 
 /// Apply RMS normalization without learnable weight
+///
+/// Matches Python: `mx.fast.rms_norm(x, mx.ones((x.shape[-1],), dtype=x.dtype), eps)`
+/// Weight dtype must match input dtype to avoid float32 promotion.
 public func rmsNorm(_ x: MLXArray, eps: Float = 1e-6) -> MLXArray {
-    let weight = MLXArray.ones([x.dim(-1)])
+    let weight = MLXArray.ones([x.dim(-1)]).asType(x.dtype)
     return MLXFast.rmsNorm(x, weight: weight, eps: eps)
 }
 

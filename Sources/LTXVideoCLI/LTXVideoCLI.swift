@@ -6,10 +6,6 @@ import Foundation
 import LTXVideo
 @preconcurrency import MLX
 import MLXRandom
-import MLXNN
-import MLXLMCommon
-import Hub
-import Tokenizers
 
 @main
 struct LTXVideoCLI: AsyncParsableCommand {
@@ -17,7 +13,7 @@ struct LTXVideoCLI: AsyncParsableCommand {
         commandName: "ltx-video",
         abstract: "LTX-2 video generation on Mac with MLX",
         version: "0.1.0",
-        subcommands: [Generate.self, Download.self, Info.self, TestComponents.self, Validate.self, TestGemmaNative.self, Encode.self, DecodeLatent.self, DenoiseTest.self],
+        subcommands: [Generate.self, Download.self, Info.self, TestComponents.self, Validate.self, TestGemmaNative.self, Encode.self, DecodeLatent.self, DenoiseTest.self, BlockDump.self, DenoiseCompare.self],
         defaultSubcommand: Info.self
     )
 }
@@ -33,7 +29,7 @@ struct TestComponents: AsyncParsableCommand {
     @Option(name: .shortAndLong, help: "Component to test: transformer, vae, connector (text-encoder), all")
     var component: String = "transformer"
 
-    @Option(name: .shortAndLong, help: "Model variant: distilledFP8, distilled, or dev")
+    @Option(name: .shortAndLong, help: "Model variant: distilled or dev")
     var model: String = "distilled"
 
     @Flag(name: .long, help: "Enable debug output")
@@ -46,7 +42,7 @@ struct TestComponents: AsyncParsableCommand {
 
         // Parse model variant
         guard let modelVariant = LTXModel(rawValue: model) else {
-            throw ValidationError("Invalid model: \(model). Use: distilledFP8, distilled, or dev")
+            throw ValidationError("Invalid model: \(model). Use: distilled or dev")
         }
 
         print("LTX-2 Component Test")
@@ -58,7 +54,7 @@ struct TestComponents: AsyncParsableCommand {
         // Download unified weights if needed
         let downloader = ModelDownloader()
         print("Checking model weights...")
-        let weightsPath = try await downloader.downloadLTXWeights(model: modelVariant) { progress in
+        let weightsPath = try await downloader.downloadUnifiedWeights(model: modelVariant) { progress in
             print("  \(progress.message)")
         }
         print("Weights: \(weightsPath.path)")
@@ -66,28 +62,25 @@ struct TestComponents: AsyncParsableCommand {
 
         // Load and split unified weights
         print("Loading and splitting weights...")
-        let components = try LTXWeightLoader.loadUnifiedWeights(
-            from: weightsPath.path,
-            isFP8: modelVariant.isFP8
-        )
+        let components = try LTXWeightLoader.splitUnifiedWeightsFile(path: weightsPath.path)
         print("  Transformer: \(components.transformer.count) tensors")
-        print("  VAE: \(components.vaeDecoder.count) tensors")
-        print("  TextEncoder: \(components.textEncoder.count) tensors")
+        print("  VAE: \(components.vae.count) tensors")
+        print("  TextEncoder: \(components.connector.count) tensors")
         print()
 
         switch component.lowercased() {
         case "transformer":
             try testTransformer(weights: components.transformer, config: modelVariant.transformerConfig)
         case "vae":
-            try testVAE(weights: components.vaeDecoder)
+            try testVAE(weights: components.vae)
         case "connector", "text-encoder":
-            try testTextEncoderConnector(weights: components.textEncoder)
+            try testTextEncoderConnector(weights: components.connector)
         case "all":
             try testTransformer(weights: components.transformer, config: modelVariant.transformerConfig)
             print()
-            try testVAE(weights: components.vaeDecoder)
+            try testVAE(weights: components.vae)
             print()
-            try testTextEncoderConnector(weights: components.textEncoder)
+            try testTextEncoderConnector(weights: components.connector)
         default:
             print("Unknown component: \(component)")
             print("Available: transformer, vae, connector (text-encoder), all")
@@ -241,7 +234,7 @@ struct Generate: AsyncParsableCommand {
     @Option(name: .long, help: "Random seed for reproducibility")
     var seed: UInt64?
 
-    @Option(name: .shortAndLong, help: "Model variant: distilledFP8, distilled, or dev")
+    @Option(name: .shortAndLong, help: "Model variant: distilled or dev")
     var model: String = "distilled"
 
     @Option(name: .long, help: "Path to LoRA weights (.safetensors)")
@@ -259,6 +252,33 @@ struct Generate: AsyncParsableCommand {
     @Option(name: .long, help: "Path to unified LTX-2 weights file (.safetensors)")
     var ltxWeights: String?
 
+    @Option(name: .long, help: "Negative prompt for CFG (default: detailed quality-negative prompt)")
+    var negativePrompt: String?
+
+    @Option(name: .long, help: "Guidance rescale (phi). 0.0=off, 0.7=recommended with CFG")
+    var guidanceRescale: Float = 0.0
+
+    @Option(name: .long, help: "Cross-attention scale. 1.0=default, >1=stronger prompt adherence")
+    var crossAttnScale: Float = 1.0
+
+    @Option(name: .long, help: "GE velocity correction gamma. 0.0=off")
+    var geGamma: Float = 0.0
+
+    @Option(name: .long, help: "STG (Spatio-Temporal Guidance) scale. 0.0=off, 0.5=recommended")
+    var stgScale: Float = 0.0
+
+    @Option(name: .long, help: "STG block indices (comma-separated, e.g. \"29\" or \"28,29\")")
+    var stgBlocks: String = "29"
+
+    @Flag(name: .long, help: "Use two-stage generation (half-res + upscale + refine)")
+    var twoStage: Bool = false
+
+    @Flag(name: .long, help: "Enhance prompt using Gemma before generation")
+    var enhancePrompt: Bool = false
+
+    @Option(name: .long, help: "Path to pre-computed embeddings (.safetensors) for diagnostic")
+    var pythonEmbeddings: String?
+
     @Flag(name: .long, help: "Enable debug output")
     var debug: Bool = false
 
@@ -274,6 +294,9 @@ struct Generate: AsyncParsableCommand {
             LTXDebug.enableDebugMode()
         }
 
+        // Parse STG blocks
+        let parsedStgBlocks = stgBlocks.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+
         print("LTX-2 Video Generation")
         print("======================")
         print("Prompt: \(prompt)")
@@ -284,6 +307,12 @@ struct Generate: AsyncParsableCommand {
         if let seed = seed {
             print("Seed: \(seed)")
         }
+        if guidanceRescale > 0 { print("Guidance rescale: \(guidanceRescale)") }
+        if crossAttnScale != 1.0 { print("Cross-attention scale: \(crossAttnScale)") }
+        if geGamma > 0 { print("GE gamma: \(geGamma)") }
+        if stgScale > 0 { print("STG scale: \(stgScale), blocks: \(parsedStgBlocks)") }
+        if twoStage { print("Two-stage: enabled") }
+        if enhancePrompt { print("Prompt enhancement: enabled") }
         print()
 
         // Validate frame count (must be 8n+1)
@@ -298,7 +327,7 @@ struct Generate: AsyncParsableCommand {
 
         // Parse model variant
         guard let modelVariant = LTXModel(rawValue: model) else {
-            throw ValidationError("Invalid model: \(model). Use: distilledFP8, distilled, or dev")
+            throw ValidationError("Invalid model: \(model). Use: distilled or dev")
         }
 
         if dryRun {
@@ -347,17 +376,66 @@ struct Generate: AsyncParsableCommand {
             numFrames: frames,
             numSteps: steps ?? modelVariant.defaultSteps,
             cfgScale: guidance ?? modelVariant.defaultGuidance,
-            seed: seed
+            seed: seed,
+            guidanceRescale: guidanceRescale,
+            crossAttentionScale: crossAttnScale,
+            geGamma: geGamma,
+            stgScale: stgScale,
+            stgBlocks: parsedStgBlocks,
+            twoStage: twoStage,
+            enhancePrompt: enhancePrompt
         )
 
-        let result = try await pipeline.generateVideo(
-            prompt: prompt,
-            config: config,
-            onProgress: { progress in
-                print("  \(progress.status)")
-            },
-            profile: profile
-        )
+        let result: VideoGenerationResult
+        if twoStage {
+            // Two-stage: half-res → upscale → refine
+            // Download upscaler weights if needed
+            print("Downloading upscaler weights (if needed)...")
+            let upscalerPath = try await pipeline.downloadUpscalerWeights()
+            print("Upscaler weights: \(upscalerPath)")
+
+            result = try await pipeline.generateVideoTwoStage(
+                prompt: prompt,
+                config: config,
+                upscalerWeightsPath: upscalerPath,
+                onProgress: { progress in
+                    print("  \(progress.status)")
+                },
+                profile: profile
+            )
+        } else {
+            // Load pre-computed embeddings if provided
+            var precomputed: LTXPipeline.PrecomputedEmbeddings? = nil
+            if let embPath = pythonEmbeddings {
+                print("Loading pre-computed embeddings from \(embPath)...")
+                let embURL = URL(fileURLWithPath: embPath)
+                let arrays = try MLX.loadArrays(url: embURL)
+                guard let pe = arrays["prompt_embeddings"],
+                      let pm = arrays["prompt_mask"] else {
+                    throw ValidationError("Missing prompt_embeddings or prompt_mask in \(embPath)")
+                }
+                let ne = arrays["null_embeddings"]
+                let nm = arrays["null_mask"]
+                precomputed = LTXPipeline.PrecomputedEmbeddings(
+                    promptEmbeddings: pe,
+                    promptMask: pm,
+                    nullEmbeddings: ne,
+                    nullMask: nm
+                )
+                print("  prompt_embeddings: \(pe.shape), null_embeddings: \(ne?.shape ?? [])")
+            }
+
+            result = try await pipeline.generateVideo(
+                prompt: prompt,
+                negativePrompt: negativePrompt,
+                config: config,
+                precomputedEmbeddings: precomputed,
+                onProgress: { progress in
+                    print("  \(progress.status)")
+                },
+                profile: profile
+            )
+        }
 
         let genTime = Date().timeIntervalSince(startGen)
         print("Generation completed in \(String(format: "%.1f", genTime))s")
@@ -420,14 +498,11 @@ struct Download: AsyncParsableCommand {
         abstract: "Download model weights from HuggingFace"
     )
 
-    @Option(name: .shortAndLong, help: "Model variant: distilledFP8, distilled, or dev")
+    @Option(name: .shortAndLong, help: "Model variant: distilled or dev")
     var model: String = "distilled"
 
     @Option(name: .long, help: "HuggingFace token for gated models")
     var hfToken: String?
-
-    @Flag(name: .long, help: "Also download Gemma3 12B text encoder")
-    var withGemma: Bool = false
 
     @Flag(name: .long, help: "Force re-download even if files exist")
     var force: Bool = false
@@ -438,49 +513,31 @@ struct Download: AsyncParsableCommand {
 
         // Parse model variant
         guard let modelVariant = LTXModel(rawValue: model) else {
-            throw ValidationError("Invalid model: \(model). Use: distilledFP8, distilled, or dev")
+            throw ValidationError("Invalid model: \(model). Use: distilled or dev")
         }
 
         print("Model: \(modelVariant.displayName)")
         print("Repository: \(modelVariant.huggingFaceRepo)")
-        print("File: \(modelVariant.weightsFilename)")
         print("Estimated RAM: ~\(modelVariant.estimatedVRAM)GB")
         print()
 
         let downloader = ModelDownloader(hfToken: hfToken)
 
-        // Download LTX unified weights
-        if await downloader.isLTXWeightsDownloaded(modelVariant) && !force {
-            print("✅ LTX weights already downloaded")
-        } else {
-            print("Downloading LTX-2 weights...")
-            let weightsPath = try await downloader.downloadLTXWeights(model: modelVariant) { progress in
-                if let file = progress.currentFile {
-                    print("  [\(Int(progress.progress * 100))%] \(file)")
-                } else {
-                    print("  \(progress.message)")
-                }
-            }
-            print("✅ LTX weights: \(weightsPath.path)")
-        }
-
-        // Download Gemma if requested
-        if withGemma {
-            print()
-            if await downloader.isGemmaDownloaded() && !force {
-                print("✅ Gemma already downloaded")
+        // Download all components (Diffusers per-component format)
+        print("Downloading all components for \(modelVariant.displayName)...")
+        let paths = try await downloader.downloadAllComponents(model: modelVariant) { progress in
+            if let file = progress.currentFile {
+                print("  [\(Int(progress.progress * 100))%] \(file)")
             } else {
-                print("Downloading Gemma3 12B (MLX 4-bit)...")
-                let gemmaPath = try await downloader.downloadGemma { progress in
-                    if let file = progress.currentFile {
-                        print("  [\(Int(progress.progress * 100))%] \(file)")
-                    } else {
-                        print("  \(progress.message)")
-                    }
-                }
-                print("✅ Gemma: \(gemmaPath.path)")
+                print("  \(progress.message)")
             }
         }
+        print()
+        print("✅ Text encoder: \(paths.textEncoderDir.path)")
+        print("✅ Tokenizer: \(paths.tokenizerDir.path)")
+        print("✅ Connector: \(paths.connectorPath.path)")
+        print("✅ VAE: \(paths.vaePath.path)")
+        print("✅ Unified weights: \(paths.unifiedWeightsPath.path)")
     }
 }
 
@@ -501,9 +558,8 @@ struct Info: ParsableCommand {
             Platform: macOS (Apple Silicon with MLX)
 
             Model Variants:
-              • distilledFP8  - ~12GB RAM, 8 steps (fastest)
               • distilled     - ~16GB RAM, 8 steps
-              • dev           - ~25GB RAM, 50 steps (best quality)
+              • dev           - ~25GB RAM, 40 steps (best quality)
 
             Constraints:
               • Frame count: Must be 8n+1 (9, 17, 25, 33, 41, 49, ...)
@@ -524,7 +580,7 @@ struct Info: ParsableCommand {
 
             Usage:
               ltx-video generate "A cat walking" --output cat.mp4
-              ltx-video download --model distilledFP8
+              ltx-video download --model distilled
               ltx-video info
 
             Examples:
@@ -548,7 +604,7 @@ struct Validate: AsyncParsableCommand {
         abstract: "Validate Swift implementation against Python reference"
     )
 
-    @Option(name: .shortAndLong, help: "Model variant: distilledFP8, distilled, or dev")
+    @Option(name: .shortAndLong, help: "Model variant: distilled or dev")
     var model: String = "distilled"
 
     @Flag(name: .long, help: "Enable debug output")
@@ -568,13 +624,13 @@ struct Validate: AsyncParsableCommand {
 
         // Parse model variant
         guard let modelVariant = LTXModel(rawValue: model) else {
-            throw ValidationError("Invalid model: \(model). Use: distilledFP8, distilled, or dev")
+            throw ValidationError("Invalid model: \(model). Use: distilled or dev")
         }
 
         // Download unified weights if needed
         let downloader = ModelDownloader()
         print("Checking model weights...")
-        let weightsPath = try await downloader.downloadLTXWeights(model: modelVariant) { progress in
+        let weightsPath = try await downloader.downloadUnifiedWeights(model: modelVariant) { progress in
             if !progress.message.isEmpty {
                 print("  \(progress.message)")
             }
@@ -584,10 +640,7 @@ struct Validate: AsyncParsableCommand {
 
         // Load and split unified weights
         print("Loading and splitting weights...")
-        let components = try LTXWeightLoader.loadUnifiedWeights(
-            from: weightsPath.path,
-            isFP8: modelVariant.isFP8
-        )
+        let components = try LTXWeightLoader.splitUnifiedWeightsFile(path: weightsPath.path)
         print()
 
         var passed = 0
@@ -601,7 +654,7 @@ struct Validate: AsyncParsableCommand {
 
         // Test 2: Text Encoder Connector Weights
         print("--- Test 2: Text Encoder Connector ---")
-        let connectorResult = validateConnectorWeights(components.textEncoder)
+        let connectorResult = validateConnectorWeights(components.connector)
         if connectorResult { passed += 1 } else { failed += 1 }
         print()
 
@@ -613,14 +666,14 @@ struct Validate: AsyncParsableCommand {
 
         // Test 4: VAE Weight Mapping
         print("--- Test 4: VAE Weight Mapping ---")
-        let vaeResult = validateVAEWeights(components.vaeDecoder)
+        let vaeResult = validateVAEWeights(components.vae)
         if vaeResult { passed += 1 } else { failed += 1 }
         print()
 
         if !quick {
             // Test 5: Connector Forward Pass
             print("--- Test 5: Connector Forward Pass ---")
-            let forwardResult = try validateConnectorForward(components.textEncoder)
+            let forwardResult = try validateConnectorForward(components.connector)
             if forwardResult { passed += 1 } else { failed += 1 }
             print()
 
@@ -937,287 +990,110 @@ struct TestGemmaNative: AsyncParsableCommand {
 struct Encode: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "encode",
-        abstract: "Encode a text prompt through Gemma3 + LTX text encoder pipeline"
+        abstract: "Encode a text prompt through the full text encoding pipeline (Gemma3 + connector)"
     )
 
     @Argument(help: "The text prompt to encode")
     var prompt: String
 
-    @Option(name: .long, help: "Path to Gemma3 model directory (auto-downloads if not provided)")
+    @Option(name: .shortAndLong, help: "Model variant: distilled or dev")
+    var model: String = "distilled"
+
+    @Option(name: .long, help: "Path to local Gemma3 model directory (auto-downloads if not provided)")
     var gemmaPath: String?
 
-    @Option(name: .long, help: "Path to connectors.safetensors file")
-    var connectorsPath: String?
+    @Flag(name: .long, help: "Enhance prompt using Gemma before encoding")
+    var enhancePrompt: Bool = false
 
-    @Option(name: .long, help: "Maximum token length")
-    var maxLength: Int = 256
+    @Option(name: .long, help: "Path to save embeddings as .safetensors")
+    var saveEmbeddings: String?
 
     @Flag(name: .long, help: "Enable debug output")
     var debug: Bool = false
-
-    @Flag(name: .long, help: "Skip connector (only run Gemma + feature extractor)")
-    var skipConnector: Bool = false
 
     mutating func run() async throws {
         if debug {
             LTXDebug.enableDebugMode()
         }
 
-        print("LTX-2 Text Encoding Pipeline")
-        print("============================")
-        print("Prompt: \"\(prompt)\"")
-        print("Max tokens: \(maxLength)")
-        print()
-
-        // Step 1: Get Gemma model path (auto-download if needed)
-        let gemmaDir: URL
-        if let path = gemmaPath {
-            gemmaDir = URL(fileURLWithPath: path)
-        } else {
-            print("Step 1: Downloading Gemma3 12B 4-bit (if needed)...")
-            let downloader = ModelDownloader()
-            gemmaDir = try await downloader.downloadGemma { progress in
-                print("  \(progress.message)")
-            }
+        // Parse model variant
+        guard let modelVariant = LTXModel(rawValue: model) else {
+            throw ValidationError("Invalid model: \(model). Use: distilled or dev")
         }
-        print("  Gemma path: \(gemmaDir.path)")
+
+        print("LTX-2 Text Encoding")
+        print("====================")
+        print("Prompt: \"\(prompt)\"")
+        print("Model: \(modelVariant.displayName)")
+        if enhancePrompt { print("Enhancement: enabled") }
         print()
 
-        // Step 2: Load config and model
-        print("Step 2: Loading Gemma3 model...")
+        // Create pipeline and load only text encoder models
+        let pipeline = LTXPipeline(model: modelVariant)
+
+        print("Loading text encoder models...")
         let startLoad = Date()
-        let gemmaModel = try Gemma3WeightLoader.loadModel(from: gemmaDir)
+        try await pipeline.loadTextEncoderModels(
+            progressCallback: { progress in
+                print("  \(progress.message)")
+            },
+            gemmaModelPath: gemmaPath
+        )
         let loadTime = Date().timeIntervalSince(startLoad)
         print("  Loaded in \(String(format: "%.1f", loadTime))s")
-        print("  Config: \(gemmaModel.config.hiddenLayers) layers, \(gemmaModel.config.hiddenSize) hidden")
-        if let q = gemmaModel.config.quantization {
-            print("  Quantization: \(q.bits)-bit, group_size=\(q.groupSize)")
-        }
-        if let rs = gemmaModel.config.ropeScaling {
-            print("  Rope scaling: \(rs)")
-        }
+        print()
 
-        // Debug: weight comparison with Python
-        if debug {
+        // Encode
+        print("Encoding text...")
+        let startEncode = Date()
+        let result = try await pipeline.encodeText(prompt, enhance: enhancePrompt)
+        let encodeTime = Date().timeIntervalSince(startEncode)
+
+        // Show results
+        if enhancePrompt {
             print()
-            print("  === Weight Verification ===")
-            let params = Dictionary(uniqueKeysWithValues: gemmaModel.parameters().flattened())
-            // Layer 0 q_norm weight
-            if let qnW = params["model.layers.0.self_attn.q_norm.weight"] {
-                MLX.eval(qnW)
-                print("  layer0.q_norm.weight[:5]: \(qnW[0..<5].asArray(Float.self))")
-            }
-            // Layer 0 input_layernorm weight
-            if let lnW = params["model.layers.0.input_layernorm.weight"] {
-                MLX.eval(lnW)
-                print("  layer0.input_layernorm.weight[:5]: \(lnW[0..<5].asArray(Float.self))")
-            }
-            // Layer 0 q_proj scales (quantized)
-            if let qpS = params["model.layers.0.self_attn.q_proj.scales"] {
-                MLX.eval(qpS)
-                print("  layer0.q_proj.scales[0,:5]: \(qpS[0, 0..<5].asArray(Float.self))")
-            }
-            // Embedding test via full forward on 3 tokens
-            let testTokens = MLXArray([Int32(106), Int32(2), Int32(236776)]).reshaped([1, 3])
-            let (_, testStates) = gemmaModel(testTokens, outputHiddenStates: true)
-            if let s0 = testStates?.first {
-                MLX.eval(s0)
-                print("  embed+scale [106] first5: \(s0[0, 0, 0..<5].asArray(Float.self))")
-                print("  embed+scale [2] first5: \(s0[0, 1, 0..<5].asArray(Float.self))")
-                print("  embed+scale [236776] first5: \(s0[0, 2, 0..<5].asArray(Float.self))")
-            }
-        }
-        print()
-
-        // Step 3: Load tokenizer
-        print("Step 3: Loading tokenizer...")
-        let tokenizer = try await AutoTokenizer.from(modelFolder: gemmaDir)
-        print("  Tokenizer loaded")
-        print()
-
-        // Step 4: Tokenize with left-padding
-        print("Step 4: Tokenizing...")
-        let encoded = tokenizer.encode(text: prompt)
-        print("  Raw tokens: \(encoded.count)")
-        print("  Token IDs: \(encoded)")
-
-        // Left-pad to maxLength
-        var tokens = encoded.suffix(maxLength).map { Int32($0) }
-        let paddingNeeded = maxLength - tokens.count
-        let eosTokenId = tokenizer.eosTokenId ?? 0
-        if paddingNeeded > 0 {
-            let padTokenId = Int32(eosTokenId)
-            tokens = [Int32](repeating: padTokenId, count: paddingNeeded) + tokens
-        }
-        let attentionMask = [Float](repeating: 0, count: paddingNeeded)
-            + [Float](repeating: 1, count: maxLength - paddingNeeded)
-
-        let inputIds = MLXArray(tokens).reshaped([1, maxLength])
-        let maskArray = MLXArray(attentionMask).reshaped([1, maxLength])
-
-        print("  Padded shape: \(inputIds.shape)")
-        print("  Padding: \(paddingNeeded) pad + \(maxLength - paddingNeeded) real")
-        print("  Pad token ID (eos): \(eosTokenId)")
-        print("  First 5 padded: \(Array(tokens.prefix(5)))")
-        print("  Last 10 padded: \(Array(tokens.suffix(10)))")
-        print()
-
-        // Step 5: Gemma forward pass
-        print("Step 5: Running Gemma forward pass...")
-        let startGemma = Date()
-        let (lastHidden, allHiddenStates) = gemmaModel(inputIds, outputHiddenStates: true)
-        MLX.eval(lastHidden)
-        let gemmaTime = Date().timeIntervalSince(startGemma)
-
-        print("  Last hidden state: \(lastHidden.shape) \(lastHidden.dtype)")
-        if let states = allHiddenStates {
-            print("  Hidden states: \(states.count) layers")
-            if let first = states.first {
-                print("  Each state shape: \(first.shape)")
-            }
-        }
-        print("  Time: \(String(format: "%.2f", gemmaTime))s")
-        print()
-
-        // Stats on last hidden state
-        let mean = lastHidden.mean()
-        let diff = lastHidden - mean
-        let variance = (diff * diff).mean()
-        let std = MLX.sqrt(variance)
-        MLX.eval(mean, std)
-        print("  Last hidden stats: mean=\(mean.item(Float.self)), std=\(std.item(Float.self))")
-
-        // Per-layer stats for comparison with Python
-        if let states = allHiddenStates {
-            for i in [0, 1, 24, 47, 48] {
-                if i < states.count {
-                    let s = states[i]
-                    let m = s.mean()
-                    let rms = MLX.sqrt((s * s).mean())
-                    MLX.eval(m, rms)
-                    print("  layer_\(i): mean=\(m.item(Float.self)), rms=\(rms.item(Float.self))")
-                }
-            }
-
-            // Per-position values at early layers (to find divergence point)
-            if debug {
-                for i in [1, 2, 3, 5, 6, 7, 8, 9, 16, 24, 32, 40, 47, 48] {
-                    if i < states.count {
-                        let s = states[i]
-                        let p0 = s[0, 0, 0..<3]
-                        let p249 = s[0, 249, 0..<3]
-                        let p255 = s[0, 255, 0..<3]
-                        MLX.eval(p0, p249, p255)
-                        print("  layer_\(i): pos0[:3]=\(p0.asArray(Float.self)), pos249[:3]=\(p249.asArray(Float.self)), pos255[:3]=\(p255.asArray(Float.self))")
-                    }
-                }
-            }
-
-            // Sample values from last hidden state
-            let last = states[states.count - 1]
-            for pos in [0, 249, 255] {
-                let vals = last[0, pos, 0..<5]
-                MLX.eval(vals)
-                print("  pos_\(pos)_first5 = \(vals.asArray(Float.self))")
-            }
-        }
-        print()
-
-        // Step 6: Feature extraction + connector
-        guard let states = allHiddenStates, states.count == gemmaModel.config.hiddenLayers + 1 else {
-            print("  ❌ Expected \(gemmaModel.config.hiddenLayers + 1) hidden states")
-            return
+            print("Enhanced prompt:")
+            print("  \"\(result.prompt)\"")
         }
 
-        print("Step 6: Creating text encoder...")
-        let textEncoder = createTextEncoder()
-
-        // Resolve connector weights path
-        let resolvedConnectorsPath: String? = {
-            if let p = connectorsPath { return p }
-            // Try default locations
-            let defaultPaths = [
-                NSHomeDirectory() + "/Library/Caches/models/ltx-connectors/connectors/diffusion_pytorch_model.safetensors",
-                NSHomeDirectory() + "/Library/Caches/models/ltx-distilledFP8/connectors.safetensors",
-            ]
-            return defaultPaths.first { FileManager.default.fileExists(atPath: $0) }
-        }()
-
-        if let connPath = resolvedConnectorsPath {
-            print("  Loading connector weights from \(connPath)...")
-            let weights = try LTXWeightLoader.loadSingleFile(path: connPath)
-            try LTXWeightLoader.applyTextEncoderWeights(weights, to: textEncoder)
-            MLX.eval(textEncoder.parameters())
-            print("  ✅ Connector weights loaded")
-        } else {
-            print("  ⚠️  No connector weights found (using random weights)")
-            print("  Provide --connectors-path or download to ~/Library/Caches/models/ltx-connectors/")
-        }
         print()
+        print("Embedding results:")
+        print("  Shape: \(result.embeddings.shape)")
+        print("  Dtype: \(result.embeddings.dtype)")
+        print("  Mean:  \(String(format: "%.6f", result.mean))")
+        print("  Std:   \(String(format: "%.6f", result.std))")
 
-        // Step 7: Feature extraction
-        print("Step 7: Feature extraction...")
-        let featureOutput = textEncoder.featureExtractor.extractFromHiddenStates(
-            hiddenStates: states,
-            attentionMask: maskArray,
-            paddingSide: "left"
-        )
-        MLX.eval(featureOutput)
-        print("  Feature extractor output: \(featureOutput.shape)")
+        // First 5 values
+        let first5 = result.embeddings[0, 0, 0..<5]
+        MLX.eval(first5)
+        print("  First 5 values: \(first5.asArray(Float.self))")
 
-        let fMean = featureOutput.mean()
-        let fDiff = featureOutput - fMean
-        let fVar = (fDiff * fDiff).mean()
-        let fStd = MLX.sqrt(fVar)
-        MLX.eval(fMean, fStd)
-        print("  Stats: mean=\(fMean.item(Float.self)), std=\(fStd.item(Float.self))")
+        // Mask info
+        let maskSum = result.mask.sum()
+        MLX.eval(maskSum)
+        let totalTokens = result.mask.shape[1]
+        let activeTokens = maskSum.item(Int32.self)
+        print("  Active tokens: \(activeTokens) / \(totalTokens)")
 
-        // Sample values for comparison
-        for pos in [0, 249, 255] {
-            let vals = featureOutput[0, pos, 0..<10]
-            MLX.eval(vals)
-            print("  pos_\(pos)_first10 = \(vals.asArray(Float.self))")
-        }
-        print()
+        print("  Time: \(String(format: "%.1f", encodeTime))s")
 
-        if !skipConnector {
-            // Step 8: Full pipeline with connector
-            print("Step 8: Connector (2 transformer blocks + RMSNorm)...")
-            let startConnector = Date()
-            let output = textEncoder.encodeFromHiddenStates(
-                hiddenStates: states,
-                attentionMask: maskArray,
-                paddingSide: "left"
+        // Save embeddings if requested
+        if let savePath = saveEmbeddings {
+            print()
+            print("Saving embeddings to \(savePath)...")
+            let url = URL(fileURLWithPath: savePath)
+            try MLX.save(
+                arrays: [
+                    "prompt_embeddings": result.embeddings,
+                    "prompt_mask": result.mask
+                ],
+                url: url
             )
-            MLX.eval(output.videoEncoding)
-            MLX.eval(output.attentionMask)
-            let connectorTime = Date().timeIntervalSince(startConnector)
-
-            print("  Final encoding: \(output.videoEncoding.shape)")
-            print("  Output mask: \(output.attentionMask.shape)")
-            print("  Time: \(String(format: "%.2f", connectorTime))s")
-
-            let oMean = output.videoEncoding.mean()
-            let oDiff = output.videoEncoding - oMean
-            let oVar = (oDiff * oDiff).mean()
-            let oStd = MLX.sqrt(oVar)
-            MLX.eval(oMean, oStd)
-            print("  Stats: mean=\(oMean.item(Float.self)), std=\(oStd.item(Float.self))")
-
-            // Sample values for comparison
-            for pos in [0, 249, 255] {
-                let vals = output.videoEncoding[0, pos, 0..<10]
-                MLX.eval(vals)
-                print("  pos_\(pos)_first10 = \(vals.asArray(Float.self))")
-            }
-
-            let maskSum = output.attentionMask.sum()
-            MLX.eval(maskSum)
-            print("  Mask sum: \(maskSum.item(Int32.self)) (expected: \(maxLength) if all valid)")
+            print("  Saved successfully")
         }
 
         print()
-        print("✅ Text encoding pipeline complete!")
+        print("Done!")
     }
 }
 
@@ -1258,11 +1134,11 @@ struct DecodeLatent: AsyncParsableCommand {
 
         print("Loading VAE weights from \(weightsPath)...")
         let allWeights = try LTXWeightLoader.loadSingleFile(path: weightsPath)
-        let components = LTXWeightLoader.splitUnifiedWeights(allWeights)
+        let components = LTXWeightLoader.splitUnifiedWeightsDict(allWeights)
 
         // Create decoder and apply weights
         let decoder = VideoDecoder()
-        try LTXWeightLoader.applyVAEWeights(components.vaeDecoder, to: decoder)
+        try LTXWeightLoader.applyVAEWeights(components.vae, to: decoder)
 
         // Decode
         print("Decoding...")
@@ -1302,7 +1178,7 @@ struct DenoiseTest: AsyncParsableCommand {
     @Option(name: .long, help: "Path to LTX weights (safetensors)")
     var ltxWeights: String = ""
 
-    @Option(name: .shortAndLong, help: "Model variant: distilledFP8, distilled, or dev")
+    @Option(name: .shortAndLong, help: "Model variant: distilled or dev")
     var model: String = "distilled"
 
     @Flag(name: .long, help: "Enable debug output")
@@ -1342,23 +1218,20 @@ struct DenoiseTest: AsyncParsableCommand {
         } else {
             print("Step 2: Downloading weights (if needed)...")
             let downloader = ModelDownloader()
-            let url = try await downloader.downloadLTXWeights(model: modelVariant) { progress in
+            let url = try await downloader.downloadUnifiedWeights(model: modelVariant) { progress in
                 print("  \(progress.message)")
             }
             weightsPath = url.path
         }
         print("  Weights: \(weightsPath)")
 
-        print("  Loading and splitting weights...")
-        let components = try LTXWeightLoader.loadUnifiedWeights(
-            from: weightsPath,
-            isFP8: modelVariant.isFP8
-        )
-        print("  Transformer: \(components.transformer.count) tensors")
+        print("  Loading transformer weights...")
+        let transformerWeights = try LTXWeightLoader.loadTransformerWeights(from: weightsPath)
+        print("  Transformer: \(transformerWeights.count) tensors")
 
         print("  Creating transformer...")
         let transformer = LTXTransformer(config: modelVariant.transformerConfig)
-        try LTXWeightLoader.applyTransformerWeights(components.transformer, to: transformer)
+        try LTXWeightLoader.applyTransformerWeights(transformerWeights, to: transformer)
 
         // Eval all weights
         print("  Evaluating weights...")
@@ -1473,5 +1346,302 @@ struct DenoiseTest: AsyncParsableCommand {
         print("Step 5: vel mean=0.045318, std=1.303549  lat mean=-0.010477, std=0.880582")
         print("Step 6: vel mean=0.039662, std=1.287487  lat mean=-0.022499, std=0.955098")
         print("Step 7: vel mean=0.029887, std=1.040124  lat mean=-0.035134, std=1.213009")
+    }
+}
+
+// MARK: - Block Dump Command
+
+struct BlockDump: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "block-dump",
+        abstract: "Dump transformer output for dev model comparison with Python"
+    )
+
+    @Option(name: .shortAndLong, help: "Model variant: dev or distilled")
+    var model: String = "dev"
+
+    @Flag(name: .long, help: "Enable debug output")
+    var debug: Bool = false
+
+    mutating func run() async throws {
+        LTXDebug.enableDebugMode()
+
+        guard let modelVariant = LTXModel(rawValue: model) else {
+            throw ValidationError("Invalid model: \(model)")
+        }
+
+        let width = 512
+        let height = 512
+        let numFrames = 9
+        let seed: UInt64 = 42
+        let channels = 128
+
+        let latF = (numFrames - 1) / 8 + 1  // 2
+        let latH = height / 32  // 16
+        let latW = width / 32   // 16
+        let numTokens = latF * latH * latW  // 512
+
+        print("=== Block Dump for \(modelVariant.displayName) ===")
+        print("Resolution: \(width)x\(height), \(numFrames) frames")
+        print("Latent shape: \(latF)x\(latH)x\(latW) = \(numTokens) tokens")
+        print()
+
+        // 1. Load model
+        let downloader = ModelDownloader()
+        let url = try await downloader.downloadUnifiedWeights(model: modelVariant)
+        let weightsPath = url.path
+
+        print("Loading transformer weights from \(weightsPath)...")
+        let transformerWeights = try LTXWeightLoader.loadTransformerWeights(from: weightsPath)
+        print("  Transformer: \(transformerWeights.count) tensors")
+
+        let transformer = LTXTransformer(config: modelVariant.transformerConfig, memoryOptimization: .aggressive)
+        try LTXWeightLoader.applyTransformerWeights(transformerWeights, to: transformer)
+        MLX.eval(transformer.parameters())
+        print("Transformer loaded.")
+
+        // 2. Generate noise with seed
+        MLXRandom.seed(seed)
+        let latents = MLXRandom.normal([1, channels, latF, latH, latW]).asType(.bfloat16)
+        MLX.eval(latents)
+
+        let latentMean = latents.mean().item(Float.self)
+        let latentStd = MLX.sqrt(MLX.variance(latents)).item(Float.self)
+        print("Initial latents: mean=\(String(format: "%.6f", latentMean)), std=\(String(format: "%.6f", latentStd))")
+        let first5 = (0..<5).map { latents[0, 0, 0, 0, $0].item(Float.self) }
+        print("Initial latents[0,0,0,0,:5]: \(first5)")
+
+        // 3. Patchify
+        let latentsFlat = patchify(latents)
+        MLX.eval(latentsFlat)
+        let pfMean = latentsFlat.mean().item(Float.self)
+        let pfStd = MLX.sqrt(MLX.variance(latentsFlat)).item(Float.self)
+        print("Patchified: shape=\(latentsFlat.shape), mean=\(String(format: "%.6f", pfMean)), std=\(String(format: "%.6f", pfStd))")
+        let pfFirst5 = (0..<5).map { latentsFlat[0, 0, $0].item(Float.self) }
+        let pfLast5 = (123..<128).map { latentsFlat[0, 0, $0].item(Float.self) }
+        print("Patchified[0,0,:5]: \(pfFirst5)")
+        print("Patchified[0,0,-5:]: \(pfLast5)")
+
+        // 4. Compute sigma schedule
+        let scheduler = LTXScheduler()
+        scheduler.setTimesteps(
+            numSteps: 50,
+            distilled: false,
+            latentTokenCount: numTokens
+        )
+        let sigmas = scheduler.sigmas
+        print("Sigma schedule (first 5): \(sigmas.prefix(5))")
+
+        let sigma = sigmas[0]
+        print("Step 0: sigma=\(sigma)")
+
+        // 5. Prepare dummy context (zeros, matching Python)
+        let dummyContext = MLXArray.zeros([1, 128, 3840]).asType(.bfloat16)
+        MLX.eval(dummyContext)
+
+        // 6. Run full transformer forward pass using public API
+        print("\nRunning transformer forward pass...")
+        let timestep = MLXArray([sigma])
+        let output = transformer(
+            latent: latentsFlat,
+            context: dummyContext,
+            timesteps: timestep,
+            contextMask: nil,
+            latentShape: (frames: latF, height: latH, width: latW)
+        )
+        MLX.eval(output)
+
+        let outMean = output.mean().item(Float.self)
+        let outStd = MLX.sqrt(MLX.variance(output)).item(Float.self)
+        let outFirst5 = (0..<5).map { output[0, 0, $0].item(Float.self) }
+        let outMid5 = (0..<5).map { output[0, 256, $0].item(Float.self) }
+        print("Velocity output: shape=\(output.shape), mean=\(String(format: "%.6f", outMean)), std=\(String(format: "%.6f", outStd))")
+        print("  [0,0,:5]: \(outFirst5)")
+        print("  [0,0,-5:]: \((123..<128).map { output[0, 0, $0].item(Float.self) })")
+        print("  [0,256,:5]: \(outMid5)")
+
+        print("\n=== Python Reference (same seed=42, same dummy context) ===")
+        print("Velocity output: mean=0.015259, std=1.007812")
+        print("  [0,0,:5]: [1.78125, 1.5703125, -0.76953125, 1.6875, 0.373046875]")
+        print("  [0,0,-5:]: [0.59765625, 1.2109375, 1.8046875, 0.1015625, -0.58984375]")
+        print("  [0,256,:5]: [-0.48828125, -0.33984375, 0.8359375, 0.87890625, 1.4296875]")
+
+        print("\nDone!")
+    }
+}
+
+// MARK: - DenoiseCompare Command
+
+struct DenoiseCompare: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "denoise-compare",
+        abstract: "Run 5 denoising steps and compare with Python reference (dev model)"
+    )
+
+    @Option(name: .shortAndLong, help: "Model variant: dev")
+    var model: String = "dev"
+
+    @Option(name: .long, help: "Number of steps to run")
+    var steps: Int = 5
+
+    @Flag(name: .long, help: "Use bfloat16 noise (matching Python)")
+    var bf16Noise: Bool = false
+
+    mutating func run() async throws {
+        LTXDebug.enableDebugMode()
+
+        guard let modelVariant = LTXModel(rawValue: model) else {
+            throw ValidationError("Invalid model: \(model)")
+        }
+
+        let width = 512
+        let height = 512
+        let numFrames = 9
+        let seed: UInt64 = 42
+        let channels = 128
+        let cfgScale: Float = 4.0
+
+        let latF = (numFrames - 1) / 8 + 1  // 2
+        let latH = height / 32  // 16
+        let latW = width / 32   // 16
+        let numTokens = latF * latH * latW  // 512
+
+        print("=== Denoise Compare for \(modelVariant.displayName) ===")
+        print("Resolution: \(width)x\(height), \(numFrames) frames")
+        print("Latent shape: \(latF)x\(latH)x\(latW) = \(numTokens) tokens")
+        print("CFG scale: \(cfgScale), steps: \(steps)")
+        print("Noise dtype: \(bf16Noise ? "bfloat16" : "float32")")
+        print()
+
+        // 1. Load model
+        let downloader = ModelDownloader()
+        let url = try await downloader.downloadUnifiedWeights(model: modelVariant)
+        let weightsPath = url.path
+
+        print("Loading transformer weights from \(weightsPath)...")
+        let transformerWeights = try LTXWeightLoader.loadTransformerWeights(from: weightsPath)
+
+        let transformer = LTXTransformer(config: modelVariant.transformerConfig, memoryOptimization: .aggressive)
+        try LTXWeightLoader.applyTransformerWeights(transformerWeights, to: transformer)
+        MLX.eval(transformer.parameters())
+        print("Transformer loaded.")
+
+        // 2. Generate noise with seed (matching Python: bfloat16)
+        MLXRandom.seed(seed)
+        var latent: MLXArray
+        if bf16Noise {
+            // Generate float32 then cast to bfloat16 (matching Python's mx.random.normal(..., dtype=bfloat16))
+            latent = MLXRandom.normal([1, channels, latF, latH, latW]).asType(.bfloat16)
+        } else {
+            latent = MLXRandom.normal([1, channels, latF, latH, latW])
+        }
+        MLX.eval(latent)
+
+        let latentMean = latent.mean().item(Float.self)
+        let latentStd = MLX.sqrt(MLX.variance(latent)).item(Float.self)
+        print("Initial latents: dtype=\(latent.dtype), mean=\(String(format: "%.6f", latentMean)), std=\(String(format: "%.6f", latentStd))")
+        let first5 = (0..<5).map { latent[0, 0, 0, 0, $0].item(Float.self) }
+        print("Initial latents[0,0,0,0,:5]: \(first5)")
+
+        // 3. Compute sigma schedule
+        let scheduler = LTXScheduler()
+        scheduler.setTimesteps(
+            numSteps: 50,
+            distilled: false,
+            latentTokenCount: numTokens
+        )
+        let sigmas = scheduler.sigmas
+        print("Sigmas (first 6): \(sigmas.prefix(6))")
+
+        // 4. Prepare dummy context (zeros, matching Python) - for CFG: [neg, pos] in Swift
+        let dummyContextPos = MLXArray.zeros([1, 128, 3840]).asType(.bfloat16)
+        let dummyContextNeg = MLXArray.zeros([1, 128, 3840]).asType(.bfloat16)
+        // Swift ordering: [neg, pos]
+        let textEmbeddings = MLX.concatenated([dummyContextNeg, dummyContextPos], axis: 0)
+        MLX.eval(textEmbeddings)
+
+        let latentShape = VideoLatentShape(
+            batch: 1, channels: channels,
+            frames: latF, height: latH, width: latW
+        )
+
+        // Scale initial noise by first sigma (sigmas[0] = 1.0 for dev, so no-op)
+        latent = latent * sigmas[0]
+
+        print("\n=== Denoising Loop (\(steps) steps, CFG=\(cfgScale)) ===")
+
+        for step in 0..<steps {
+            let sigma = sigmas[step]
+            let sigmaNext = sigmas[step + 1]
+
+            // CFG: double batch [neg, pos]
+            let latentInput = prepareForCFG(latent)
+            let timestep = MLXArray([sigma, sigma])
+
+            // Patchify
+            let patchified = patchify(latentInput)
+
+            // Run transformer
+            let velocityPred = transformer(
+                latent: patchified,
+                context: textEmbeddings,
+                timesteps: timestep,
+                contextMask: nil,
+                latentShape: (frames: latF, height: latH, width: latW)
+            )
+
+            // Unpatchify and apply CFG
+            let doubledShape = VideoLatentShape(
+                batch: latentShape.batch * 2, channels: latentShape.channels,
+                frames: latentShape.frames, height: latentShape.height, width: latentShape.width
+            )
+            let fullVelocity = unpatchify(velocityPred, shape: doubledShape)
+            let (uncond, cond) = splitCFGOutput(fullVelocity)
+            let velocity = applyCFG(uncond: uncond, cond: cond, guidanceScale: cfgScale)
+
+            // Euler step
+            latent = scheduler.step(
+                latent: latent,
+                velocity: velocity,
+                sigma: sigma,
+                sigmaNext: sigmaNext
+            )
+            MLX.eval(latent)
+
+            // Print diagnostics
+            let lMean = latent.mean().item(Float.self)
+            let lStd = MLX.sqrt(MLX.variance(latent)).item(Float.self)
+            let vMean = velocityPred.mean().item(Float.self)
+            let vStd = MLX.sqrt(MLX.variance(velocityPred)).item(Float.self)
+            let lFirst5 = (0..<5).map { latent[0, 0, 0, 0, $0].item(Float.self) }
+            let pfLatent = patchify(latent)
+            let pfFirst5 = (0..<5).map { pfLatent[0, 0, $0].item(Float.self) }
+            print("Step \(step): σ=\(String(format: "%.6f", sigma))→\(String(format: "%.6f", sigmaNext))")
+            print("  velocity_pred: mean=\(String(format: "%.6f", vMean)), std=\(String(format: "%.6f", vStd))")
+            print("  latent: mean=\(String(format: "%.6f", lMean)), std=\(String(format: "%.6f", lStd))")
+            print("  latent[0,0,0,0,:5]: \(lFirst5)")
+            print("  patchified[0,0,:5]: \(pfFirst5)")
+        }
+
+        // Python reference values
+        print("\n=== Python Reference (5 steps, CFG=4.0, bf16 noise) ===")
+        print("Step 0: σ=1.000000→0.991176")
+        print("  velocity_flat: mean=0.015320, std=1.007812")
+        print("  latent: mean=0.000938, std=0.988281")
+        print("  latent[0,0,0,0,:5]: [1.8515625, -1.171875, -0.9296875, -0.251953125, -0.314453125]")
+        print("Step 1: σ=0.991176→0.982159")
+        print("  velocity_flat: mean=0.021240, std=1.007812")
+        print("  latent: mean=0.000755, std=0.976562")
+        print("Step 2: σ=0.982159→0.972943")
+        print("  velocity_flat: mean=0.033936, std=1.015625")
+        print("  latent: mean=0.000425, std=0.968750")
+        print("Step 3: σ=0.972943→0.963520")
+        print("  velocity_flat: mean=0.039795, std=1.023438")
+        print("  latent: mean=0.000053, std=0.960938")
+        print("Step 4: σ=0.963520→0.953884")
+        print("  velocity_flat: mean=0.043945, std=1.039062")
+        print("  latent: mean=-0.000332, std=0.953125")
+
+        print("\nDone!")
     }
 }

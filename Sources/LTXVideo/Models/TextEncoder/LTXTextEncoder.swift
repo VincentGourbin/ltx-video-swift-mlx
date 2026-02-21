@@ -57,6 +57,11 @@ public struct VideoGemmaEncoderOutput {
 // MARK: - Feature Extractor
 
 /// Normalize and concatenate multi-layer hidden states
+///
+/// Computes statistics (mean, min, max) in float32 for numerical stability,
+/// then applies normalization in float32 before casting back to input dtype.
+/// This eliminates bf16 accumulation order differences vs Python for the large
+/// reductions (sum over ~3.9M elements, min/max over ~3.9M elements).
 private func normAndConcatPaddedBatch(
     encodedText: MLXArray,
     sequenceLengths: MLXArray,
@@ -67,17 +72,15 @@ private func normAndConcatPaddedBatch(
     let t = shape[1]
     let d = shape[2]
     let numLayers = shape[3]
-    let eps: Float = 1e-6
+    let inputDtype = encodedText.dtype
 
     // Build mask: [B, T]
     let tokenIndices = MLXArray(0..<t).reshaped([1, t])
 
     let mask: MLXArray
     if paddingSide == "right" {
-        // For right padding, valid tokens are from 0 to sequence_length-1
         mask = tokenIndices .< sequenceLengths.reshaped([b, 1])
     } else {
-        // For left padding, valid tokens are from (T - sequence_length) to T-1
         let startIndices = t - sequenceLengths.reshaped([b, 1])
         mask = tokenIndices .>= startIndices
     }
@@ -85,25 +88,27 @@ private func normAndConcatPaddedBatch(
     // Expand mask for broadcasting: [B, T, 1, 1]
     let maskExpanded = mask.reshaped([b, t, 1, 1])
 
-    // Zero out padded positions for mean calculation
-    let masked = MLX.where(maskExpanded, encodedText, MLXArray.zeros(like: encodedText))
+    // Compute statistics in float32 for precision (reductions over ~3.9M bf16 elements)
+    let x32 = encodedText.asType(.float32)
+    let eps32 = MLXArray(Float(1e-6))
 
-    // Compute masked mean per batch per layer
-    let denom = (sequenceLengths * d).reshaped([b, 1, 1, 1]).asType(.float32) + eps
-    let sum = MLX.sum(masked, axes: [1, 2], keepDims: true)
-    let mean = sum / denom
+    let masked32 = MLX.where(maskExpanded, x32, MLXArray.zeros(like: x32))
+    let denom32 = (sequenceLengths * d).reshaped([b, 1, 1, 1]).asType(.float32) + eps32
+    let sum32 = MLX.sum(masked32, axes: [1, 2], keepDims: true)
+    let mean32 = sum32 / denom32
 
-    // Compute masked min/max per batch per layer
-    let largeVal: Float = 1e9
-    let xForMin = MLX.where(maskExpanded, encodedText, MLXArray(largeVal))
-    let xForMax = MLX.where(maskExpanded, encodedText, MLXArray(-largeVal))
+    let infVal32 = MLXArray(Float.infinity)
+    let negInfVal32 = MLXArray(-Float.infinity)
+    let xForMin32 = MLX.where(maskExpanded, x32, infVal32)
+    let xForMax32 = MLX.where(maskExpanded, x32, negInfVal32)
 
-    let xMin = MLX.min(xForMin, axes: [1, 2], keepDims: true)
-    let xMax = MLX.max(xForMax, axes: [1, 2], keepDims: true)
-    let range = xMax - xMin
+    let xMin32 = MLX.min(xForMin32, axes: [1, 2], keepDims: true)
+    let xMax32 = MLX.max(xForMax32, axes: [1, 2], keepDims: true)
+    let range32 = xMax32 - xMin32
 
-    // Normalize: scale to [-4, 4] range
-    var normed = 8.0 * (encodedText - mean) / (range + eps)
+    // Apply normalization in float32, then cast back to input dtype
+    var normed = MLXArray(Float(8.0)) * (x32 - mean32) / (range32 + eps32)
+    normed = normed.asType(inputDtype)
 
     // Concatenate layers: [B, T, D, L] -> [B, T, D*L]
     normed = normed.reshaped([b, t, d * numLayers])
@@ -141,26 +146,41 @@ public class GemmaFeaturesExtractor: Module {
     }
 
     /// Extract features from Gemma hidden states
+    ///
+    /// Runs the FE matmul (188160→3840) in float32 for numerical stability,
+    /// then casts back to input dtype. This eliminates bf16 accumulation order
+    /// differences vs Python for the large dot products (188160 multiply-accumulates).
     public func extractFromHiddenStates(
         hiddenStates: [MLXArray],
         attentionMask: MLXArray,
         paddingSide: String = "left"
     ) -> MLXArray {
+        let inputDtype = hiddenStates[0].dtype
+
         // Stack all hidden states: list of [B, T, 3840] -> [B, T, 3840, 49]
         let stacked = MLX.stacked(hiddenStates, axis: -1)
 
         // Get sequence lengths from attention mask
         let sequenceLengths = MLX.sum(attentionMask, axis: -1).asType(.int32)
 
-        // Apply per-layer normalization and concatenation
+        // Apply per-layer normalization and concatenation (internally uses float32)
         let normedConcat = normAndConcatPaddedBatch(
             encodedText: stacked,
             sequenceLengths: sequenceLengths,
             paddingSide: paddingSide
         )
+        MLX.eval(normedConcat)
+        let ncF32 = normedConcat.asType(.float32)
+        MLX.eval(ncF32)
+        let ncMean = ncF32.mean().item(Float.self)
+        let ncVar = (ncF32 * ncF32).mean().item(Float.self)
+        LTXDebug.log("[TextEnc] After norm_concat: dtype=\(normedConcat.dtype), shape=\(normedConcat.shape), mean=\(ncMean), std=\(sqrt(ncVar - ncMean*ncMean))")
 
-        // Project through linear layer
-        return aggregateEmbed(normedConcat)
+        // Run FE matmul in float32 for precision (188160 multiply-accumulates per output)
+        // Cast input to float32, project, then cast back to original dtype
+        let normedF32 = normedConcat.asType(.float32)
+        let projected = aggregateEmbed(normedF32)
+        return projected.asType(inputDtype)
     }
 }
 
@@ -170,7 +190,7 @@ public class GemmaFeaturesExtractor: Module {
 ///
 /// Key difference from main transformer attention:
 /// - RMSNorm is applied on full inner_dim (3840) BEFORE head reshape
-/// - RoPE is applied on flat [B, T, 3840] BEFORE head reshape
+/// - SPLIT RoPE is applied on (B, H, T, D) AFTER head reshape
 /// - This matches Python LTX-2-MLX connector.Attention behavior
 public class ConnectorAttention: Module {
     let heads: Int
@@ -222,16 +242,17 @@ public class ConnectorAttention: Module {
         q = qNorm(q)
         k = kNorm(k)
 
-        // Apply RoPE on flat [B, T, 3840] BEFORE head reshape
-        if let pe = pe {
-            q = applyRotaryEmb(q, freqsCis: pe, ropeType: .interleaved)
-            k = applyRotaryEmb(k, freqsCis: pe, ropeType: .interleaved)
-        }
-
-        // NOW reshape to heads: (B, T, 3840) -> (B, T, H, D) -> (B, H, T, D)
-        let qT = q.reshaped([b, t, heads, dimHead]).transposed(0, 2, 1, 3)
-        let kT = k.reshaped([b, t, heads, dimHead]).transposed(0, 2, 1, 3)
+        // Reshape to heads FIRST: (B, T, 3840) -> (B, T, H, D) -> (B, H, T, D)
+        var qT = q.reshaped([b, t, heads, dimHead]).transposed(0, 2, 1, 3)
+        var kT = k.reshaped([b, t, heads, dimHead]).transposed(0, 2, 1, 3)
         let vT = vFlat.reshaped([b, t, heads, dimHead]).transposed(0, 2, 1, 3)
+
+        // Apply SPLIT RoPE on (B, H, T, D) tensors AFTER head reshape
+        // pe: (cos, sin) each of shape (1, H, T, D//2) from splitFreqsCis
+        if let pe = pe {
+            qT = applyRotaryEmb(qT, freqsCis: pe, ropeType: .split)
+            kT = applyRotaryEmb(kT, freqsCis: pe, ropeType: .split)
+        }
 
         // Scaled dot-product attention
         var output = MLXFast.scaledDotProductAttention(
@@ -276,7 +297,8 @@ public class GELUProjection: Module {
     }
 
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
-        return geluApproximate(proj(x))
+        // Python connector uses nn.gelu() (exact erf-based), NOT nn.gelu_approx()
+        return MLXNN.gelu(proj(x))
     }
 }
 
@@ -320,7 +342,8 @@ public class BasicTransformerBlock1D: Module {
         }
 
         // Self-attention with residual
-        let normWeight1 = MLXArray.ones([hiddenStates.dim(-1)])
+        // Use ones in the input dtype (matching Python rms_norm which creates ones in x.dtype)
+        let normWeight1 = MLXArray.ones([hiddenStates.dim(-1)]).asType(hiddenStates.dtype)
         let normHidden = MLXFast.rmsNorm(hiddenStates, weight: normWeight1, eps: normEps)
         let attnOutput = attn1(normHidden, mask: mask, pe: pe)
         hiddenStates = hiddenStates + attnOutput
@@ -330,7 +353,7 @@ public class BasicTransformerBlock1D: Module {
         }
 
         // Feed-forward with residual
-        let normWeight2 = MLXArray.ones([hiddenStates.dim(-1)])
+        let normWeight2 = MLXArray.ones([hiddenStates.dim(-1)]).asType(hiddenStates.dtype)
         let normHidden2 = MLXFast.rmsNorm(hiddenStates, weight: normWeight2, eps: normEps)
         let ffOutput = ff(normHidden2)
         hiddenStates = hiddenStates + ffOutput
@@ -372,7 +395,7 @@ public class Embeddings1DConnector: Module {
         self.numAttentionHeads = numAttentionHeads
         self.innerDim = computedInnerDim
         self.positionalEmbeddingTheta = positionalEmbeddingTheta
-        self.positionalEmbeddingMaxPos = positionalEmbeddingMaxPos ?? [1]
+        self.positionalEmbeddingMaxPos = positionalEmbeddingMaxPos ?? [4096]
         self.normEps = normEps
         self.numLearnableRegisters = numLearnableRegisters
 
@@ -446,39 +469,48 @@ public class Embeddings1DConnector: Module {
         _ hiddenStates: MLXArray,
         attentionMask: MLXArray? = nil
     ) -> (MLXArray, MLXArray) {
+        let inputDtype = hiddenStates.dtype
         var x = hiddenStates
         var mask = attentionMask
 
-        // Replace padded positions with learnable registers
+        // Replace padded positions with learnable registers (in original dtype)
         if let m = mask {
-            (x, mask) = replacePaddedWithLearnableRegisters(
+            let (newX, _) = replacePaddedWithLearnableRegisters(
                 hiddenStates: x,
                 attentionMask: m
             )
+            x = newX
+            // After register replacement, ALL positions are valid.
+            // Python connector uses mask=None in SDPA after this point.
+            mask = nil
         }
 
         // Create position indices for RoPE: [1, 1, T] (1D positions)
         let seqLen = x.dim(1)
         let indicesGrid = MLXArray(0..<seqLen).asType(.float32).reshaped([1, 1, seqLen])
 
-        // Use the main precomputeFreqsCis with interleaved RoPE
-        // This produces cos/sin of shape [1, T, innerDim] for flat application
-        let freqsCis = precomputeFreqsCis(
+        // Use SPLIT RoPE matching Python connector _precompute_freqs_cis
+        // Python connector uses numpy float64 for frequency computation, so we use doublePrecision=true
+        // This produces cos/sin of shape (1, H, T, D//2) for per-head application
+        // Cast to bf16 to match Python's behavior (Python computes in f64→f32→bf16)
+        var freqsCis = precomputeFreqsCis(
             indicesGrid: indicesGrid,
             dim: innerDim,
             theta: positionalEmbeddingTheta,
             maxPos: positionalEmbeddingMaxPos,
             numAttentionHeads: numAttentionHeads,
-            ropeType: .interleaved
+            ropeType: .split,
+            doublePrecision: true
         )
+        freqsCis = (cos: freqsCis.cos.asType(inputDtype), sin: freqsCis.sin.asType(inputDtype))
 
-        // Process through transformer blocks
+        // Process through transformer blocks (mask=nil = no mask, matching Python)
         for block in transformer1DBlocks {
             x = block(x, mask: mask, pe: freqsCis)
         }
 
-        // Final normalization (no learnable weight, identity)
-        let normWeight = MLXArray.ones([x.dim(-1)])
+        // Final normalization (no learnable weight, identity) - use input dtype for weight
+        let normWeight = MLXArray.ones([x.dim(-1)]).asType(x.dtype)
         x = MLXFast.rmsNorm(x, weight: normWeight, eps: normEps)
 
         let outMask = mask ?? MLXArray.zeros([x.dim(0), 1, 1, x.dim(1)])
@@ -543,18 +575,43 @@ public class VideoGemmaTextEncoderModel: Module {
         attentionMask: MLXArray,
         paddingSide: String = "left"
     ) -> VideoGemmaEncoderOutput {
-        // Extract features from hidden states
+        // Debug: Log Gemma hidden state stats for comparison with Python
+        LTXDebug.log("[TextEnc] Gemma hidden states: \(hiddenStates.count) layers")
+        for i in [0, 1, 24, 47, 48] {
+            if i < hiddenStates.count {
+                let s = hiddenStates[i].asType(.float32)
+                MLX.eval(s)
+                let mean = s.mean().item(Float.self)
+                let std = (s * s).mean().item(Float.self)
+                let stdVal = sqrt(std - mean * mean)
+                LTXDebug.log("[TextEnc]   layer_\(i): dtype=\(hiddenStates[i].dtype), mean=\(mean), std=\(stdVal)")
+            }
+        }
+
+        // Step 3a: norm_and_concat + linear projection via feature extractor
         let encoded = featureExtractor.extractFromHiddenStates(
             hiddenStates: hiddenStates,
             attentionMask: attentionMask,
             paddingSide: paddingSide
         )
+        MLX.eval(encoded)
+        let encF32 = encoded.asType(.float32)
+        MLX.eval(encF32)
+        let encMean = encF32.mean().item(Float.self)
+        let encVar = (encF32 * encF32).mean().item(Float.self)
+        LTXDebug.log("[TextEnc] After FE: dtype=\(encoded.dtype), shape=\(encoded.shape), mean=\(encMean), std=\(sqrt(encVar - encMean*encMean))")
 
         // Convert mask to additive format
         let connectorMask = convertToAdditiveMask(attentionMask, dtype: encoded.dtype)
 
-        // Process through connector
+        // Step 3b: Connector (2-layer transformer with registers + RoPE)
         let (processed, outputMask) = embeddingsConnector(encoded, attentionMask: connectorMask)
+        MLX.eval(processed)
+        let procF32 = processed.asType(.float32)
+        MLX.eval(procF32)
+        let procMean = procF32.mean().item(Float.self)
+        let procVar = (procF32 * procF32).mean().item(Float.self)
+        LTXDebug.log("[TextEnc] After connector: dtype=\(processed.dtype), mean=\(procMean), std=\(sqrt(procVar - procMean*procMean))")
 
         // Convert mask back to binary for output
         let binaryMask = (outputMask.squeezed(axes: [1, 2]) .>= -0.5).asType(.int32)
@@ -614,6 +671,7 @@ public func createTextEncoder(
         attentionHeadDim: config.connectorHeadDim,
         numAttentionHeads: config.connectorHeads,
         numLayers: config.connectorLayers,
+        positionalEmbeddingMaxPos: [4096],
         numLearnableRegisters: config.numRegisters
     )
 

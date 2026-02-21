@@ -55,10 +55,14 @@ public func unpatchify(_ x: MLXArray, shape: VideoLatentShape) -> MLXArray {
 
 /// Generate initial noise for video generation
 ///
+/// Generates float32 noise then casts to target dtype, matching Python's
+/// `mx.random.normal(..., dtype=model_dtype)` behavior. The default dtype is
+/// bfloat16 to match the Python mlx-video reference implementation.
+///
 /// - Parameters:
 ///   - shape: Target latent shape
 ///   - seed: Optional random seed for reproducibility
-///   - dtype: Data type for the noise tensor
+///   - dtype: Data type for the noise tensor (default: bfloat16 matching Python)
 /// - Returns: Random noise tensor
 public func generateNoise(
     shape: VideoLatentShape,
@@ -69,7 +73,10 @@ public func generateNoise(
         MLXRandom.seed(seed)
     }
 
-    let noise = MLXRandom.normal(shape.shape).asType(dtype)
+    // Generate noise in float32 (matching Diffusers prepare_latents)
+    // Latents stay in float32 throughout the denoising loop for numerical precision
+    // Only cast to bfloat16 when entering the transformer
+    let noise = MLXRandom.normal(shape.shape, dtype: dtype)
     return noise
 }
 
@@ -111,17 +118,24 @@ public func splitCFGOutput(_ output: MLXArray) -> (uncond: MLXArray, cond: MLXAr
 ///
 /// output = uncond + guidance_scale * (cond - uncond)
 ///
+/// Matches Python behavior where the scalar * bfloat16 stays bfloat16
+/// (Python float scalars don't promote MLX array dtype).
+///
 /// - Parameters:
 ///   - uncond: Unconditional output
 ///   - cond: Conditional output
 ///   - guidanceScale: CFG scale factor
-/// - Returns: Guided output
+/// - Returns: Guided output (same dtype as inputs)
 public func applyCFG(
     uncond: MLXArray,
     cond: MLXArray,
     guidanceScale: Float
 ) -> MLXArray {
-    return uncond + guidanceScale * (cond - uncond)
+    // Match Python formula exactly: vel_pos + (cfg_scale - 1.0) * (vel_pos - vel_neg)
+    // This is algebraically identical to uncond + scale * (cond - uncond)
+    // but uses different intermediate values, producing identical bfloat16 rounding.
+    let scaleMinus1 = MLXArray(guidanceScale - 1.0).asType(cond.dtype)
+    return cond + scaleMinus1 * (cond - uncond)
 }
 
 /// Combined CFG application from concatenated output
@@ -131,6 +145,82 @@ public func applyCFG(
 ) -> MLXArray {
     let (uncond, cond) = splitCFGOutput(output)
     return applyCFG(uncond: uncond, cond: cond, guidanceScale: guidanceScale)
+}
+
+/// Apply guidance rescale to reduce overexposure from CFG
+///
+/// Rescales the CFG output so its per-channel standard deviation matches
+/// the conditional output's std, then blends with the original CFG output.
+///
+/// Formula: rescaled = cfgOutput * (condStd / cfgStd), result = phi * rescaled + (1 - phi) * cfgOutput
+///
+/// - Parameters:
+///   - cfgOutput: Output after CFG application (B, C, F, H, W)
+///   - condOutput: Conditional-only output (B, C, F, H, W)
+///   - phi: Rescale factor (0.0 = no rescale, 0.7 = recommended)
+/// - Returns: Rescaled output
+public func applyGuidanceRescale(
+    cfgOutput: MLXArray,
+    condOutput: MLXArray,
+    phi: Float
+) -> MLXArray {
+    guard phi > 0.0 else { return cfgOutput }
+
+    let eps: Float = 1e-8
+
+    // Per-channel std over spatial+temporal dims (axes: 2=F, 3=H, 4=W)
+    let cfgStd = MLX.sqrt(MLX.variance(cfgOutput, axes: [2, 3, 4], keepDims: true) + eps)
+    let condStd = MLX.sqrt(MLX.variance(condOutput, axes: [2, 3, 4], keepDims: true) + eps)
+
+    // Rescale CFG output to match conditional std
+    let rescaled = cfgOutput * (condStd / cfgStd)
+
+    // Blend between rescaled and original
+    return MLXArray(phi) * rescaled + MLXArray(1.0 - phi) * cfgOutput
+}
+
+// MARK: - AdaIN Filtering
+
+/// Apply Adaptive Instance Normalization (AdaIN) to a latent tensor
+///
+/// Normalizes each channel of the input latent to match the per-channel mean
+/// and standard deviation of the reference latent. This prevents distribution
+/// shift when upsampling latents between pipeline stages.
+///
+/// Matches Lightricks/LTX-Video `adain_filter_latent` exactly.
+///
+/// - Parameters:
+///   - latent: Input latent tensor (B, C, F, H, W) — to be normalized
+///   - reference: Reference latent tensor (B, C, F', H', W') — statistics target
+///     Spatial dimensions can differ; only per-channel stats are used.
+///   - factor: Blending factor (1.0 = full AdaIN, 0.0 = no change)
+/// - Returns: AdaIN-filtered latent with same shape as input
+public func adainFilterLatent(
+    _ latent: MLXArray,
+    reference: MLXArray,
+    factor: Float = 1.0
+) -> MLXArray {
+    guard factor > 0 else { return latent }
+
+    // Compute per-channel mean and std for both tensors
+    // Axes [2, 3, 4] = F, H, W (spatial-temporal dims)
+    let latentMean = MLX.mean(latent, axes: [2, 3, 4], keepDims: true)
+    let latentVar = MLX.variance(latent, axes: [2, 3, 4], keepDims: true)
+    let latentStd = MLX.sqrt(latentVar)
+
+    let refMean = MLX.mean(reference, axes: [2, 3, 4], keepDims: true)
+    let refVar = MLX.variance(reference, axes: [2, 3, 4], keepDims: true)
+    let refStd = MLX.sqrt(refVar)
+
+    // AdaIN: normalize input to zero-mean/unit-var, then apply reference stats
+    let normalized = (latent - latentMean) / (latentStd + 1e-8)
+    let result = normalized * refStd + refMean
+
+    // Blend between original and AdaIN result
+    if factor >= 1.0 {
+        return result
+    }
+    return MLXArray(factor) * result + MLXArray(1.0 - factor) * latent
 }
 
 // MARK: - Latent Normalization
@@ -204,7 +294,7 @@ public func estimateMemoryUsage(
     cfg: Bool = true,
     dtype: DType = .float32
 ) -> Int64 {
-    let bytesPerElement: Int64 = dtype == .float16 ? 2 : 4
+    let bytesPerElement: Int64 = (dtype == .float16 || dtype == .bfloat16) ? 2 : 4
 
     // Latent memory
     let latentElements = Int64(shape.batch * shape.channels * shape.frames * shape.height * shape.width)

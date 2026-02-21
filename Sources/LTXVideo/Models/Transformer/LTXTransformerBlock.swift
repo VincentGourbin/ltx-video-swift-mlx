@@ -66,14 +66,17 @@ public struct TransformerArgs {
 // MARK: - AdaLN Helpers
 
 /// Apply AdaLN: RMSNorm + scale + shift
+///
+/// Matches Python: `rms_norm(x) * (1 + scale) + shift`
+/// where rms_norm creates `mx.ones(..., dtype=x.dtype)` weight.
 private func adaln(
     _ x: MLXArray,
     scale: MLXArray,
     shift: MLXArray,
     eps: Float = 1e-6
 ) -> MLXArray {
-    // RMS normalization (use identity weight)
-    let weight = MLXArray.ones([x.dim(-1)])
+    // RMS normalization (use identity weight in input dtype)
+    let weight = MLXArray.ones([x.dim(-1)]).asType(x.dtype)
     let normed = MLXFast.rmsNorm(x, weight: weight, eps: eps)
     // Apply adaptive scale and shift
     return normed * (1 + scale) + shift
@@ -109,6 +112,15 @@ public class BasicTransformerBlock: Module {
 
     /// AdaLN scale-shift table: 6 values (scale, shift, gate) x 2 (attn, ff)
     @ParameterInfo(key: "scale_shift_table") var scaleShiftTable: MLXArray
+
+    /// Cross-attention output scaling factor (1.0 = no change, >1.0 = stronger prompt adherence)
+    public var crossAttentionScale: Float = 1.0
+
+    /// STG: skip self-attention when true (for perturbed forward pass)
+    public var skipSelfAttention: Bool = false
+
+    /// STG: skip feed-forward when true (for perturbed forward pass)
+    public var skipFeedForward: Bool = false
 
     public init(
         dim: Int,
@@ -183,17 +195,22 @@ public class BasicTransformerBlock: Module {
             end: 3
         )
 
-        // Self-attention with AdaLN
-        let normX = adaln(x, scale: scaleMSA, shift: shiftMSA, eps: normEps)
-        let attnOut = attn1(normX, pe: args.positionalEmbeddings)
-        x = residualGate(x, residual: attnOut, gate: gateMSA)
+        // Self-attention with AdaLN (skipped during STG perturbed pass)
+        if !skipSelfAttention {
+            let normX = adaln(x, scale: scaleMSA, shift: shiftMSA, eps: normEps)
+            let attnOut = attn1(normX, pe: args.positionalEmbeddings)
+            x = residualGate(x, residual: attnOut, gate: gateMSA)
+        }
 
-        // Cross-attention (no AdaLN, just RMSNorm)
-        let crossOut = attn2(
-            rmsNorm(x, eps: normEps),
+        // Cross-attention (no pre-norm, matching Diffusers — qNorm inside attn2 handles Q normalization)
+        var crossOut = attn2(
+            x,
             context: args.context,
             mask: args.contextMask
         )
+        if crossAttentionScale != 1.0 {
+            crossOut = crossOut * MLXArray(crossAttentionScale)
+        }
         x = x + crossOut
 
         // Get AdaLN values for FFN
@@ -204,10 +221,12 @@ public class BasicTransformerBlock: Module {
             end: 6
         )
 
-        // Feed-forward with AdaLN
-        let xScaled = adaln(x, scale: scaleMLP, shift: shiftMLP, eps: normEps)
-        let ffOut = ff(xScaled)
-        x = residualGate(x, residual: ffOut, gate: gateMLP)
+        // Feed-forward with AdaLN (skipped during STG perturbed pass if configured)
+        if !skipFeedForward {
+            let xScaled = adaln(x, scale: scaleMLP, shift: shiftMLP, eps: normEps)
+            let ffOut = ff(xScaled)
+            x = residualGate(x, residual: ffOut, gate: gateMLP)
+        }
 
         return args.replacing(x: x)
     }
@@ -219,7 +238,7 @@ public class BasicTransformerBlock: Module {
 public class TransformerBlocks: Module {
     @ModuleInfo(key: "blocks") var blocks: [BasicTransformerBlock]
 
-    let evalFrequency: Int
+    let memoryOptimization: MemoryOptimizationConfig
 
     public init(
         numLayers: Int,
@@ -229,9 +248,9 @@ public class TransformerBlocks: Module {
         contextDim: Int,
         ropeType: LTXRopeType = .split,
         normEps: Float = 1e-6,
-        evalFrequency: Int = 4
+        memoryOptimization: MemoryOptimizationConfig = .default
     ) {
-        self.evalFrequency = evalFrequency
+        self.memoryOptimization = memoryOptimization
 
         self._blocks.wrappedValue = (0..<numLayers).map { _ in
             BasicTransformerBlock(
@@ -247,13 +266,17 @@ public class TransformerBlocks: Module {
 
     public func callAsFunction(_ args: TransformerArgs) -> TransformerArgs {
         var current = args
+        let evalFreq = memoryOptimization.evalFrequency
 
         for (i, block) in blocks.enumerated() {
             current = block(current)
 
             // Periodic evaluation to manage memory
-            if evalFrequency > 0 && (i + 1) % evalFrequency == 0 {
+            if evalFreq > 0 && (i + 1) % evalFreq == 0 {
                 eval(current.x)
+                if memoryOptimization.clearCacheOnEval {
+                    Memory.clearCache()
+                }
             }
         }
 

@@ -19,7 +19,7 @@ let package = Package(
             targets: ["LTXVideoCLI"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.30.2"),
+        .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.30.6"),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", branch: "main"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.1.6"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.2.0"),

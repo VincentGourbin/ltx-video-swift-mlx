@@ -7,6 +7,7 @@ import MLX
 import MLXFast
 import MLXLMCommon
 import MLXNN
+import MLXRandom
 
 // MARK: - Attention
 
@@ -52,6 +53,10 @@ class Gemma3Attention: Module {
         self.isSliding = (layerIdx + 1) % config.slidingWindowPattern != 0
 
         // Local layers use ropeLocalBaseFreq (10000), global layers use ropeTheta (1000000)
+        // CRITICAL: Python mlx-vlm Gemma3 does NOT apply rope_scaling to attention RoPE.
+        // Python: nn.RoPE(head_dim, traditional=False, base=base)  — no scaling factor
+        // Passing scalingConfig here would set scale=1/factor=0.125, causing hidden state divergence
+        // starting at the first global layer (index 5) and accumulating through all 48 layers.
         if isSliding {
             self.rope = initializeRope(
                 dims: headDim, base: config.ropeLocalBaseFreq, traditional: false,
@@ -59,8 +64,7 @@ class Gemma3Attention: Module {
         } else {
             self.rope = initializeRope(
                 dims: headDim, base: config.ropeTheta, traditional: false,
-                scalingConfig: config.ropeScaling,
-                maxPositionEmbeddings: config.maxPositionEmbeddings)
+                scalingConfig: nil, maxPositionEmbeddings: nil)
         }
 
         super.init()
@@ -201,10 +205,10 @@ public class Gemma3InnerModel: Module {
         attentionMask: MLXArray? = nil,
         outputHiddenStates: Bool = true
     ) -> (lastHiddenState: MLXArray, allHiddenStates: [MLXArray]?) {
-        // Embed and scale by sqrt(hidden_size)
+        // Embed and scale by sqrt(hidden_size) — use embedding dtype
         var h = embedTokens(inputs)
-        let scale = MLXArray(sqrt(Float(config.hiddenSize)), dtype: .bfloat16)
-        h = h * scale.asType(h.dtype)
+        let scale = MLXArray(sqrt(Float(config.hiddenSize))).asType(h.dtype)
+        h = h * scale
 
         // Collect hidden states
         var allHiddenStates: [MLXArray]? = outputHiddenStates ? [] : nil
@@ -215,34 +219,46 @@ public class Gemma3InnerModel: Module {
         }
 
         // Create attention masks combining causal + padding
+        // Use ADDITIVE masks matching Python mlx-video text_encoder exactly:
+        //   Python creates: 0 for attend, min_val for don't attend
+        //   This avoids potential code path differences in SDPA between boolean and additive masks
         let globalMask: MLXFast.ScaledDotProductAttentionMaskMode
         let slidingWindowMask: MLXFast.ScaledDotProductAttentionMaskMode
 
         if let attentionMask = attentionMask {
-            // Combine causal mask with padding mask
-            // Causal: lower triangle + diagonal = true (attend), upper triangle = false (mask)
             let seqLen = h.dim(1)
-            let causal = MLXArray.tri(seqLen, m: seqLen, dtype: .bool)
-            // Padding: 0 = padding (mask out), 1 = real token
-            // Expand to [B, 1, 1, T] for broadcasting with [1, 1, T, T] causal
-            let padMask = attentionMask.reshaped(attentionMask.dim(0), 1, 1, seqLen)
-                .asType(.bool)
-            // Combined: attend only where causal=true AND padding=true
-            let combinedBool = causal[.newAxis, .newAxis] .&& padMask
-            globalMask = .array(combinedBool)
+            let dtype = h.dtype
 
-            // Sliding window: causal + padding + window constraint
-            if config.slidingWindowPattern > 1 {
-                let windowSize = config.slidingWindow
-                // Sliding window: only attend to last windowSize tokens
-                let rowIndices = MLXArray(Array(Int32(0)..<Int32(seqLen))).reshaped(1, 1, seqLen, 1)
-                let colIndices = MLXArray(Array(Int32(0)..<Int32(seqLen))).reshaped(1, 1, 1, seqLen)
-                let windowMask = (rowIndices - colIndices) .< MLXArray(Int32(windowSize))
-                let slidingBool = combinedBool .&& windowMask
-                slidingWindowMask = .array(slidingBool)
-            } else {
-                slidingWindowMask = .none
+            // Build causal mask: lower triangle = true
+            let causal = MLXArray.tri(seqLen, m: seqLen, dtype: .bool)
+
+            // Padding mask: 1 = valid, 0 = padding → bool
+            let padMask = attentionMask.reshaped(attentionMask.dim(0), 1, 1, seqLen).asType(.bool)
+
+            // Combined: attend where causal AND valid
+            let combinedBool = causal[.newAxis, .newAxis] .&& padMask
+
+            // Convert to additive mask: 0 for attend, min_val for don't attend
+            // Match Python: min_val = mx.finfo(dtype).min for bf16/fp16, -1e9 otherwise
+            let minVal: Float
+            switch dtype {
+            case .bfloat16:
+                minVal = -3.3895314e38  // mx.finfo(mx.bfloat16).min
+            case .float16:
+                minVal = -65504.0
+            default:
+                minVal = -1e9
             }
+            let additiveMask = MLX.where(
+                combinedBool,
+                MLXArray.zeros(like: combinedBool).asType(dtype),
+                MLXArray(minVal).asType(dtype)
+            )
+            globalMask = .array(additiveMask)
+
+            // Python text encoder: sliding_mask = full_causal_mask (no window constraint)
+            slidingWindowMask = globalMask
+
         } else {
             // No padding mask — causal only (original behavior)
             globalMask = createAttentionMask(h: h, cache: nil as KVCache?)
@@ -255,24 +271,33 @@ public class Gemma3InnerModel: Module {
         }
 
         // Process through layers
+        let numLayers = layers.count
         for (i, layer) in layers.enumerated() {
             let isGlobal = (i % config.slidingWindowPattern == config.slidingWindowPattern - 1)
             let mask = isGlobal ? globalMask : slidingWindowMask
             h = layer(h, mask: mask)
 
-            // Add layer output as hidden state (raw, without final norm — matches Python)
-            if outputHiddenStates {
-                allHiddenStates?.append(h)
-            }
+            // Eval after EVERY layer to match Python mlx-video behavior
+            // Python does: h = layer(h, local_mask, cache[i]); mx.eval(h)
+            // This is critical: lazy eval of multiple layers produces different
+            // bfloat16 rounding than per-layer eval, causing divergence over 48 layers
+            MLX.eval(h)
 
-            // Periodic eval for memory management (every 8 layers)
-            if (i + 1) % 8 == 0 {
-                MLX.eval(h)
+            // Add layer output as hidden state for layers 0..46 (raw, without final norm)
+            // Layer 47 (last) is NOT added here — its normed version is added after the loop
+            // This matches Python: `if output_hidden_states and i < num_layers - 1`
+            if outputHiddenStates && i < numLayers - 1 {
+                allHiddenStates?.append(h)
             }
         }
 
-        // Apply final norm for the lastHiddenState return value
+        // Apply final norm
         h = norm(h)
+
+        // Add norm(last_layer_output) as the 49th hidden state (matches Python)
+        if outputHiddenStates {
+            allHiddenStates?.append(h)
+        }
 
         return (h, allHiddenStates)
     }
@@ -331,7 +356,160 @@ public class Gemma3TextModel: Module {
         // Remove lm_head keys — we don't generate tokens, only extract hidden states
         processedWeights = processedWeights.filter { !$0.key.hasPrefix("lm_head") }
 
+        // Convert float32 weights to bfloat16 (matching Python mlx-video behavior)
+        // The Python LTX2TextEncoder.sanitize() does: value.astype(mx.bfloat16) for float32 weights
+        // CRITICAL: Must match Python's bf16 rounding — running in float32 produces MORE divergence
+        // because the model expects bf16-precision hidden states at each layer.
+        for (key, value) in processedWeights {
+            if value.dtype == .float32 {
+                processedWeights[key] = value.asType(.bfloat16)
+            }
+        }
+
         return processedWeights
+    }
+}
+
+// MARK: - Text Generation (for Prompt Enhancement)
+
+extension Gemma3TextModel {
+    /// Generate text autoregressively using KV cache for efficiency.
+    ///
+    /// Uses tied embeddings (embed_tokens.weight) as lm_head for logit projection.
+    /// Gemma3 models use tied weights by default.
+    ///
+    /// - Parameters:
+    ///   - inputIds: Prompt tokens [1, T]
+    ///   - maxNewTokens: Maximum number of tokens to generate
+    ///   - temperature: Sampling temperature (0.0 = greedy, >0 = stochastic)
+    ///   - topP: Top-p (nucleus) sampling threshold (0.0-1.0, default 0.95)
+    ///   - repetitionPenalty: Penalize repeated tokens (1.0 = no penalty, >1.0 = penalize)
+    ///   - repetitionContextSize: How many recent tokens to apply repetition penalty to
+    ///   - eosTokenId: Token ID that signals end of generation
+    /// - Returns: Array of generated token IDs (not including input)
+    public func generateTokens(
+        inputIds: MLXArray,
+        maxNewTokens: Int = 512,
+        temperature: Float = 0.7,
+        topP: Float = 0.95,
+        repetitionPenalty: Float = 1.1,
+        repetitionContextSize: Int = 64,
+        eosTokenId: Int32 = 1,
+        eosTokenIds: Set<Int32>? = nil
+    ) -> [Int32] {
+        let stopTokenIds = eosTokenIds ?? [eosTokenId]
+        let innerModel = model
+        let numLayers = innerModel.layers.count
+
+        // Create KV caches for each layer
+        let caches: [KVCache] = (0..<numLayers).map { _ in KVCacheSimple() }
+
+        // Prefill: process the full prompt
+        var h = innerModel.embedTokens(inputIds)
+        let scale = MLXArray(sqrt(Float(config.hiddenSize))).asType(h.dtype)
+        h = h * scale
+
+        // Build causal mask for prefill
+        let seqLen = inputIds.dim(1)
+        let causalMask: MLXFast.ScaledDotProductAttentionMaskMode = createAttentionMask(h: h, cache: nil as KVCache?)
+
+        // Build sliding window mask
+        let slidingMask: MLXFast.ScaledDotProductAttentionMaskMode
+        if config.slidingWindowPattern > 1 {
+            slidingMask = createAttentionMask(h: h, cache: nil as KVCache?, windowSize: config.slidingWindow)
+        } else {
+            slidingMask = .none
+        }
+
+        for (i, layer) in innerModel.layers.enumerated() {
+            let isGlobal = (i % config.slidingWindowPattern == config.slidingWindowPattern - 1)
+            let mask = isGlobal ? causalMask : slidingMask
+            h = layer(h, mask: mask, cache: caches[i])
+        }
+        h = innerModel.norm(h)
+        MLX.eval(h)
+
+        // Get logits for the last token — asLinear handles quantized embeddings
+        var logits = innerModel.embedTokens.asLinear(h[0..., (seqLen - 1)..., 0...])
+
+        var generatedTokens: [Int32] = []
+
+        for _ in 0..<maxNewTokens {
+            // Apply repetition penalty to recent tokens
+            var processedLogits = logits
+            if repetitionPenalty != 1.0 && !generatedTokens.isEmpty {
+                let contextSize = min(repetitionContextSize, generatedTokens.count)
+                let recentTokens = Array(generatedTokens.suffix(contextSize))
+                var logitsArray = logits.reshaped(-1).asArray(Float.self)
+                let tokenSet = Set(recentTokens)
+                for tokenId in tokenSet {
+                    let idx = Int(tokenId)
+                    if idx >= 0 && idx < logitsArray.count {
+                        if logitsArray[idx] > 0 {
+                            logitsArray[idx] /= repetitionPenalty
+                        } else {
+                            logitsArray[idx] *= repetitionPenalty
+                        }
+                    }
+                }
+                processedLogits = MLXArray(logitsArray).reshaped(logits.shape)
+            }
+
+            // Sample next token
+            let nextToken: MLXArray
+            if temperature <= 0 {
+                nextToken = MLX.argMax(processedLogits, axis: -1)
+            } else {
+                nextToken = sampleTopP(processedLogits, temperature: temperature, topP: topP)
+            }
+            MLX.eval(nextToken)
+
+            let tokenId = nextToken.item(Int32.self)
+
+            // Check for EOS
+            if stopTokenIds.contains(tokenId) {
+                break
+            }
+
+            generatedTokens.append(tokenId)
+
+            // Forward pass for single token with cache
+            let tokenInput = nextToken.reshaped(1, 1)
+            h = innerModel.embedTokens(tokenInput)
+            h = h * scale.asType(h.dtype)
+
+            for (i, layer) in innerModel.layers.enumerated() {
+                // With cache populated, mask is .none (causal handled by cache)
+                h = layer(h, mask: .none, cache: caches[i])
+            }
+            h = innerModel.norm(h)
+
+            logits = innerModel.embedTokens.asLinear(h)
+            MLX.eval(logits)
+        }
+
+        return generatedTokens
+    }
+
+    /// Top-p (nucleus) sampling using MLX
+    private func sampleTopP(_ logits: MLXArray, temperature: Float, topP: Float) -> MLXArray {
+        let flat = logits.reshaped(-1)
+        let probs = MLX.softmax(flat / MLXArray(temperature), axis: -1)
+
+        // Sort descending
+        let sortedIndices = MLX.argSort(-probs, axis: -1)
+        let sortedProbs = probs[sortedIndices]
+
+        // Cumulative sum
+        let cumulativeProbs = MLX.cumsum(sortedProbs, axis: -1)
+
+        // Mask tokens beyond top-p threshold
+        let mask = cumulativeProbs .> MLXArray(1.0 - topP)
+        let filteredProbs = MLX.where(mask, sortedProbs, MLXArray.zeros(like: sortedProbs))
+
+        // Sample from filtered distribution
+        let sortedToken = MLXRandom.categorical(MLX.log(filteredProbs + 1e-10))
+        return sortedIndices[sortedToken]
     }
 }
 

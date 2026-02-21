@@ -12,7 +12,7 @@ import MLXNN
 ///
 /// ## Usage
 /// ```swift
-/// let pipeline = LTXPipeline(model: .distilledFP8)
+/// let pipeline = LTXPipeline(model: .distilled)
 /// try await pipeline.loadModels()
 /// let video = try await pipeline.generateVideo(
 ///     prompt: "A cat walking in the garden",

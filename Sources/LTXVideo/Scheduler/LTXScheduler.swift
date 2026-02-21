@@ -89,7 +89,8 @@ public class LTXScheduler: @unchecked Sendable {
             LTXDebug.log("Scheduler set: distilled mode with \(sigmas.count - 1) steps")
         } else {
             // Compute sigma schedule
-            let tokenCount = latentTokenCount ?? MAX_SHIFT_ANCHOR
+            // Clamp token count to MAX_SHIFT_ANCHOR (matching Python: min(num_tokens, MAX_SHIFT_ANCHOR))
+            let tokenCount = min(latentTokenCount ?? MAX_SHIFT_ANCHOR, MAX_SHIFT_ANCHOR)
 
             // Linear spacing from 1.0 to 0.0
             var sigmaValues: [Float] = []
@@ -179,13 +180,16 @@ public class LTXScheduler: @unchecked Sendable {
         let sigma = sigmas[stepIndex]
         let sigmaNext = sigmas[stepIndex + 1]
 
-        // Euler step: x_{t-1} = x_t + (sigma_next - sigma) * v_t
-        let dt = sigmaNext - sigma
-        let nextSample = sample + MLXArray(dt) * modelOutput
+        let result = step(
+            latent: sample,
+            velocity: modelOutput,
+            sigma: sigma,
+            sigmaNext: sigmaNext
+        )
 
         stepIndex += 1
 
-        return nextSample
+        return result
     }
 
     /// Get the current sigma for this step
@@ -231,6 +235,28 @@ public class LTXScheduler: @unchecked Sendable {
 
     /// Perform one Euler step with explicit sigma values
     ///
+    /// Matches Python mlx-video (venv_ltx2) behavior exactly:
+    ///
+    /// 1. to_denoised: compute in float32, cast back to original dtype
+    ///    ```python
+    ///    noisy_f32 = noisy.astype(mx.float32)
+    ///    velocity_f32 = velocity.astype(mx.float32)
+    ///    sigma_f32 = sigma.astype(mx.float32)
+    ///    result = noisy_f32 - sigma_f32 * velocity_f32
+    ///    return result.astype(original_dtype)
+    ///    ```
+    ///
+    /// 2. Euler step: compute in float32, cast back to original dtype
+    ///    ```python
+    ///    latents_f32 = latents.astype(mx.float32)
+    ///    denoised_f32 = denoised.astype(mx.float32)
+    ///    latents = (denoised_f32 + sigma_next_f32 * (latents_f32 - denoised_f32) / sigma_f32).astype(dtype)
+    ///    ```
+    ///
+    /// The round-trip (bfloat16 → float32 → bfloat16) in to_denoised followed by
+    /// (bfloat16 → float32) in Euler step means denoised loses precision at the
+    /// bfloat16 boundary. This matches Python's behavior exactly.
+    ///
     /// - Parameters:
     ///   - latent: Current latent sample
     ///   - velocity: Predicted velocity from transformer
@@ -243,9 +269,22 @@ public class LTXScheduler: @unchecked Sendable {
         sigma: Float,
         sigmaNext: Float
     ) -> MLXArray {
-        // Euler step: x_{t-1} = x_t + (sigma_next - sigma) * v_t
-        let dt = sigmaNext - sigma
-        return latent + MLXArray(dt) * velocity
+        let dtype = latent.dtype
+
+        // to_denoised: compute in float32, cast back to original dtype (matching Python)
+        let sigmaF32 = MLXArray(sigma).asType(.float32)
+        let denoised = (latent.asType(.float32) - sigmaF32 * velocity.asType(.float32)).asType(dtype)
+
+        if sigmaNext > 0 {
+            // Euler step: compute in float32, cast back to original dtype (matching Python)
+            let latentsF32 = latent.asType(.float32)
+            let denoisedF32 = denoised.asType(.float32)
+            let sigmaNF32 = MLXArray(sigmaNext).asType(.float32)
+            return (denoisedF32 + sigmaNF32 * (latentsF32 - denoisedF32) / sigmaF32).asType(dtype)
+        } else {
+            // Last step: use denoised prediction directly
+            return denoised
+        }
     }
 
     // MARK: - Noise Operations

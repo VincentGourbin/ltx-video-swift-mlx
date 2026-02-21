@@ -24,11 +24,21 @@ DerivedData/
 # Claude Code
 .claude/
 
+# Serena
+.serena/
+
+# Xcode build output
+.xcodebuild/
+
 # Model weights (large files)
 *.safetensors
 *.bin
 *.gguf
 *.npy
+*.pt
+
+# Generated videos
+*.mp4
 
 # Temporary files
 *.tmp

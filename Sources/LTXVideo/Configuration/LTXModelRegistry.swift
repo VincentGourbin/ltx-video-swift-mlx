@@ -141,10 +141,8 @@ public enum LTXModelRegistry {
         let ram = systemRAMGB
         if ram >= 32 {
             return .dev
-        } else if ram >= 18 {
-            return .distilled
         } else {
-            return .distilledFP8
+            return .distilled
         }
     }
 }

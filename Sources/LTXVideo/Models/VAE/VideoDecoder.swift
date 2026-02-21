@@ -26,7 +26,7 @@ public func getTimestepEmbedding(_ timesteps: MLXArray, embeddingDim: Int = 256)
 // MARK: - Pixel Norm (Channel-wise)
 
 /// Pixel normalization across channels (parameter-free)
-func vaePixelNorm(_ x: MLXArray, eps: Float = 1e-6) -> MLXArray {
+func vaePixelNorm(_ x: MLXArray, eps: Float = 1e-8) -> MLXArray {
     let meanSquared = MLX.mean(x * x, axis: 1, keepDims: true)
     return x / MLX.sqrt(meanSquared + eps)
 }
@@ -296,6 +296,8 @@ public class VideoDecoder: Module {
     let patchSize: Int
     let causal: Bool
     let decodeNoiseScale: Float = 0.025
+    /// Whether the VAE uses timestep conditioning (from config.json)
+    public var timestepConditioning: Bool = false
 
     @ParameterInfo(key: "mean_of_means") var meanOfMeans: MLXArray
     @ParameterInfo(key: "std_of_means") var stdOfMeans: MLXArray
@@ -358,22 +360,26 @@ public class VideoDecoder: Module {
 
         LTXDebug.log("VAE Decoder input: \(sample.shape)")
 
-        // Denormalize latent using per-channel statistics
-        var x = sample * stdOfMeans.reshaped([1, -1, 1, 1, 1])
-        x = x + meanOfMeans.reshaped([1, -1, 1, 1, 1])
-        LTXDebug.log("After denormalize: mean=\(x.mean().item(Float.self))")
+        var x = sample
 
-        // Compute scaled timestep
+        // Step 1: Noise injection on NORMALIZED latent (before denormalization!)
+        // Matching Python: noise is added in normalized space where values are ~N(0,1)
         var scaledTimestep: MLXArray? = nil
         if let ts = timestep {
-            // Noise injection
             let noise = MLXRandom.normal(x.shape) * decodeNoiseScale
             x = noise + (1.0 - decodeNoiseScale) * x
-            LTXDebug.log("After noise injection: mean=\(x.mean().item(Float.self))")
+            LTXDebug.log("After noise injection (normalized): mean=\(x.mean().item(Float.self))")
 
             let t = MLXArray(Array(repeating: ts, count: batchSize))
             scaledTimestep = t * timestepScaleMultiplier
         }
+
+        // Step 2: Denormalize latent using per-channel statistics (AFTER noise)
+        // Matching Python: sample = self.denormalize(sample)
+        let meanExp = meanOfMeans.asType(.float32).reshaped([1, -1, 1, 1, 1])
+        let stdExp = stdOfMeans.asType(.float32).reshaped([1, -1, 1, 1, 1])
+        x = (x.asType(.float32) * stdExp + meanExp).asType(x.dtype)
+        LTXDebug.log("After denormalize: mean=\(x.mean().item(Float.self))")
 
         // Conv in
         x = convIn(x, causal: causal)

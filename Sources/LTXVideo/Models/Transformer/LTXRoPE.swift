@@ -47,7 +47,13 @@ private func applyInterleavedRotaryEmb(
     cosFreqs: MLXArray,
     sinFreqs: MLXArray
 ) -> MLXArray {
-    let shape = input.shape
+    // Cast to float32 for rotation math (matching Python apply_interleaved_rotary_emb)
+    let inputDtype = input.dtype
+    let inputF32 = input.asType(.float32)
+    let cosF32 = cosFreqs.asType(.float32)
+    let sinF32 = sinFreqs.asType(.float32)
+
+    let shape = inputF32.shape
     let dim = shape[shape.count - 1]
 
     // Reshape to pair dimensions: (..., dim) -> (..., dim/2, 2)
@@ -55,7 +61,7 @@ private func applyInterleavedRotaryEmb(
     reshapeShape.append(dim / 2)
     reshapeShape.append(2)
 
-    let tDup = input.reshaped(reshapeShape)
+    let tDup = inputF32.reshaped(reshapeShape)
 
     // Split into t1, t2
     let t1 = tDup[.ellipsis, 0]  // Even indices
@@ -65,8 +71,11 @@ private func applyInterleavedRotaryEmb(
     let tRot = MLX.stacked([-t2, t1], axis: -1)
     let inputRot = tRot.reshaped(shape)
 
-    // Apply rotation: x * cos + x_rot * sin
-    return input * cosFreqs + inputRot * sinFreqs
+    // Apply rotation in float32: x * cos + x_rot * sin
+    let result = inputF32 * cosF32 + inputRot * sinF32
+
+    // Cast back to original dtype
+    return result.asType(inputDtype)
 }
 
 /// Apply split rotary embeddings
@@ -77,7 +86,12 @@ private func applySplitRotaryEmb(
     cosFreqs: MLXArray,
     sinFreqs: MLXArray
 ) -> MLXArray {
-    var inputTensor = input
+    // Cast to float32 for rotation math (matching Python _apply_split_rope)
+    let inputDtype = input.dtype
+    var inputTensor = input.asType(.float32)
+    let cosF32 = cosFreqs.asType(.float32)
+    let sinF32 = sinFreqs.asType(.float32)
+
     var needsReshape = false
     var originalB = 0
     var originalH = 0
@@ -92,7 +106,7 @@ private func applySplitRotaryEmb(
         originalH = h
 
         // Reshape from (B, T, H*D) to (B, H, T, D)
-        inputTensor = input.reshaped([b, t, h, -1])
+        inputTensor = inputTensor.reshaped([b, t, h, -1])
         inputTensor = inputTensor.transposed(0, 2, 1, 3)
         needsReshape = true
     }
@@ -108,11 +122,11 @@ private func applySplitRotaryEmb(
     let firstHalf = splitInput[.ellipsis, 0, 0...]  // Shape: (..., dim//2)
     let secondHalf = splitInput[.ellipsis, 1, 0...]  // Shape: (..., dim//2)
 
-    // Apply rotation
+    // Apply rotation in float32
     // first_half_out = first_half * cos - second_half * sin
     // second_half_out = second_half * cos + first_half * sin
-    let firstHalfOut = firstHalf * cosFreqs - secondHalf * sinFreqs
-    let secondHalfOut = secondHalf * cosFreqs + firstHalf * sinFreqs
+    let firstHalfOut = firstHalf * cosF32 - secondHalf * sinF32
+    let secondHalfOut = secondHalf * cosF32 + firstHalf * sinF32
 
     // Stack back together
     var output = MLX.stacked([firstHalfOut, secondHalfOut], axis: -2)
@@ -130,7 +144,8 @@ private func applySplitRotaryEmb(
         output = output.reshaped([originalB, t, originalH * d])
     }
 
-    return output
+    // Cast back to original dtype
+    return output.asType(inputDtype)
 }
 
 // MARK: - Frequency Generation
@@ -293,6 +308,12 @@ public func interleavedFreqsCis(
 
 /// Precompute cosine and sine frequencies for RoPE
 ///
+/// Uses double precision (Float64) for frequency computation to match
+/// Python's `double_precision_rope=True` behavior. This is critical for
+/// numerical accuracy — float32 cos/sin values diverge from float64 by
+/// enough to cause visible quality degradation over 48 transformer blocks
+/// and 40 denoising steps.
+///
 /// - Parameters:
 ///   - indicesGrid: Position indices grid, shape (B, n_dims, T)
 ///   - dim: Dimension of the embedding
@@ -300,36 +321,208 @@ public func interleavedFreqsCis(
 ///   - maxPos: Maximum positions per dimension [time, height, width]
 ///   - numAttentionHeads: Number of attention heads
 ///   - ropeType: Type of RoPE (INTERLEAVED or SPLIT)
-/// - Returns: Tuple of (cos_freqs, sin_freqs)
+/// - Returns: Tuple of (cos_freqs, sin_freqs) in float32
 public func precomputeFreqsCis(
     indicesGrid: MLXArray,
     dim: Int,
     theta: Float = 10000.0,
     maxPos: [Int]? = nil,
     numAttentionHeads: Int = 32,
-    ropeType: LTXRopeType = .split
+    ropeType: LTXRopeType = .split,
+    doublePrecision: Bool = false
 ) -> (cos: MLXArray, sin: MLXArray) {
-    let maxPositions = maxPos ?? [20, 2048, 2048]  // Default: [time, height, width]
+    let maxPositions = maxPos ?? [20, 2048, 2048]
 
-    // Generate frequency indices
-    let nPosDims = indicesGrid.dim(1)
-    let indices = generateFreqGrid(theta: theta, maxPosCount: nPosDims, innerDim: dim)
+    // Double precision path: matches Python connector's numpy float64 computation.
+    // The connector's _precompute_freqs_cis explicitly uses np.float64 for all
+    // intermediate calculations, which matters for high-frequency components.
+    if doublePrecision {
+        return precomputeFreqsCisDoublePrecision(
+            indicesGrid: indicesGrid,
+            dim: dim,
+            theta: Double(theta),
+            maxPos: maxPositions,
+            numAttentionHeads: numAttentionHeads,
+            ropeType: ropeType
+        )
+    }
 
-    // Generate frequencies from positions
+    // Float32 GPU computation: matches Python transformer's actual behavior.
+    // NOTE: Python's transformer uses float32 MLX ops (not numpy float64).
+    let indices = generateFreqGrid(theta: theta, maxPosCount: indicesGrid.dim(1), innerDim: dim)
     let freqs = generateFreqs(indices: indices, indicesGrid: indicesGrid, maxPos: maxPositions)
 
-    // Compute cos/sin based on RoPE type
     switch ropeType {
     case .split:
         let expectedFreqs = dim / 2
         let currentFreqs = freqs.dim(-1)
         let padSize = max(0, expectedFreqs - currentFreqs)
         return splitFreqsCis(freqs: freqs, padSize: padSize, numAttentionHeads: numAttentionHeads)
-
     case .interleaved:
-        let nElem = 2 * nPosDims
+        let nElem = 2 * indicesGrid.dim(1)
         let padSize = dim % nElem
         return interleavedFreqsCis(freqs: freqs, padSize: padSize)
+    }
+}
+
+/// Double-precision RoPE frequency computation on CPU
+///
+/// Matches Python `_precompute_freqs_cis_double_precision` exactly:
+/// 1. Convert position grid to Float64 (via numpy in Python, via Swift Double here)
+/// 2. Compute frequency indices in Float64
+/// 3. Compute cos/sin in Float64
+/// 4. Convert final result to Float32 for GPU
+private func precomputeFreqsCisDoublePrecision(
+    indicesGrid: MLXArray,
+    dim: Int,
+    theta: Double,
+    maxPos: [Int],
+    numAttentionHeads: Int,
+    ropeType: LTXRopeType
+) -> (cos: MLXArray, sin: MLXArray) {
+    // Extract position grid to CPU as Float64
+    // indicesGrid shape: (B, n_dims, T)
+    let gridF32 = indicesGrid.asType(.float32)
+    MLX.eval(gridF32)
+
+    let batchSize = gridF32.dim(0)
+    let nPosDims = gridF32.dim(1)
+    let seqLen = gridF32.dim(2)
+    let nElem = 2 * nPosDims
+
+    // 1. Generate frequency indices in Float64
+    let logStart = Foundation.log(1.0) / Foundation.log(theta)
+    let logEnd = Foundation.log(theta) / Foundation.log(theta)  // = 1.0
+    let numIndices = max(1, dim / nElem)
+
+    var indicesF64 = [Double](repeating: 0, count: numIndices)
+    for i in 0..<numIndices {
+        let t = numIndices > 1
+            ? logStart + (logEnd - logStart) * Double(i) / Double(numIndices - 1)
+            : logStart
+        indicesF64[i] = Foundation.pow(theta, t) * (Double.pi / 2.0)
+    }
+
+    // 2. Extract grid values to CPU Double arrays
+    // Grid shape: (B, n_dims, T) → we need fractional positions (B, T, n_dims)
+    var gridValues = [[Double]](repeating: [Double](repeating: 0, count: seqLen), count: nPosDims)
+    for d in 0..<nPosDims {
+        let slice = gridF32[0, d, 0...]  // (T,) — batch 0 (all batches are identical)
+        MLX.eval(slice)
+        let flatSlice = slice.flattened()
+        MLX.eval(flatSlice)
+        for t in 0..<seqLen {
+            gridValues[d][t] = Double(flatSlice[t].item(Float.self))
+        }
+    }
+
+    // 3. Compute fractional positions in Float64
+    // frac[t][d] = gridValues[d][t] / maxPos[d]
+    // scaled[t][d] = frac * 2 - 1
+    var scaledPositions = [[Double]](repeating: [Double](repeating: 0, count: nPosDims), count: seqLen)
+    for t in 0..<seqLen {
+        for d in 0..<nPosDims {
+            let frac = gridValues[d][t] / Double(maxPos[d])
+            scaledPositions[t][d] = frac * 2.0 - 1.0
+        }
+    }
+
+    // 4. Compute frequencies: freqs[t] = flatten(indices * scaledPositions[t])
+    // Result shape: (T, numIndices * nPosDims)
+    let freqDim = numIndices * nPosDims
+    var freqsF64 = [Double](repeating: 0, count: seqLen * freqDim)
+    for t in 0..<seqLen {
+        for fi in 0..<numIndices {
+            for d in 0..<nPosDims {
+                // Match Python's transpose: (T, n_dims, n_freq) → (T, n_freq, n_dims)
+                let outIdx = t * freqDim + fi * nPosDims + d
+                freqsF64[outIdx] = indicesF64[fi] * scaledPositions[t][d]
+            }
+        }
+    }
+
+    // 5. Compute cos/sin in Float64
+    let cosF64 = freqsF64.map { Foundation.cos($0) }
+    let sinF64 = freqsF64.map { Foundation.sin($0) }
+
+    // 6. Handle RoPE type-specific processing
+    switch ropeType {
+    case .split:
+        let expectedFreqs = dim / 2
+        let padSize = max(0, expectedFreqs - freqDim)
+
+        // Pad with 1s for cos, 0s for sin (identity transform)
+        // Final shape per token: padSize + freqDim = expectedFreqs = dim/2
+        let totalFreqsPerToken = padSize + freqDim
+
+        // Build padded arrays: (B, T, totalFreqsPerToken) → all batches identical
+        var cosPadded = [Float](repeating: 0, count: batchSize * seqLen * totalFreqsPerToken)
+        var sinPadded = [Float](repeating: 0, count: batchSize * seqLen * totalFreqsPerToken)
+
+        for b in 0..<batchSize {
+            for t in 0..<seqLen {
+                let baseOut = (b * seqLen + t) * totalFreqsPerToken
+                let baseIn = t * freqDim
+                // Padding (cos=1, sin=0)
+                for p in 0..<padSize {
+                    cosPadded[baseOut + p] = 1.0
+                    sinPadded[baseOut + p] = 0.0
+                }
+                // Frequency values
+                for f in 0..<freqDim {
+                    cosPadded[baseOut + padSize + f] = Float(cosF64[baseIn + f])
+                    sinPadded[baseOut + padSize + f] = Float(sinF64[baseIn + f])
+                }
+            }
+        }
+
+        // Convert to MLXArray: (B, T, totalFreqsPerToken)
+        var cosArray = MLXArray(cosPadded, [batchSize, seqLen, totalFreqsPerToken])
+        var sinArray = MLXArray(sinPadded, [batchSize, seqLen, totalFreqsPerToken])
+
+        // Reshape for multi-head: (B, T, H, D//2//H) → (B, H, T, D//2//H)
+        let headDim = totalFreqsPerToken / numAttentionHeads
+        cosArray = cosArray.reshaped([batchSize, seqLen, numAttentionHeads, headDim])
+        sinArray = sinArray.reshaped([batchSize, seqLen, numAttentionHeads, headDim])
+        cosArray = cosArray.transposed(0, 2, 1, 3)
+        sinArray = sinArray.transposed(0, 2, 1, 3)
+
+        return (cosArray, sinArray)
+
+    case .interleaved:
+        let padSize = dim % nElem
+
+        // Repeat interleave: each freq value appears twice
+        let repeatedDim = freqDim * 2
+        let totalDim = repeatedDim + padSize
+
+        var cosFinal = [Float](repeating: 0, count: batchSize * seqLen * totalDim)
+        var sinFinal = [Float](repeating: 0, count: batchSize * seqLen * totalDim)
+
+        for b in 0..<batchSize {
+            for t in 0..<seqLen {
+                let baseOut = (b * seqLen + t) * totalDim
+                let baseIn = t * freqDim
+                // Padding (cos=1, sin=0) at the beginning
+                for p in 0..<padSize {
+                    cosFinal[baseOut + p] = 1.0
+                    sinFinal[baseOut + p] = 0.0
+                }
+                // Repeated frequency values
+                for f in 0..<freqDim {
+                    let c = Float(cosF64[baseIn + f])
+                    let s = Float(sinF64[baseIn + f])
+                    cosFinal[baseOut + padSize + f * 2] = c
+                    cosFinal[baseOut + padSize + f * 2 + 1] = c
+                    sinFinal[baseOut + padSize + f * 2] = s
+                    sinFinal[baseOut + padSize + f * 2 + 1] = s
+                }
+            }
+        }
+
+        let cosArray = MLXArray(cosFinal, [batchSize, seqLen, totalDim])
+        let sinArray = MLXArray(sinFinal, [batchSize, seqLen, totalDim])
+        return (cosArray, sinArray)
     }
 }
 

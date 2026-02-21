@@ -6,77 +6,72 @@ import Foundation
 // MARK: - Model Selection
 
 /// LTX-2 model variants
+///
+/// Uses HuggingFace Diffusers format with per-component weight files:
+/// - `transformer/` — sharded safetensors for the diffusion transformer
+/// - `vae/` — standalone VAE decoder weights
+/// - `connectors/` — text encoder connector weights
+/// - `text_encoder/` — Gemma 3 12B sharded weights
+/// - `tokenizer/` — Gemma tokenizer files
 public enum LTXModel: String, CaseIterable, Sendable {
-    /// LTX-2 Dev - Full model, 50 steps, highest quality
+    /// LTX-2 Dev - Full model, 40 steps, CFG guidance, highest quality
     case dev = "dev"
 
-    /// LTX-2 Distilled - Faster model, 8 steps
+    /// LTX-2 Distilled - Faster model, 8 steps, no CFG
     case distilled = "distilled"
-
-    /// LTX-2 Distilled FP8 - Smallest model, 8 steps, FP8 quantized
-    case distilledFP8 = "distilledFP8"
 
     public var displayName: String {
         switch self {
         case .dev: return "LTX-2 Dev (~25GB)"
         case .distilled: return "LTX-2 Distilled (~16GB)"
-        case .distilledFP8: return "LTX-2 Distilled FP8 (~12GB)"
         }
     }
 
     /// Whether this model uses the distilled sigma schedule
     public var isDistilled: Bool {
-        switch self {
-        case .dev: return false
-        case .distilled, .distilledFP8: return true
-        }
+        self == .distilled
     }
 
     /// Default number of inference steps
     public var defaultSteps: Int {
         switch self {
-        case .dev: return 50
-        case .distilled, .distilledFP8: return 8
+        case .dev: return 40
+        case .distilled: return 8
         }
     }
 
     /// Default guidance scale
     public var defaultGuidance: Float {
         switch self {
-        case .dev: return 7.5
-        case .distilled, .distilledFP8: return 1.0
+        case .dev: return 4.0
+        case .distilled: return 1.0
         }
     }
 
-    /// Estimated VRAM usage in GB
+    /// Estimated VRAM usage in GB (with 3-phase loading)
     public var estimatedVRAM: Int {
         switch self {
         case .dev: return 25
         case .distilled: return 16
-        case .distilledFP8: return 12
         }
     }
 
     /// HuggingFace repository for this model
     public var huggingFaceRepo: String {
-        return "Lightricks/LTX-2"
-    }
-
-    /// Safetensors file name for this model variant
-    public var transformerFilename: String {
         switch self {
-        case .dev: return "ltx-2-19b-dev.safetensors"
-        case .distilled: return "ltx-2-19b-distilled.safetensors"
-        case .distilledFP8: return "ltx-2-19b-distilled-fp8.safetensors"
+        case .dev: return "mlx-community/LTX-2-dev-bf16"
+        case .distilled: return "Lightricks/LTX-2"
         }
     }
 
-    /// Unified weights filename (contains all components: transformer, VAE, text encoder)
-    /// Same file as transformerFilename — it contains everything.
-    public var weightsFilename: String { transformerFilename }
-
-    /// Whether this model uses FP8 quantized weights
-    public var isFP8: Bool { self == .distilledFP8 }
+    /// Unified weights filename (single file containing transformer, VAE, connector)
+    /// Used as a fallback when per-component files aren't available.
+    public var unifiedWeightsFilename: String {
+        switch self {
+        case .dev: return "ltx-2-19b-dev.safetensors"
+        case .distilled: return "ltx-2-19b-distilled.safetensors"
+        }
+    }
 
     /// Get the transformer configuration for this model
     public var transformerConfig: LTXTransformerConfig {
@@ -194,6 +189,32 @@ public struct LTXVideoGenerationConfig: Sendable {
     /// Negative prompt for CFG
     public var negativePrompt: String?
 
+    /// Guidance rescale factor (phi). 0.0 = disabled, 0.7 = recommended with CFG.
+    /// Rescales CFG output to match the standard deviation of the conditional output,
+    /// reducing overexposure artifacts.
+    public var guidanceRescale: Float
+
+    /// Cross-attention scaling factor. 1.0 = no change, >1.0 = stronger prompt adherence.
+    /// Applied to the output of cross-attention layers in the transformer.
+    public var crossAttentionScale: Float
+
+    /// GE velocity correction gamma. 0.0 = disabled.
+    /// Applies momentum on the velocity prediction: v' = gamma * (v - v_prev) + v_prev
+    public var geGamma: Float
+
+    /// STG (Spatio-Temporal Guidance) scale. 0.0 = disabled.
+    /// Higher values improve spatial/temporal coherence at the cost of ~2x denoise time.
+    public var stgScale: Float
+
+    /// Transformer block indices where STG skips self-attention.
+    public var stgBlocks: [Int]
+
+    /// Whether to use two-stage generation (half-res + upscale + refine).
+    public var twoStage: Bool
+
+    /// Whether to enhance the prompt using Gemma before generation.
+    public var enhancePrompt: Bool
+
     public init(
         width: Int = 704,
         height: Int = 480,
@@ -201,7 +222,14 @@ public struct LTXVideoGenerationConfig: Sendable {
         numSteps: Int = 8,
         cfgScale: Float = 1.0,
         seed: UInt64? = nil,
-        negativePrompt: String? = nil
+        negativePrompt: String? = nil,
+        guidanceRescale: Float = 0.0,
+        crossAttentionScale: Float = 1.0,
+        geGamma: Float = 0.0,
+        stgScale: Float = 0.0,
+        stgBlocks: [Int] = [29],
+        twoStage: Bool = false,
+        enhancePrompt: Bool = false
     ) {
         self.width = width
         self.height = height
@@ -210,6 +238,13 @@ public struct LTXVideoGenerationConfig: Sendable {
         self.cfgScale = cfgScale
         self.seed = seed
         self.negativePrompt = negativePrompt
+        self.guidanceRescale = guidanceRescale
+        self.crossAttentionScale = crossAttentionScale
+        self.geGamma = geGamma
+        self.stgScale = stgScale
+        self.stgBlocks = stgBlocks
+        self.twoStage = twoStage
+        self.enhancePrompt = enhancePrompt
     }
 
     /// Validate the configuration
