@@ -54,6 +54,9 @@ class LoRAAdapter {
     /// Pattern from flux-2-swift-mlx: apply model.update() + eval() per batch instead of per layer.
     /// This reduces update calls from ~576 to ~48 and improves GPU utilization.
     ///
+    /// Handles quantized models: if the transformer has been quantized (QuantizedLinear layers),
+    /// uses dequant → merge → requant pattern to preserve quantization after LoRA fusion.
+    ///
     /// - Parameters:
     ///   - model: The transformer to fuse into
     /// - Returns: Dictionary of original weights (for unfusing later)
@@ -64,6 +67,18 @@ class LoRAAdapter {
 
         // Get model parameters as a flat dictionary (ONCE — avoids repeated flattening)
         let modelParams = Dictionary(uniqueKeysWithValues: model.parameters().flattened())
+
+        // Build a map of quantized modules for dequant→merge→requant
+        var quantizedModules: [String: QuantizedLinear] = [:]
+        for (path, module) in model.leafModules().flattened() {
+            if let ql = module as? QuantizedLinear {
+                quantizedModules[path] = ql
+            }
+        }
+        let isQuantized = !quantizedModules.isEmpty
+        if isQuantized {
+            LTXDebug.log("LoRA: Detected quantized model (\(quantizedModules.count) QuantizedLinear layers)")
+        }
 
         // Group LoRA layers by transformer block for batched updates.
         // This reduces peak memory from ~model_size to ~block_size (~98% reduction)
@@ -79,20 +94,59 @@ class LoRAAdapter {
 
                 // Translate LoRA key (ComfyUI/Diffusers format) to Swift model flattened key.
                 let swiftKey = LoRAKeyMapper.loraKeyToModelKey(layer.originalKey)
-                guard let currentWeight = modelParams[swiftKey] else {
-                    LTXDebug.log("LoRA fuse: no model weight for \(swiftKey), skipping")
-                    continue
+
+                // Derive the module path (strip ".weight" suffix)
+                let layerPath = swiftKey.hasSuffix(".weight")
+                    ? String(swiftKey.dropLast(".weight".count))
+                    : swiftKey
+
+                // Check if this layer is a QuantizedLinear module
+                if let ql = quantizedModules[layerPath] {
+                    // === QuantizedLinear path: dequant → merge → requant ===
+
+                    // 1. Dequantize MLX qint → float16
+                    var mergedWeight = dequantized(
+                        ql.weight, scales: ql.scales, biases: ql.biases,
+                        groupSize: ql.groupSize, bits: ql.bits
+                    ).asType(.float16)
+
+                    // Save original quantized state for unfusing
+                    originalWeights[swiftKey] = ql.weight
+                    originalWeights[layerPath + ".scales"] = ql.scales
+                    if let b = ql.biases { originalWeights[layerPath + ".biases"] = b }
+
+                    // 2. Apply LoRA delta
+                    let deltaConverted = delta.asType(mergedWeight.dtype)
+                    mergedWeight = mergedWeight + deltaConverted
+
+                    // 3. Requantize
+                    let (newWeight, newScales, newBiases) = quantized(
+                        mergedWeight, groupSize: ql.groupSize, bits: ql.bits
+                    )
+
+                    // 4. Update weight, scales, and biases
+                    batchUpdates.append((swiftKey, newWeight))
+                    batchUpdates.append((layerPath + ".scales", newScales))
+                    if let nb = newBiases {
+                        batchUpdates.append((layerPath + ".biases", nb))
+                    }
+                    fusedCount += 1
+                } else {
+                    // === Standard Linear path ===
+                    guard let currentWeight = modelParams[swiftKey] else {
+                        LTXDebug.log("LoRA fuse: no model weight for \(swiftKey), skipping")
+                        continue
+                    }
+
+                    // Save original for unfusing
+                    originalWeights[swiftKey] = currentWeight
+
+                    // Fuse: W' = W + delta (delta already includes scale)
+                    let deltaConverted = delta.asType(currentWeight.dtype)
+                    let newWeight = currentWeight + deltaConverted
+                    batchUpdates.append((swiftKey, newWeight))
+                    fusedCount += 1
                 }
-
-                // Save original for unfusing
-                originalWeights[swiftKey] = currentWeight
-
-                // Fuse: W' = W + delta (delta already includes scale)
-                // Convert LoRA delta to match weight dtype if needed
-                let deltaConverted = delta.asType(currentWeight.dtype)
-                let newWeight = currentWeight + deltaConverted
-                batchUpdates.append((swiftKey, newWeight))
-                fusedCount += 1
             }
 
             // Apply this batch and materialize to free intermediate arrays

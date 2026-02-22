@@ -168,9 +168,10 @@ func applyGuidanceRescale(
 
     let eps: Float = 1e-8
 
-    // Per-channel std over spatial+temporal dims (axes: 2=F, 3=H, 4=W)
-    let cfgStd = MLX.sqrt(MLX.variance(cfgOutput, axes: [2, 3, 4], keepDims: true) + eps)
-    let condStd = MLX.sqrt(MLX.variance(condOutput, axes: [2, 3, 4], keepDims: true) + eps)
+    // Std over all dims except batch (axes: 1=C, 2=F, 3=H, 4=W), matching Diffusers
+    // rescale_noise_cfg: std(dim=list(range(1, ndim)), keepdim=True)
+    let cfgStd = MLX.sqrt(MLX.variance(cfgOutput, axes: [1, 2, 3, 4], keepDims: true) + eps)
+    let condStd = MLX.sqrt(MLX.variance(condOutput, axes: [1, 2, 3, 4], keepDims: true) + eps)
 
     // Rescale CFG output to match conditional std
     let rescaled = cfgOutput * (condStd / cfgStd)

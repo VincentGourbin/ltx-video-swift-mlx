@@ -299,6 +299,19 @@ public actor LTXPipeline {
         eval(transformer!.parameters())
         LTXDebug.log("[TIME] Eval transformer weights: \(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
 
+        // Step 3b: Apply on-the-fly quantization if configured
+        if quantization.transformer.needsQuantization {
+            stepStart = Date()
+            let bits = quantization.transformer.bits
+            let groupSize = quantization.transformer.groupSize
+            LTXDebug.log("Quantizing transformer to \(bits)-bit (groupSize=\(groupSize))...")
+            progressCallback?(DownloadProgress(progress: 0.6, message: "Quantizing transformer to \(bits)-bit..."))
+            quantize(model: transformer!, groupSize: groupSize, bits: bits)
+            eval(transformer!.parameters())
+            Memory.clearCache()
+            LTXDebug.log("[TIME] Transformer quantization: \(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
+        }
+
         // Step 4: Create and load VAE decoder
         progressCallback?(DownloadProgress(progress: 0.7, message: "Loading VAE decoder..."))
 
@@ -1270,17 +1283,18 @@ public actor LTXPipeline {
         LTXDebug.log("Added stage 2 noise (σ=\(noiseScale))")
         LTXDebug.log("Stage 2 input stats: mean=\(latent.mean().item(Float.self)), std=\(MLX.sqrt(MLX.variance(latent)).item(Float.self))")
 
-        // Denoise (same transformer, no LoRA needed!)
+        // Denoise stage 2 — ALWAYS without CFG (distilled refinement sigmas)
+        // Use prompt-only embeddings, not CFG-concatenated [neg, pos]
         latent = denoise(
             latent: latent,
             sigmas: stage2Sigmas,
-            textEmbeddings: textEmbeddings,
+            textEmbeddings: promptEmbeddings,
             promptEmbeddings: promptEmbeddings,
-            contextMask: contextMask,
+            contextMask: promptMask,
             latentShape: stage2Shape,
             config: config,
             transformer: transformer,
-            useCFG: useCFG,
+            useCFG: false,
             onProgress: onProgress,
             profile: profile,
             timings: &timings

@@ -83,6 +83,9 @@ struct Generate: AsyncParsableCommand {
     @Option(name: .long, help: "STG block indices (comma-separated, e.g. \"29\" or \"28,29\")")
     var stgBlocks: String = "29"
 
+    @Option(name: .long, help: "Transformer quantization: bf16 (default), qint8 (8-bit), int4 (4-bit)")
+    var transformerQuant: String = "bf16"
+
     @Flag(name: .long, help: "Use two-stage generation: half resolution then upscale 2x and refine")
     var twoStage: Bool = false
 
@@ -127,6 +130,7 @@ struct Generate: AsyncParsableCommand {
         if stgScale > 0 { print("STG scale: \(stgScale), blocks: \(parsedStgBlocks)") }
         if twoStage { print("Two-stage: enabled") }
         if enhancePrompt { print("Prompt enhancement: enabled") }
+        if transformerQuant != "bf16" { print("Transformer quantization: \(transformerQuant)") }
         print()
 
         // Validate frame count (must be 8n+1)
@@ -138,6 +142,12 @@ struct Generate: AsyncParsableCommand {
         guard width % 32 == 0 && height % 32 == 0 else {
             throw ValidationError("Width and height must be divisible by 32. Got \(width)x\(height)")
         }
+
+        // Parse transformer quantization
+        guard let quantOption = TransformerQuantization(rawValue: transformerQuant) else {
+            throw ValidationError("Invalid transformer quantization: \(transformerQuant). Use: bf16, qint8, or int4")
+        }
+        let quantConfig = LTXQuantizationConfig(transformer: quantOption)
 
         // Parse model variant
         // --distilled-lora forces dev model
@@ -170,6 +180,7 @@ struct Generate: AsyncParsableCommand {
         fflush(stdout)
         let pipeline = LTXPipeline(
             model: modelVariant,
+            quantization: quantConfig,
             hfToken: hfToken
         )
         print("Pipeline created")

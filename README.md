@@ -11,6 +11,7 @@ Generates videos from text prompts, running entirely on-device on Apple Silicon 
 - **Two-stage pipeline**: Half-resolution generation + 2x spatial upscaling + refinement
 - **LoRA support**: Distilled LoRA for fast dev-quality generation (8 steps instead of 40)
 - **Prompt enhancement**: Gemma 3 12B generates detailed video descriptions from short prompts
+- **On-the-fly quantization**: 8-bit (qint8) or 4-bit (int4) transformer quantization for reduced memory
 - **Memory optimization**: 3-phase pipeline with configurable presets (light/moderate/aggressive)
 - **VAE temporal tiling**: Generates long videos (200+ frames) within memory constraints
 - **Profiling**: Detailed per-step timing and memory usage reporting
@@ -60,6 +61,10 @@ ltx-video generate "A cat walking on the beach" \
 # With prompt enhancement
 ltx-video generate "A cat on a beach" \
     --enhance-prompt --seed 42 -w 768 -h 512 -f 25 -o output.mp4
+
+# With 8-bit quantization (reduced memory)
+ltx-video generate "A cat walking on the beach" \
+    --transformer-quant qint8 -w 768 -h 512 -f 25 -o output.mp4
 ```
 
 Models are downloaded automatically on first run from [Lightricks/LTX-2](https://huggingface.co/Lightricks/LTX-2) on HuggingFace.
@@ -72,7 +77,7 @@ Models are downloaded automatically on first run from [Lightricks/LTX-2](https:/
 | Dev | 40 | 4.0 | ~25 GB | Slow | Best |
 | Dev + Distilled LoRA | 8 | 1.0 (off) | ~25 GB | Fast | Near-dev |
 
-All variants support the two-stage pipeline (`--two-stage`) which generates at half resolution, upscales 2x with a spatial upscaler, and refines with 3 additional steps.
+The two-stage pipeline (`--two-stage`) generates at half resolution, upscales 2x with a spatial upscaler, and refines with 3 additional steps. Two-stage requires either the distilled model or distilled LoRA — the dev model alone cannot do the 3-step refinement stage (see [examples](docs/examples/beaver-dam/README.md#why-two-stage-requires-distilled-lora)).
 
 ## CLI Reference
 
@@ -89,6 +94,7 @@ All variants support the two-stage pipeline (`--two-stage`) which generates at h
 | `-g, --guidance` | model default | CFG scale (1.0=off, 4.0 for dev) |
 | `-m, --model` | `distilled` | Model variant: `distilled` or `dev` |
 | `--seed` | random | Random seed for reproducibility |
+| `--transformer-quant` | `bf16` | Transformer quantization: `bf16`, `qint8` (8-bit), `int4` (4-bit) |
 | `--distilled-lora` | off | Apply distilled LoRA (forces dev, 8 steps, no CFG) |
 | `--two-stage` | off | Two-stage generation with 2x spatial upscaling |
 | `--enhance-prompt` | off | Enhance prompt using Gemma 3 generation |
@@ -135,8 +141,8 @@ Benchmarked on Apple Silicon M3 Max 96GB, generating 25 frames at 768x512 with p
 | Dev + LoRA | 8 | 102s | Dev quality, distilled speed |
 | Distilled + Upscaler | 8+3 | 81s | Fast with 2x upscaling |
 | **Dev + LoRA + Upscaler** | **8+3** | **78s** | **Best quality/speed ratio** |
-| Dev + Upscaler | 40+3 | 281s | Highest quality |
-| Dev | 40 | 799s | Slowest (full-res CFG) |
+| Dev | 40 | 799s | Best quality at 768x512 |
+| Dev 1024x576 | 40 | 1455s | Highest resolution |
 
 ## Architecture
 
@@ -165,7 +171,7 @@ VAE Decoder (SimpleVideoDecoder) ──► video frames (temporal tiling for lon
 MP4 Export (AVFoundation)
 ```
 
-**Two-Stage Pipeline:**
+**Two-Stage Pipeline** (requires distilled model or distilled LoRA):
 ```
 Stage 1: Generate at half resolution (W/2 x H/2)
     │
@@ -173,7 +179,7 @@ Stage 1: Generate at half resolution (W/2 x H/2)
 Spatial Upscaler: Denormalize → 2x upscale → Renormalize → AdaIN
     │
     ▼
-Stage 2: Add noise (σ=0.909) → Refine at full resolution (3 steps)
+Stage 2: Add noise (σ=0.909) → Refine at full resolution (3 distilled steps)
 ```
 
 ## Swift Package Integration
