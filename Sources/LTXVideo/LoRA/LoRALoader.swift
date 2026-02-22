@@ -185,9 +185,59 @@ public struct LoRAWeights: Sendable {
 
 // MARK: - Weight Key Mapping
 
-/// Maps between Python and Swift weight key formats
+/// Maps between LoRA file key format and Swift model parameter key format
 public struct LoRAKeyMapper {
-    /// Common key transformations for LTX-2
+    /// Translate a LoRA originalKey to the flattened model parameter key used by
+    /// MLX Module.parameters().flattened().
+    ///
+    /// LoRA files (ComfyUI / Diffusers format) use keys like:
+    ///   diffusion_model.transformer_blocks.0.attn1.to_out.0
+    ///   diffusion_model.transformer_blocks.0.ff.net.0.proj
+    ///   diffusion_model.transformer_blocks.0.ff.net.2
+    ///
+    /// The Swift model exposes flattened keys like:
+    ///   transformer_blocks.0.attn1.to_out.weight
+    ///   transformer_blocks.0.ff.project_in.proj.weight
+    ///   transformer_blocks.0.ff.project_out.weight
+    ///
+    /// Transformations applied:
+    ///   1. Strip leading "diffusion_model." prefix
+    ///   2. Replace ".to_out.0" with ".to_out"  (list index removed; module key is just "to_out")
+    ///   3. Replace ".ff.net.0.proj" with ".ff.project_in.proj"  (LTXFeedForward key "project_in")
+    ///   4. Replace ".ff.net.2" with ".ff.project_out"  (LTXFeedForward key "project_out")
+    ///   5. Append ".weight" (Linear weight parameter)
+    public static func loraKeyToModelKey(_ loraOriginalKey: String) -> String {
+        var key = loraOriginalKey
+
+        // 1. Strip the "diffusion_model." wrapper prefix used by ComfyUI/Diffusers LoRA files
+        if key.hasPrefix("diffusion_model.") {
+            key = String(key.dropFirst("diffusion_model.".count))
+        }
+
+        // 2. to_out.0 -> to_out
+        //    The Python Sequential wrapper adds the ".0" list index; the Swift module
+        //    LTXAttention declares @ModuleInfo(key: "to_out") with no index.
+        key = key.replacingOccurrences(of: ".to_out.0", with: ".to_out")
+
+        // 3. ff.net.0.proj -> ff.project_in.proj
+        //    Python: FeedForward contains nn.Sequential("net") with [GEGLU(.proj), ..., Linear]
+        //    Swift: LTXFeedForward uses @ModuleInfo(key: "project_in") var projectIn: GELUApprox
+        //           and GELUApprox uses @ModuleInfo var proj: Linear  (default key "proj")
+        key = key.replacingOccurrences(of: ".ff.net.0.proj", with: ".ff.project_in.proj")
+
+        // 4. ff.net.2 -> ff.project_out
+        //    Python: FeedForward's net[2] is the output Linear
+        //    Swift: LTXFeedForward uses @ModuleInfo(key: "project_out") var projectOut: Linear
+        key = key.replacingOccurrences(of: ".ff.net.2", with: ".ff.project_out")
+
+        // 5. Append .weight — all targeted layers are Linear modules whose weight
+        //    parameter is named "weight"
+        key = key + ".weight"
+
+        return key
+    }
+
+    /// Legacy camelCase mapper (not used for LoRA fusion, kept for reference)
     public static func mapKey(_ pythonKey: String) -> String {
         var key = pythonKey
 

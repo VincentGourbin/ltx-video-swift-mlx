@@ -193,40 +193,28 @@ public actor LTXPipeline {
             vaeWeights = split.vae
             connectorWeights = split.connector
             LTXDebug.log("[TIME] Split unified weights: \(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
-        } else if model == .dev {
-            // Dev model: unified safetensors (mlx-community repo) — download and split
-            stepStart = Date()
-            LTXDebug.log("Downloading dev unified weights (if needed)...")
-            progressCallback?(DownloadProgress(progress: 0.35, message: "Downloading unified weights..."))
-            let unifiedPath = try await downloader.downloadUnifiedWeights(model: model) { progress in
-                progressCallback?(progress)
-            }
-            LTXDebug.log("Splitting unified weights into components...")
-            let split = try LTXWeightLoader.splitUnifiedWeightsFile(path: unifiedPath.path)
-            transformerWeights = split.transformer
-            vaeWeights = split.vae
-            connectorWeights = split.connector
-            LTXDebug.log("[TIME] Download + split: \(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
         } else {
-            // Distilled model: per-component downloads (Lightricks Diffusers format)
+            // Per-component downloads from Lightricks/LTX-2
+            // Connector and VAE are shared between dev and distilled.
+            // Only the transformer weights differ (via unifiedWeightsFilename).
             stepStart = Date()
-            LTXDebug.log("Downloading LTX-2 components (if needed)...")
+            LTXDebug.log("Downloading LTX-2 components for \(model.displayName) (if needed)...")
 
-            // Download connector
+            // Download connector (shared between dev and distilled)
             progressCallback?(DownloadProgress(progress: 0.35, message: "Downloading connector weights..."))
             let connectorPath = try await downloader.downloadConnector(model: model) { progress in
                 progressCallback?(progress)
             }
             connectorWeights = try LTXWeightLoader.loadConnectorWeights(from: connectorPath.path)
 
-            // Download unified file for transformer (distilled also uses unified for transformer)
+            // Download transformer from unified file (dev or distilled)
             progressCallback?(DownloadProgress(progress: 0.4, message: "Downloading transformer weights..."))
             let unifiedPath = try await downloader.downloadUnifiedWeights(model: model) { progress in
                 progressCallback?(progress)
             }
             transformerWeights = try LTXWeightLoader.loadTransformerWeights(from: unifiedPath.path)
 
-            // Download VAE
+            // Download VAE (shared between dev and distilled)
             progressCallback?(DownloadProgress(progress: 0.8, message: "Downloading VAE weights..."))
             let vaePath = try await downloader.downloadVAE(model: model) { progress in
                 progressCallback?(progress)
@@ -1432,6 +1420,38 @@ public actor LTXPipeline {
     public func downloadUpscalerWeights() async throws -> String {
         let url = try await downloader.downloadUpscalerWeights()
         return url.path
+    }
+
+    /// Download distilled LoRA weights (if not already cached)
+    /// - Returns: Path to the distilled LoRA safetensors file
+    public func downloadDistilledLoRA() async throws -> String {
+        let url = try await downloader.downloadDistilledLoRA()
+        return url.path
+    }
+
+    /// Fuse LoRA weights into the transformer (permanent merge)
+    ///
+    /// Uses batched processing per transformer block to minimize peak memory.
+    /// LoRA tensors are freed after fusion via scope exit + cache clearing.
+    ///
+    /// - Parameters:
+    ///   - loraPath: Path to LoRA .safetensors file
+    ///   - scale: LoRA scale factor
+    /// - Returns: Number of layers modified
+    @discardableResult
+    public func fuseLoRA(
+        from loraPath: String,
+        scale: Float = 1.0
+    ) throws -> Int {
+        guard let transformer = transformer else {
+            throw LTXError.modelNotLoaded("Transformer not loaded")
+        }
+        let (originals, _) = try transformer.fuseLoRA(from: loraPath, scale: scale)
+        // LoRA weights (LoRAWeights struct) go out of scope here — freed by ARC.
+        // GPU cache cleared inside fuseWeights() after all batches.
+        // Final cleanup to release any remaining intermediate tensors.
+        Memory.clearCache()
+        return originals.count
     }
 
     // MARK: - Memory Management

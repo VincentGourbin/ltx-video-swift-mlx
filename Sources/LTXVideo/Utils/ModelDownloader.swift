@@ -178,8 +178,16 @@ public actor ModelDownloader {
         }
 
         // Get file list from HuggingFace
+        // Filter to only model-*.safetensors (HF Transformers format), not diffusion_pytorch_model-*
+        // (Diffusers format). Both contain the same Gemma weights but we don't need both.
         let allFiles = try await listRepoFiles(repoId: repoId)
-        let textEncoderFiles = allFiles.filter { $0.hasPrefix("text_encoder/") }
+        let textEncoderFiles = allFiles.filter { file in
+            guard file.hasPrefix("text_encoder/") else { return false }
+            let name = String(file.dropFirst("text_encoder/".count))
+            // Skip Diffusers-format weight files (we use model-* format)
+            if name.hasPrefix("diffusion_pytorch_model") { return false }
+            return true
+        }
 
         guard !textEncoderFiles.isEmpty else {
             throw LTXError.downloadFailed("No text_encoder files found in \(repoId)")

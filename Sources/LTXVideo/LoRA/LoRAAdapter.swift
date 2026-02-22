@@ -29,9 +29,10 @@ public class LoRAAdapter {
     public func applyFused(to model: LTXTransformer) -> Int {
         var modifiedCount = 0
 
-        // Count matching layers for each transformer block
+        // Count matching layers for each transformer block.
+        // LoRA originalKeys use the 'diffusion_model.' prefix, so we include it here.
         for blockIdx in 0..<model.transformerBlocks.count {
-            let blockPrefix = "transformer_blocks.\(blockIdx)"
+            let blockPrefix = "diffusion_model.transformer_blocks.\(blockIdx)"
 
             // Attention layers
             modifiedCount += countMatchingLayers(prefix: "\(blockPrefix).attn1")
@@ -49,6 +50,10 @@ public class LoRAAdapter {
     ///
     /// Formula: W' = W + scale * (B @ A)
     ///
+    /// Uses batched processing (grouping layers by transformer block) to reduce peak memory.
+    /// Pattern from flux-2-swift-mlx: apply model.update() + eval() per batch instead of per layer.
+    /// This reduces update calls from ~576 to ~48 and improves GPU utilization.
+    ///
     /// - Parameters:
     ///   - model: The transformer to fuse into
     /// - Returns: Dictionary of original weights (for unfusing later)
@@ -57,34 +62,99 @@ public class LoRAAdapter {
         var originalWeights: [String: MLXArray] = [:]
         var fusedCount = 0
 
-        // Get model parameters as a flat dictionary
+        // Get model parameters as a flat dictionary (ONCE — avoids repeated flattening)
         let modelParams = Dictionary(uniqueKeysWithValues: model.parameters().flattened())
 
-        // Compute deltas and apply them
-        for layer in loraWeights.layers {
-            guard let delta = loraWeights.getDelta(for: layer.originalKey) else { continue }
+        // Group LoRA layers by transformer block for batched updates.
+        // This reduces peak memory from ~model_size to ~block_size (~98% reduction)
+        // by applying model.update() + eval() per batch instead of accumulating all updates.
+        let batches = Self.groupLayersByBlock(loraWeights.layers)
+        LTXDebug.log("LoRA: Processing \(loraWeights.layers.count) layers in \(batches.count) batches")
 
-            // Map to Swift key and find the weight
-            let swiftKey = layer.originalKey + ".weight"
-            guard let currentWeight = modelParams[swiftKey] else {
-                LTXDebug.log("LoRA fuse: no model weight for \(swiftKey), skipping")
-                continue
+        for (batchPrefix, layers) in batches {
+            var batchUpdates: [(String, MLXArray)] = []
+
+            for layer in layers {
+                guard let delta = loraWeights.getDelta(for: layer.originalKey) else { continue }
+
+                // Translate LoRA key (ComfyUI/Diffusers format) to Swift model flattened key.
+                let swiftKey = LoRAKeyMapper.loraKeyToModelKey(layer.originalKey)
+                guard let currentWeight = modelParams[swiftKey] else {
+                    LTXDebug.log("LoRA fuse: no model weight for \(swiftKey), skipping")
+                    continue
+                }
+
+                // Save original for unfusing
+                originalWeights[swiftKey] = currentWeight
+
+                // Fuse: W' = W + delta (delta already includes scale)
+                // Convert LoRA delta to match weight dtype if needed
+                let deltaConverted = delta.asType(currentWeight.dtype)
+                let newWeight = currentWeight + deltaConverted
+                batchUpdates.append((swiftKey, newWeight))
+                fusedCount += 1
             }
 
-            // Save original for unfusing
-            originalWeights[swiftKey] = currentWeight
-
-            // Fuse: W' = W + delta (delta already includes scale)
-            let newWeight = currentWeight + delta
-            MLX.eval(newWeight)
-
-            // Apply via nested key path update
-            setParameterByPath(model: model, keyPath: swiftKey, value: newWeight)
-            fusedCount += 1
+            // Apply this batch and materialize to free intermediate arrays
+            if !batchUpdates.isEmpty {
+                let params = ModuleParameters.unflattened(batchUpdates)
+                model.update(parameters: params)
+                eval(model.parameters())
+                LTXDebug.log("  Batch '\(batchPrefix)': fused \(batchUpdates.count) layers")
+            }
         }
+
+        // Clear GPU cache after all batches (matching flux-2 pattern)
+        Memory.clearCache()
 
         LTXDebug.log("LoRA fused \(fusedCount) layers (saved \(originalWeights.count) originals)")
         return originalWeights
+    }
+
+    /// Group LoRA layers by transformer block prefix for batched processing
+    ///
+    /// Matching flux-2-swift-mlx pattern: group by "diffusion_model.transformer_blocks.N"
+    /// so all layers in one block (attn1.to_q, attn1.to_k, ..., ff.net.0.proj, etc.)
+    /// are fused in a single model.update() + eval() call.
+    private static func groupLayersByBlock(_ layers: [LoRALayerInfo]) -> [(String, [LoRALayerInfo])] {
+        var groups: [(String, [LoRALayerInfo])] = []
+        var prefixIndex: [String: Int] = [:]
+
+        for layer in layers {
+            let prefix = blockPrefix(for: layer.originalKey)
+            if let idx = prefixIndex[prefix] {
+                groups[idx].1.append(layer)
+            } else {
+                prefixIndex[prefix] = groups.count
+                groups.append((prefix, [layer]))
+            }
+        }
+        return groups
+    }
+
+    /// Extract transformer block prefix from a LoRA key
+    ///
+    /// "diffusion_model.transformer_blocks.5.attn1.to_q" → "transformer_blocks.5"
+    private static func blockPrefix(for layerPath: String) -> String {
+        let components = layerPath.split(separator: ".")
+
+        // Strip "diffusion_model." prefix if present
+        let start: Int
+        if components.first == "diffusion_model" {
+            start = 1
+        } else {
+            start = 0
+        }
+
+        // Match "transformer_blocks.N"
+        if components.count > start + 1,
+           components[start] == "transformer_blocks",
+           Int(components[start + 1]) != nil
+        {
+            return "\(components[start]).\(components[start + 1])"
+        }
+
+        return String(components.first ?? Substring(layerPath))
     }
 
     /// Unfuse previously fused LoRA weights by restoring originals

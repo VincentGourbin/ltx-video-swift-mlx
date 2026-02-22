@@ -270,7 +270,7 @@ struct Generate: AsyncParsableCommand {
     @Option(name: .long, help: "STG block indices (comma-separated, e.g. \"29\" or \"28,29\")")
     var stgBlocks: String = "29"
 
-    @Flag(name: .long, help: "Use two-stage generation (half-res + upscale + refine)")
+    @Flag(name: .long, help: "Use two-stage generation: dev model + distilled LoRA → half-res denoise → 2x upscale → refine. Matches HF Space pipeline.")
     var twoStage: Bool = false
 
     @Flag(name: .long, help: "Enhance prompt using Gemma before generation")
@@ -326,8 +326,21 @@ struct Generate: AsyncParsableCommand {
         }
 
         // Parse model variant
-        guard let modelVariant = LTXModel(rawValue: model) else {
+        // Two-stage always uses dev model as base (with distilled LoRA)
+        let effectiveModel = twoStage ? "dev" : model
+        guard let modelVariant = LTXModel(rawValue: effectiveModel) else {
             throw ValidationError("Invalid model: \(model). Use: distilled or dev")
+        }
+
+        if twoStage {
+            // Two-stage validation: width/height must be divisible by 64
+            guard width % 64 == 0 && height % 64 == 0 else {
+                throw ValidationError("Two-stage requires width and height divisible by 64. Got \(width)x\(height)")
+            }
+            print("Two-stage pipeline: \(width/2)x\(height/2) → upscale 2x → \(width)x\(height)")
+            print("  Base model: dev + distilled LoRA")
+            print("  Stage 1: 8 distilled steps at \(width/2)x\(height/2)")
+            print("  Stage 2: 3 refinement steps at \(width)x\(height)")
         }
 
         if dryRun {
@@ -337,7 +350,7 @@ struct Generate: AsyncParsableCommand {
 
         // Create pipeline
         print("Creating pipeline...")
-        fflush(stdout)  // Force flush
+        fflush(stdout)
         let pipeline = LTXPipeline(
             model: modelVariant,
             hfToken: hfToken
@@ -359,8 +372,18 @@ struct Generate: AsyncParsableCommand {
         let loadTime = Date().timeIntervalSince(startLoad)
         print("Models loaded in \(String(format: "%.1f", loadTime))s")
 
-        // Apply LoRA if specified
-        if let loraPath = lora {
+        // Apply LoRA
+        if twoStage && lora == nil {
+            // Two-stage: automatically download and fuse distilled LoRA
+            print("Downloading distilled LoRA (if needed)...")
+            fflush(stdout)
+            let loraPath = try await pipeline.downloadDistilledLoRA()
+            print("Fusing distilled LoRA into transformer...")
+            fflush(stdout)
+            let fusedCount = try await pipeline.fuseLoRA(from: loraPath, scale: loraScale)
+            print("  Fused \(fusedCount) layers (scale=\(loraScale))")
+        } else if let loraPath = lora {
+            // Custom LoRA specified
             print("Applying LoRA from \(loraPath)...")
             let result = try await pipeline.applyLoRA(from: loraPath, scale: loraScale)
             print("  Modified \(result.modifiedLayerCount) layers")
@@ -370,12 +393,16 @@ struct Generate: AsyncParsableCommand {
         print("\nGenerating video...")
         let startGen = Date()
 
+        // For two-stage: force distilled settings (no CFG, 8 steps)
+        let effectiveSteps = twoStage ? 8 : (steps ?? modelVariant.defaultSteps)
+        let effectiveCFG: Float = twoStage ? 1.0 : (guidance ?? modelVariant.defaultGuidance)
+
         let config = LTXVideoGenerationConfig(
             width: width,
             height: height,
             numFrames: frames,
-            numSteps: steps ?? modelVariant.defaultSteps,
-            cfgScale: guidance ?? modelVariant.defaultGuidance,
+            numSteps: effectiveSteps,
+            cfgScale: effectiveCFG,
             seed: seed,
             guidanceRescale: guidanceRescale,
             crossAttentionScale: crossAttnScale,
@@ -388,11 +415,11 @@ struct Generate: AsyncParsableCommand {
 
         let result: VideoGenerationResult
         if twoStage {
-            // Two-stage: half-res → upscale → refine
-            // Download upscaler weights if needed
+            // Two-stage: half-res → upscale 2x → refine at full-res
             print("Downloading upscaler weights (if needed)...")
+            fflush(stdout)
             let upscalerPath = try await pipeline.downloadUpscalerWeights()
-            print("Upscaler weights: \(upscalerPath)")
+            print("Upscaler weights ready")
 
             result = try await pipeline.generateVideoTwoStage(
                 prompt: prompt,

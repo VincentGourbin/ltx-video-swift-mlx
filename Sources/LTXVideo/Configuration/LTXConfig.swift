@@ -57,11 +57,9 @@ public enum LTXModel: String, CaseIterable, Sendable {
     }
 
     /// HuggingFace repository for this model
+    /// Both variants use the official Lightricks repo — only the unified weights filename differs.
     public var huggingFaceRepo: String {
-        switch self {
-        case .dev: return "mlx-community/LTX-2-dev-bf16"
-        case .distilled: return "Lightricks/LTX-2"
-        }
+        return "Lightricks/LTX-2"
     }
 
     /// Unified weights filename (single file containing transformer, VAE, connector)
