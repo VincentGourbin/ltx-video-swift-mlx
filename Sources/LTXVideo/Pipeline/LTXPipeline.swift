@@ -29,47 +29,98 @@ inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts.
 
 // MARK: - Pipeline Progress
 
-/// Progress information during generation
+/// Progress information emitted during the denoising phase of generation.
+///
+/// Passed to the `onProgress` callback of ``LTXPipeline/generateVideo(prompt:negativePrompt:config:onProgress:profile:)``
+/// and ``LTXPipeline/generateVideoTwoStage(prompt:config:upscalerWeightsPath:onProgress:profile:)``.
+///
+/// ## Example
+/// ```swift
+/// let result = try await pipeline.generateVideo(
+///     prompt: "A sunset",
+///     config: config,
+///     onProgress: { progress in
+///         print("[\(Int(progress.progress * 100))%] \(progress.status)")
+///     }
+/// )
+/// ```
 public struct GenerationProgress: Sendable {
-    /// Current step (0-indexed)
+    /// Current denoising step (0-indexed)
     public let currentStep: Int
 
-    /// Total number of steps
+    /// Total number of denoising steps
     public let totalSteps: Int
 
-    /// Current sigma value
+    /// Current noise sigma value (decreases from 1.0 toward 0.0)
     public let sigma: Float
 
-    /// Progress fraction (0.0 to 1.0)
+    /// Progress fraction from 0.0 (start) to 1.0 (complete)
     public var progress: Double {
         Double(currentStep + 1) / Double(totalSteps)
     }
 
-    /// Human-readable status
+    /// Human-readable status string, e.g. `"Step 3/8 (σ=0.7250)"`
     public var status: String {
         "Step \(currentStep + 1)/\(totalSteps) (σ=\(String(format: "%.4f", sigma)))"
     }
 }
 
-/// Callback type for generation progress
+/// Callback invoked at each denoising step with progress information.
 public typealias GenerationProgressCallback = @Sendable (GenerationProgress) -> Void
 
-/// Callback type for intermediate frame preview
+/// Callback invoked with intermediate frame previews during generation.
+/// Parameters: frame index and the rendered CGImage.
 public typealias FramePreviewCallback = @Sendable (Int, CGImage) -> Void
 
 // MARK: - LTX Pipeline
 
-/// Main pipeline for LTX-2 video generation
+/// The main orchestrator for LTX-2 text-to-video generation.
+///
+/// `LTXPipeline` manages the full generation lifecycle: model loading,
+/// text encoding (Gemma 3), iterative denoising (48-block DiT transformer),
+/// and VAE decoding to produce video frames.
+///
+/// ## Typical Usage
+/// ```swift
+/// let pipeline = LTXPipeline(model: .distilled)
+/// try await pipeline.loadModels()
+/// let result = try await pipeline.generateVideo(
+///     prompt: "A cat walking in a garden",
+///     config: LTXVideoGenerationConfig(width: 512, height: 512, numFrames: 25)
+/// )
+/// ```
+///
+/// ## Two-Stage Pipeline
+/// For higher quality, use the dev model with distilled LoRA and 2x upscaling:
+/// ```swift
+/// let pipeline = LTXPipeline(model: .dev)
+/// try await pipeline.loadModels()
+/// let loraPath = try await pipeline.downloadDistilledLoRA()
+/// try await pipeline.fuseLoRA(from: loraPath)
+/// let upscalerPath = try await pipeline.downloadUpscalerWeights()
+/// let result = try await pipeline.generateVideoTwoStage(
+///     prompt: "Ocean sunset",
+///     config: config,
+///     upscalerWeightsPath: upscalerPath
+/// )
+/// ```
+///
+/// ## Memory Management
+/// The pipeline automatically manages GPU memory between phases. Configure
+/// the ``MemoryOptimizationConfig`` preset to control the tradeoff between
+/// speed and memory usage.
+///
+/// - Note: This is an `actor` to ensure thread-safe access to model state.
 public actor LTXPipeline {
     // MARK: - Properties
 
-    /// Model variant being used
+    /// The model variant (``LTXModel/distilled`` or ``LTXModel/dev``)
     public let model: LTXModel
 
-    /// Quantization configuration
+    /// Quantization settings for transformer and text encoder
     public let quantization: LTXQuantizationConfig
 
-    /// Memory optimization configuration
+    /// Memory optimization settings (eval frequency, cache clearing, component unloading)
     public let memoryOptimization: MemoryOptimizationConfig
 
     /// Model downloader
@@ -108,6 +159,13 @@ public actor LTXPipeline {
 
     // MARK: - Initialization
 
+    /// Create a new LTX-2 generation pipeline.
+    ///
+    /// - Parameters:
+    ///   - model: Model variant to use. Defaults to ``LTXModel/distilled``.
+    ///   - quantization: Quantization settings. Defaults to ``LTXQuantizationConfig/default``.
+    ///   - memoryOptimization: Memory optimization preset. Defaults to ``MemoryOptimizationConfig/default`` (light).
+    ///   - hfToken: Optional HuggingFace API token for downloading gated models.
     public init(
         model: LTXModel = .distilled,
         quantization: LTXQuantizationConfig = .default,
@@ -374,6 +432,7 @@ public actor LTXPipeline {
         }
 
         let generationStart = Date()
+        LTXMemoryManager.logMemoryState("generation start")
 
         LTXDebug.log("Generating video: \(config.width)x\(config.height), \(config.numFrames) frames")
         LTXDebug.log("Prompt: \(prompt)")
@@ -382,6 +441,7 @@ public actor LTXPipeline {
         let contextMask: MLXArray
         let useCFG = config.cfgScale > 1.0
         let textEncStart = Date()
+        LTXMemoryManager.setPhase(.textEncoding)
 
         if let precomputed = precomputedEmbeddings {
             // Use pre-computed embeddings (for diagnostic/cross-validation)
@@ -501,7 +561,9 @@ public actor LTXPipeline {
             Memory.clearCache()
             LTXDebug.log("Gemma model unloaded")
         }
-        LTXDebug.log("Text encoding: \(String(format: "%.1f", Date().timeIntervalSince(textEncStart)))s")
+        timings.textEncoding = Date().timeIntervalSince(textEncStart)
+        LTXDebug.log("Text encoding: \(String(format: "%.1f", timings.textEncoding))s")
+        LTXMemoryManager.logMemoryState("after text encoding")
 
         // 2. Create latent shape
         let latentShape = VideoLatentShape.fromPixelDimensions(
@@ -557,6 +619,7 @@ public actor LTXPipeline {
         latent = latent * sigmas[0]
 
         // 6. Denoising loop
+        LTXMemoryManager.setPhase(.denoising)
         LTXDebug.log("Starting denoising loop (\(config.numSteps) steps)...")
         var previousVelocity: MLXArray? = nil  // For GE velocity correction
 
@@ -700,6 +763,11 @@ public actor LTXPipeline {
             // Evaluate to free computation graph memory
             MLX.eval(latent)
 
+            // Periodic cache clearing to reduce GPU memory fragmentation
+            if (step + 1) % 5 == 0 {
+                Memory.clearCache()
+            }
+
             // Per-step diagnostics matching Python format
             if profile {
                 let vMean = velocity.mean().item(Float.self)
@@ -710,6 +778,7 @@ public actor LTXPipeline {
             }
 
             timings.denoiseSteps.append(Date().timeIntervalSince(stepStart))
+            timings.sampleMemory()
         }
 
         // Diagnostic: check final latent stats
@@ -742,12 +811,30 @@ public actor LTXPipeline {
             LTXDebug.log("[DIAG] block0.attn1.q_norm.weight: mean=\(qwMean), std=\(qwStd) (1.0/0.0 = NOT loaded)")
         }
 
-        // 7. Decode latents to video
+        // 7. Unload transformer to free memory for VAE decode
+        if memoryOptimization.unloadAfterUse {
+            self.transformer = nil
+            eval([MLXArray]())
+            Memory.clearCache()
+            if memoryOptimization.unloadSleepSeconds > 0 {
+                try await Task.sleep(for: .seconds(memoryOptimization.unloadSleepSeconds))
+                Memory.clearCache()
+            }
+            LTXDebug.log("Transformer unloaded for VAE decode phase")
+            LTXMemoryManager.logMemoryState("after transformer unload")
+        }
+
+        // 8. Decode latents to video
+        LTXMemoryManager.setPhase(.vaeDecode)
         // Use timestep_conditioning from VAE config.json (Diffusers default: false)
         let vaeTimestep: Float? = vaeDecoder.timestepConditioning ? 0.05 : nil
         LTXDebug.log("Decoding latents to video... (timestep=\(vaeTimestep.map { String($0) } ?? "nil"))")
         let vaeStart = Date()
-        let videoTensor = decodeVideo(latent: latent, decoder: vaeDecoder, timestep: vaeTimestep)
+        let videoTensor = decodeVideo(
+            latent: latent, decoder: vaeDecoder, timestep: vaeTimestep,
+            temporalTileSize: memoryOptimization.vaeTemporalTileSize,
+            temporalTileOverlap: memoryOptimization.vaeTemporalTileOverlap
+        )
         MLX.eval(videoTensor)
         timings.vaeDecode = Date().timeIntervalSince(vaeStart)
         LTXDebug.log("Decoded video shape: \(videoTensor.shape)")
@@ -766,6 +853,12 @@ public actor LTXPipeline {
 
         let frames = VideoExporter.tensorToImages(trimmedVideo)
         LTXDebug.log("Generated \(frames.count) frames")
+
+        LTXMemoryManager.logMemoryState("after VAE decode")
+        LTXMemoryManager.resetCacheLimit()
+
+        // Capture final peak memory
+        timings.capturePeakMemory()
 
         let generationTime = Date().timeIntervalSince(generationStart)
         let usedSeed = config.seed ?? 0
@@ -838,7 +931,8 @@ public actor LTXPipeline {
         transformer: LTXTransformer,
         useCFG: Bool,
         onProgress: GenerationProgressCallback? = nil,
-        profile: Bool = false
+        profile: Bool = false,
+        timings: inout GenerationTimings
     ) -> MLXArray {
         let numSteps = sigmas.count - 1
         var currentLatent = latent
@@ -935,13 +1029,22 @@ public actor LTXPipeline {
             )
             MLX.eval(currentLatent)
 
+            // Periodic cache clearing to reduce GPU memory fragmentation
+            if (step + 1) % 5 == 0 {
+                Memory.clearCache()
+            }
+
+            let stepDuration = Date().timeIntervalSince(stepStart)
+            timings.denoiseSteps.append(stepDuration)
+            timings.sampleMemory()
+
             if profile {
                 let vMean = velocityPred.mean().item(Float.self)
                 let vStd = MLX.sqrt(MLX.variance(velocityPred)).item(Float.self)
                 let lMean = currentLatent.mean().item(Float.self)
                 let lStd = MLX.sqrt(MLX.variance(currentLatent)).item(Float.self)
                 LTXDebug.log("  Step \(step): σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext)), vel mean=\(String(format: "%.4f", vMean)), std=\(String(format: "%.4f", vStd)), latent mean=\(String(format: "%.4f", lMean)), std=\(String(format: "%.4f", lStd))")
-                LTXDebug.log("  Step \(step) time: \(String(format: "%.2f", Date().timeIntervalSince(stepStart)))s")
+                LTXDebug.log("  Step \(step) time: \(String(format: "%.2f", stepDuration))s")
             }
         }
 
@@ -973,6 +1076,7 @@ public actor LTXPipeline {
         profile: Bool = false
     ) async throws -> VideoGenerationResult {
         try config.validate()
+        var timings = GenerationTimings()
 
         guard isLoaded else {
             throw LTXError.modelNotLoaded("Models not loaded. Call loadModels() first.")
@@ -995,6 +1099,7 @@ public actor LTXPipeline {
         let halfHeight = config.height / 2
 
         LTXDebug.log("Two-stage generation: \(halfWidth)x\(halfHeight) → \(config.width)x\(config.height)")
+        LTXMemoryManager.logMemoryState("two-stage start")
 
         // 0. Optionally enhance prompt
         let effectivePrompt: String
@@ -1006,6 +1111,7 @@ public actor LTXPipeline {
         }
 
         // 1. Encode text (shared between both stages)
+        LTXMemoryManager.setPhase(.textEncoding)
         let textEncStart = Date()
         let useCFG = config.cfgScale > 1.0
         let (promptEmbeddings, promptMask) = encodePrompt(effectivePrompt, encoder: textEncoder)
@@ -1024,7 +1130,15 @@ public actor LTXPipeline {
             textEmbeddings = promptEmbeddings
             contextMask = promptMask
         }
-        LTXDebug.log("Text encoding: \(String(format: "%.1f", Date().timeIntervalSince(textEncStart)))s")
+        timings.textEncoding = Date().timeIntervalSince(textEncStart)
+        LTXDebug.log("Text encoding: \(String(format: "%.1f", timings.textEncoding))s")
+
+        // Unload Gemma to free memory for denoising
+        LTXDebug.log("Unloading Gemma model to free memory...")
+        self.gemmaModel = nil
+        self.tokenizer = nil
+        Memory.clearCache()
+        LTXDebug.log("Gemma model unloaded")
 
         // 2. Seed
         if let seed = config.seed {
@@ -1038,7 +1152,8 @@ public actor LTXPipeline {
         }
 
         // === STAGE 1: Denoise at half resolution ===
-        LTXDebug.log("=== Stage 1: Half-resolution denoising (8 steps) ===")
+        LTXMemoryManager.setPhase(.denoising)
+        LTXDebug.log("=== Stage 1: Half-resolution denoising (\(config.numSteps) steps) ===")
         let stage1Start = Date()
 
         let stage1Shape = VideoLatentShape.fromPixelDimensions(
@@ -1049,8 +1164,23 @@ public actor LTXPipeline {
         )
         LTXDebug.log("Stage 1 latent: \(stage1Shape.frames)x\(stage1Shape.height)x\(stage1Shape.width)")
 
-        // Use distilled sigmas for stage 1
-        let stage1Sigmas = DISTILLED_SIGMA_VALUES
+        // Determine stage 1 sigmas based on model configuration
+        let stage1Sigmas: [Float]
+        if config.numSteps <= 8 && config.cfgScale <= 1.0 {
+            // Distilled or LoRA mode: use predefined distilled sigmas
+            stage1Sigmas = DISTILLED_SIGMA_VALUES
+            LTXDebug.log("Stage 1 using distilled sigmas (\(DISTILLED_SIGMA_VALUES.count - 1) steps)")
+        } else {
+            // Dev model: compute sigmas via scheduler with token-dependent shift
+            let stage1Scheduler = LTXScheduler(isDistilled: false)
+            stage1Scheduler.setTimesteps(
+                numSteps: config.numSteps,
+                distilled: false,
+                latentTokenCount: stage1Shape.tokenCount
+            )
+            stage1Sigmas = stage1Scheduler.sigmas
+            LTXDebug.log("Stage 1 using dev sigmas (\(stage1Sigmas.count - 1) steps)")
+        }
 
         // Generate noise and scale by initial sigma
         var latent = generateNoise(shape: stage1Shape, seed: config.seed)
@@ -1068,7 +1198,9 @@ public actor LTXPipeline {
             config: config,
             transformer: transformer,
             useCFG: useCFG,
-            profile: profile
+            onProgress: onProgress,
+            profile: profile,
+            timings: &timings
         )
         LTXDebug.log("Stage 1 complete: \(String(format: "%.1f", Date().timeIntervalSince(stage1Start)))s")
         LTXDebug.log("Stage 1 latent stats: mean=\(latent.mean().item(Float.self)), std=\(MLX.sqrt(MLX.variance(latent)).item(Float.self))")
@@ -1149,19 +1281,40 @@ public actor LTXPipeline {
             config: config,
             transformer: transformer,
             useCFG: useCFG,
-            profile: profile
+            onProgress: onProgress,
+            profile: profile,
+            timings: &timings
         )
         LTXDebug.log("Stage 2 complete: \(String(format: "%.1f", Date().timeIntervalSince(stage2Start)))s")
         LTXDebug.log("Stage 2 output stats: mean=\(latent.mean().item(Float.self)), std=\(MLX.sqrt(MLX.variance(latent)).item(Float.self)), min=\(latent.min().item(Float.self)), max=\(latent.max().item(Float.self))")
 
+        // Unload transformer to free memory for VAE decode
+        if memoryOptimization.unloadAfterUse {
+            self.transformer = nil
+            eval([MLXArray]())
+            Memory.clearCache()
+            if memoryOptimization.unloadSleepSeconds > 0 {
+                try await Task.sleep(for: .seconds(memoryOptimization.unloadSleepSeconds))
+                Memory.clearCache()
+            }
+            LTXDebug.log("Transformer unloaded for VAE decode phase")
+            LTXMemoryManager.logMemoryState("after transformer unload")
+        }
+
         // === VAE Decode ===
+        LTXMemoryManager.setPhase(.vaeDecode)
         // Use timestep_conditioning from VAE config.json
         let vaeTimestep2: Float? = vaeDecoder.timestepConditioning ? 0.05 : nil
         LTXDebug.log("Decoding latents to video... (timestep=\(vaeTimestep2.map { String($0) } ?? "nil"))")
         let vaeStart = Date()
-        let videoTensor = decodeVideo(latent: latent, decoder: vaeDecoder, timestep: vaeTimestep2)
+        let videoTensor = decodeVideo(
+            latent: latent, decoder: vaeDecoder, timestep: vaeTimestep2,
+            temporalTileSize: memoryOptimization.vaeTemporalTileSize,
+            temporalTileOverlap: memoryOptimization.vaeTemporalTileOverlap
+        )
         MLX.eval(videoTensor)
-        LTXDebug.log("VAE decode: \(String(format: "%.1f", Date().timeIntervalSince(vaeStart)))s")
+        timings.vaeDecode = Date().timeIntervalSince(vaeStart)
+        LTXDebug.log("VAE decode: \(String(format: "%.1f", timings.vaeDecode))s")
 
         // Trim to requested frame count
         let trimmedVideo: MLXArray
@@ -1171,6 +1324,12 @@ public actor LTXPipeline {
             trimmedVideo = videoTensor
         }
 
+        LTXMemoryManager.logMemoryState("after two-stage VAE decode")
+        LTXMemoryManager.resetCacheLimit()
+
+        // Capture final peak memory
+        timings.capturePeakMemory()
+
         let generationTime = Date().timeIntervalSince(generationStart)
         LTXDebug.log("Total two-stage time: \(String(format: "%.1f", generationTime))s")
 
@@ -1178,7 +1337,7 @@ public actor LTXPipeline {
             frames: trimmedVideo,
             seed: config.seed ?? 0,
             generationTime: generationTime,
-            timings: nil
+            timings: profile ? timings : nil
         )
     }
 

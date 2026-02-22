@@ -12,14 +12,14 @@ import MLXNN
 /// Group normalization for 5D tensors in channels-last (N, D, H, W, C) format.
 /// Computes statistics over all spatial+temporal positions within each group.
 /// Matches Blaizzy/mlx-video GroupNorm3d exactly.
-public class UpscalerGroupNorm3D: Module {
+class UpscalerGroupNorm3D: Module {
     let numGroups: Int
     let numChannels: Int
     let eps: Float
     @ParameterInfo(key: "weight") var weight: MLXArray
     @ParameterInfo(key: "bias") var bias: MLXArray
 
-    public init(numGroups: Int = 32, numChannels: Int, eps: Float = 1e-5) {
+    init(numGroups: Int = 32, numChannels: Int, eps: Float = 1e-5) {
         self.numGroups = numGroups
         self.numChannels = numChannels
         self.eps = eps
@@ -27,7 +27,7 @@ public class UpscalerGroupNorm3D: Module {
         self._bias.wrappedValue = MLXArray.zeros([numChannels])
     }
 
-    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
         // x: (N, D, H, W, C) — channels last
         let n = x.dim(0), d = x.dim(1), h = x.dim(2), w = x.dim(3), c = x.dim(4)
         let inputDtype = x.dtype
@@ -63,7 +63,7 @@ public class UpscalerGroupNorm3D: Module {
 
 /// Residual block with two Conv3d and GroupNorm3D (channels-last)
 /// Architecture: conv1 → norm1 → SiLU → conv2 → norm2 → SiLU(x + residual)
-public class UpscalerResBlock3D: Module {
+class UpscalerResBlock3D: Module {
     let channels: Int
 
     @ModuleInfo(key: "conv1") var conv1: Conv3d
@@ -71,7 +71,7 @@ public class UpscalerResBlock3D: Module {
     @ModuleInfo(key: "conv2") var conv2: Conv3d
     @ModuleInfo(key: "norm2") var norm2: UpscalerGroupNorm3D
 
-    public init(channels: Int) {
+    init(channels: Int) {
         self.channels = channels
 
         // Conv3d: kernel_size=3, padding=1 — native MLX Conv3d (NDHWC format)
@@ -91,7 +91,7 @@ public class UpscalerResBlock3D: Module {
         self._norm2.wrappedValue = UpscalerGroupNorm3D(numGroups: 32, numChannels: channels)
     }
 
-    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
         // x: (N, D, H, W, C) — channels last
         let residual = x
         var h = conv1(x)
@@ -109,7 +109,7 @@ public class UpscalerResBlock3D: Module {
 
 /// 2D Pixel Shuffle in channels-last format:
 /// (N, H, W, C*r*r) → (N, H*r, W*r, C)
-public func pixelShuffle2DNHWC(_ x: MLXArray, upscaleFactor: Int = 2) -> MLXArray {
+func pixelShuffle2DNHWC(_ x: MLXArray, upscaleFactor: Int = 2) -> MLXArray {
     let n = x.dim(0)
     let h = x.dim(1)
     let w = x.dim(2)
@@ -128,11 +128,11 @@ public func pixelShuffle2DNHWC(_ x: MLXArray, upscaleFactor: Int = 2) -> MLXArra
 
 /// Per-frame 2D convolution + PixelShuffle for 2x spatial upsampling
 /// Weight key: upsampler.conv.weight / upsampler.conv.bias
-public class SpatialRationalResampler: Module {
+class SpatialRationalResampler: Module {
     @ModuleInfo(key: "conv") var conv: Conv2d
     let midChannels: Int
 
-    public init(midChannels: Int = 1024) {
+    init(midChannels: Int = 1024) {
         self.midChannels = midChannels
 
         // Conv2d: mid → 4*mid for PixelShuffle(2)
@@ -144,7 +144,7 @@ public class SpatialRationalResampler: Module {
         )
     }
 
-    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
         // x: (N, D, H, W, C) — channels last 3D
         let n = x.dim(0), d = x.dim(1), h = x.dim(2), w = x.dim(3), c = x.dim(4)
 
@@ -178,7 +178,7 @@ public class SpatialRationalResampler: Module {
 ///
 /// Input:  (B, C, F, H, W)  — channels first (standard latent format)
 /// Output: (B, C, F, H*2, W*2)  — channels first
-public class SpatialUpscaler: Module {
+class SpatialUpscaler: Module {
     @ModuleInfo(key: "initial_conv") var initialConv: Conv3d
     @ModuleInfo(key: "initial_norm") var initialNorm: UpscalerGroupNorm3D
     @ModuleInfo(key: "res_blocks") var resBlocks: [UpscalerResBlock3D]
@@ -190,7 +190,7 @@ public class SpatialUpscaler: Module {
     let midChannels: Int
     let numBlocksPerStage: Int
 
-    public init(
+    init(
         inChannels: Int = 128,
         midChannels: Int = 1024,
         numBlocksPerStage: Int = 4
@@ -226,7 +226,7 @@ public class SpatialUpscaler: Module {
         )
     }
 
-    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
         // Input: (B, C, F, H, W) — channels first
         // Convert to channels last (B, F, H, W, C) for all internal processing
         var h = x.transposed(0, 2, 3, 4, 1)
@@ -268,7 +268,7 @@ public class SpatialUpscaler: Module {
 ///
 /// - Parameter weightsPath: Path to the upscaler safetensors file
 /// - Returns: Loaded and configured SpatialUpscaler
-public func loadSpatialUpscaler(from weightsPath: String) throws -> SpatialUpscaler {
+func loadSpatialUpscaler(from weightsPath: String) throws -> SpatialUpscaler {
     LTXDebug.log("Loading spatial upscaler from \(weightsPath)...")
 
     let rawWeights = try MLX.loadArrays(url: URL(fileURLWithPath: weightsPath))
@@ -360,7 +360,7 @@ public func loadSpatialUpscaler(from weightsPath: String) throws -> SpatialUpsca
 ///   - latentMean: Per-channel mean from VAE (mean-of-means)
 ///   - latentStd: Per-channel std from VAE (std-of-means)
 /// - Returns: Upsampled latent (B, C, F, H*2, W*2)
-public func upsampleLatents(
+func upsampleLatents(
     _ latent: MLXArray,
     upscaler: SpatialUpscaler,
     latentMean: MLXArray,

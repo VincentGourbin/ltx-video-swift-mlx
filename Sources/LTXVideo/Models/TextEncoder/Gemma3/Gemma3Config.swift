@@ -7,31 +7,31 @@ import MLXLMCommon
 /// Configuration for the Gemma 3 text model.
 /// Codable to parse config.json from HuggingFace models (e.g. mlx-community/gemma-3-12b-it-4bit).
 /// Architecture matches MLXLLM's Gemma3TextConfiguration.
-public struct Gemma3Config: Codable, Sendable {
-    public let modelType: String
-    public let hiddenSize: Int
-    public let hiddenLayers: Int
-    public let intermediateSize: Int
-    public let attentionHeads: Int
-    public let headDim: Int
-    public let rmsNormEps: Float
-    public let vocabularySize: Int
-    public let kvHeads: Int
-    public let ropeTheta: Float
-    public let ropeLocalBaseFreq: Float
-    public let ropeTraditional: Bool
-    public let queryPreAttnScalar: Float
-    public let slidingWindow: Int
-    public let slidingWindowPattern: Int
-    public let maxPositionEmbeddings: Int
-    public let ropeScaling: [String: StringOrNumber]?
+struct Gemma3Config: Codable, Sendable {
+    let modelType: String
+    let hiddenSize: Int
+    let hiddenLayers: Int
+    let intermediateSize: Int
+    let attentionHeads: Int
+    let headDim: Int
+    let rmsNormEps: Float
+    let vocabularySize: Int
+    let kvHeads: Int
+    let ropeTheta: Float
+    let ropeLocalBaseFreq: Float
+    let ropeTraditional: Bool
+    let queryPreAttnScalar: Float
+    let slidingWindow: Int
+    let slidingWindowPattern: Int
+    let maxPositionEmbeddings: Int
+    let ropeScaling: [String: StringOrNumber]?
 
     /// Quantization config (present in quantized models)
-    public let quantization: QuantizationConfig?
+    let quantization: QuantizationConfig?
 
-    public struct QuantizationConfig: Codable, Sendable {
-        public let groupSize: Int
-        public let bits: Int
+    struct QuantizationConfig: Codable, Sendable {
+        let groupSize: Int
+        let bits: Int
 
         enum CodingKeys: String, CodingKey {
             case groupSize = "group_size"
@@ -39,7 +39,7 @@ public struct Gemma3Config: Codable, Sendable {
         }
     }
 
-    public init(
+    init(
         modelType: String = "gemma3_text",
         hiddenSize: Int = 3840,
         hiddenLayers: Int = 48,
@@ -105,7 +105,7 @@ public struct Gemma3Config: Codable, Sendable {
         case textConfig = "text_config"
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let nestedContainer = try decoder.container(keyedBy: VLMCodingKeys.self)
 
         let container =
@@ -139,7 +139,7 @@ public struct Gemma3Config: Codable, Sendable {
     }
 
     /// Load config from a directory containing config.json
-    public static func load(from directory: URL) throws -> Self {
+    static func load(from directory: URL) throws -> Self {
         let configURL = directory.appendingPathComponent("config.json")
         let data = try Data(contentsOf: configURL)
         return try JSONDecoder().decode(Self.self, from: data)

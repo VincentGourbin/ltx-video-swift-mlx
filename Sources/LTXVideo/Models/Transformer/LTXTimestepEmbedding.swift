@@ -14,7 +14,7 @@ import MLXNN
 ///   - embeddingDim: Dimension of the embedding
 ///   - maxPeriod: Maximum period for sinusoidal encoding
 /// - Returns: Timestep embeddings of shape (B, embeddingDim) or (B, T, embeddingDim)
-public func getTimestepEmbedding(
+func getTimestepEmbedding(
     timesteps: MLXArray,
     embeddingDim: Int,
     maxPeriod: Float = 10000.0
@@ -59,14 +59,14 @@ public func getTimestepEmbedding(
 ///
 /// Produces scale, shift, and gate parameters from timestep embeddings.
 /// Used for conditioning transformer blocks on timestep.
-public class AdaLayerNormSingle: Module {
+class AdaLayerNormSingle: Module {
     @ModuleInfo var emb: TimestepMLP
     @ModuleInfo var linear: Linear
 
     let numEmbeddings: Int
     let innerDim: Int
 
-    public init(
+    init(
         innerDim: Int,
         numEmbeddings: Int = 6
     ) {
@@ -77,7 +77,7 @@ public class AdaLayerNormSingle: Module {
         self._linear.wrappedValue = Linear(innerDim, numEmbeddings * innerDim, bias: true)
     }
 
-    public func callAsFunction(_ timesteps: MLXArray) -> (emb: MLXArray, embeddedTimestep: MLXArray) {
+    func callAsFunction(_ timesteps: MLXArray) -> (emb: MLXArray, embeddedTimestep: MLXArray) {
         // Get timestep embeddings: (B,) -> (B, D)
         let embeddedTimestep = emb(timesteps)
 
@@ -93,14 +93,14 @@ public class AdaLayerNormSingle: Module {
 /// MLP for processing timestep embeddings
 ///
 /// Python reference: Timesteps(num_channels=256) → TimestepEmbedding(in_channels=256, time_embed_dim=inner_dim)
-public class TimestepMLP: Module {
+class TimestepMLP: Module {
     @ModuleInfo(key: "linear_1") var linear1: Linear
     @ModuleInfo(key: "linear_2") var linear2: Linear
 
     let innerDim: Int
     let frequencyEmbeddingSize: Int
 
-    public init(innerDim: Int, frequencyEmbeddingSize: Int = 256) {
+    init(innerDim: Int, frequencyEmbeddingSize: Int = 256) {
         self.innerDim = innerDim
         self.frequencyEmbeddingSize = frequencyEmbeddingSize
 
@@ -110,7 +110,7 @@ public class TimestepMLP: Module {
         self._linear2.wrappedValue = Linear(innerDim, innerDim, bias: true)
     }
 
-    public func callAsFunction(_ timesteps: MLXArray) -> MLXArray {
+    func callAsFunction(_ timesteps: MLXArray) -> MLXArray {
         // Get sinusoidal embeddings (fixed 256-dim, matching Python num_channels=256)
         var emb = getTimestepEmbedding(timesteps: timesteps, embeddingDim: frequencyEmbeddingSize)
 
@@ -128,11 +128,11 @@ public class TimestepMLP: Module {
 /// Projects caption embeddings with GELU activation
 ///
 /// Adapted from PixArt-alpha implementation.
-public class PixArtAlphaTextProjection: Module {
+class PixArtAlphaTextProjection: Module {
     @ModuleInfo(key: "linear_1") var linear1: Linear
     @ModuleInfo(key: "linear_2") var linear2: Linear
 
-    public init(
+    init(
         inFeatures: Int,
         hiddenSize: Int,
         outFeatures: Int? = nil
@@ -143,7 +143,7 @@ public class PixArtAlphaTextProjection: Module {
         self._linear2.wrappedValue = Linear(hiddenSize, outputSize, bias: true)
     }
 
-    public func callAsFunction(_ caption: MLXArray) -> MLXArray {
+    func callAsFunction(_ caption: MLXArray) -> MLXArray {
         var hiddenStates = linear1(caption)
         hiddenStates = MLXNN.geluApproximate(hiddenStates)
         hiddenStates = linear2(hiddenStates)

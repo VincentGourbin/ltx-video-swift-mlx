@@ -8,14 +8,14 @@ import MLXNN
 // MARK: - LoRA Adapter
 
 /// Applies LoRA adaptations to the LTX transformer model
-public class LoRAAdapter {
+class LoRAAdapter {
     /// The loaded LoRA weights
-    public let loraWeights: LoRAWeights
+    let loraWeights: LoRAWeights
 
     /// Whether to fuse weights (permanent merge) vs runtime application
-    public let fused: Bool
+    let fused: Bool
 
-    public init(loraWeights: LoRAWeights, fused: Bool = true) {
+    init(loraWeights: LoRAWeights, fused: Bool = true) {
         self.loraWeights = loraWeights
         self.fused = fused
     }
@@ -26,7 +26,7 @@ public class LoRAAdapter {
     ///   - model: The transformer model to check
     /// - Returns: Number of layers that would be modified
     @discardableResult
-    public func applyFused(to model: LTXTransformer) -> Int {
+    func applyFused(to model: LTXTransformer) -> Int {
         var modifiedCount = 0
 
         // Count matching layers for each transformer block.
@@ -58,7 +58,7 @@ public class LoRAAdapter {
     ///   - model: The transformer to fuse into
     /// - Returns: Dictionary of original weights (for unfusing later)
     @discardableResult
-    public func fuseWeights(into model: LTXTransformer) -> [String: MLXArray] {
+    func fuseWeights(into model: LTXTransformer) -> [String: MLXArray] {
         var originalWeights: [String: MLXArray] = [:]
         var fusedCount = 0
 
@@ -162,7 +162,7 @@ public class LoRAAdapter {
     /// - Parameters:
     ///   - originalWeights: Dictionary returned by `fuseWeights(into:)`
     ///   - model: The transformer to restore
-    public static func unfuseWeights(from originalWeights: [String: MLXArray], into model: LTXTransformer) {
+    static func unfuseWeights(from originalWeights: [String: MLXArray], into model: LTXTransformer) {
         var restoredCount = 0
         for (keyPath, originalWeight) in originalWeights {
             setParameterByPath(model: model, keyPath: keyPath, value: originalWeight)
@@ -203,7 +203,7 @@ public class LoRAAdapter {
 
     /// Compute LoRA deltas for all layers
     /// Returns dictionary of layer key -> delta tensor
-    public func computeDeltas() -> [String: MLXArray] {
+    func computeDeltas() -> [String: MLXArray] {
         var deltas: [String: MLXArray] = [:]
 
         for layer in loraWeights.layers {
@@ -216,7 +216,7 @@ public class LoRAAdapter {
     }
 
     /// Get scheduler overrides if this LoRA specifies them
-    public var schedulerOverrides: LoRASchedulerOverrides? {
+    var schedulerOverrides: LoRASchedulerOverrides? {
         // This would need to be extracted from LoRA metadata
         // For now, return nil - can be enhanced based on LoRA format
         return nil
@@ -246,14 +246,14 @@ public struct LoRAApplicationResult: Sendable {
 // MARK: - Multi-LoRA Support
 
 /// Applies multiple LoRAs to a model
-public class MultiLoRAAdapter {
+class MultiLoRAAdapter {
     /// Individual adapters
-    public let adapters: [LoRAAdapter]
+    let adapters: [LoRAAdapter]
 
     /// Composition mode
-    public let compositionMode: LoRACompositionMode
+    let compositionMode: LoRACompositionMode
 
-    public init(
+    init(
         loraConfigs: [LoRAConfig],
         compositionMode: LoRACompositionMode = .add
     ) throws {
@@ -270,7 +270,7 @@ public class MultiLoRAAdapter {
     /// For `.add` mode: W' = W + sum(scale_i * delta_i)
     /// For `.multiply` mode: Applies sequentially
     @discardableResult
-    public func apply(to model: LTXTransformer) -> [LoRAApplicationResult] {
+    func apply(to model: LTXTransformer) -> [LoRAApplicationResult] {
         var results: [LoRAApplicationResult] = []
 
         for adapter in adapters {
@@ -288,7 +288,7 @@ public class MultiLoRAAdapter {
     }
 
     /// Get combined scheduler overrides (last non-nil wins)
-    public var schedulerOverrides: LoRASchedulerOverrides? {
+    var schedulerOverrides: LoRASchedulerOverrides? {
         for adapter in adapters.reversed() {
             if let overrides = adapter.schedulerOverrides {
                 return overrides
@@ -308,7 +308,7 @@ extension LTXTransformer {
     ///   - scale: Scale factor (default: 1.0)
     /// - Returns: Application result
     @discardableResult
-    public func applyLoRA(
+    func applyLoRA(
         from loraPath: String,
         scale: Float = 1.0
     ) throws -> LoRAApplicationResult {
@@ -334,7 +334,7 @@ extension LTXTransformer {
     ///   - scale: Scale factor (default: 1.0)
     /// - Returns: Dictionary of original weights (for unfusing), and application result
     @discardableResult
-    public func fuseLoRA(
+    func fuseLoRA(
         from loraPath: String,
         scale: Float = 1.0
     ) throws -> (originalWeights: [String: MLXArray], result: LoRAApplicationResult) {
@@ -356,7 +356,7 @@ extension LTXTransformer {
     }
 
     /// Unfuse previously fused LoRA weights
-    public func unfuseLoRA(originalWeights: [String: MLXArray]) {
+    func unfuseLoRA(originalWeights: [String: MLXArray]) {
         LoRAAdapter.unfuseWeights(from: originalWeights, into: self)
     }
 }

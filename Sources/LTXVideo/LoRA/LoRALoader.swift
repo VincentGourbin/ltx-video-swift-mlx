@@ -8,14 +8,14 @@ import MLXNN
 // MARK: - LoRA Loader
 
 /// Loads LoRA weights from SafeTensors files
-public class LoRALoader {
+class LoRALoader {
     /// Load LoRA weights from a file
     ///
     /// - Parameters:
     ///   - path: Path to the .safetensors file
     ///   - config: Optional LoRA configuration
     /// - Returns: Dictionary of LoRA weight arrays and metadata
-    public static func load(
+    static func load(
         from path: String,
         config: LoRAConfig? = nil
     ) throws -> LoRAWeights {
@@ -139,18 +139,18 @@ public class LoRALoader {
 // MARK: - LoRA Weights Container
 
 /// Container for loaded LoRA weights
-public struct LoRAWeights: Sendable {
+struct LoRAWeights: Sendable {
     /// Raw weight arrays keyed by parameter name
-    public let weights: [String: MLXArray]
+    let weights: [String: MLXArray]
 
     /// Parsed layer information
-    public let layers: [LoRALayerInfo]
+    let layers: [LoRALayerInfo]
 
     /// Metadata about the LoRA
-    public let info: LoRAInfo
+    let info: LoRAInfo
 
     /// Scale factor to apply
-    public let scale: Float
+    let scale: Float
 
     /// Get LoRA delta for a specific layer
     ///
@@ -159,7 +159,7 @@ public struct LoRAWeights: Sendable {
     /// - Parameters:
     ///   - layerKey: The original layer key to get delta for
     /// - Returns: The LoRA delta matrix, or nil if not found
-    public func getDelta(for layerKey: String) -> MLXArray? {
+    func getDelta(for layerKey: String) -> MLXArray? {
         guard let layer = layers.first(where: { $0.originalKey == layerKey }) else {
             return nil
         }
@@ -178,7 +178,7 @@ public struct LoRAWeights: Sendable {
     }
 
     /// Check if this LoRA has weights for a given layer
-    public func hasLayer(_ layerKey: String) -> Bool {
+    func hasLayer(_ layerKey: String) -> Bool {
         return layers.contains { $0.originalKey == layerKey }
     }
 }
@@ -186,7 +186,7 @@ public struct LoRAWeights: Sendable {
 // MARK: - Weight Key Mapping
 
 /// Maps between LoRA file key format and Swift model parameter key format
-public struct LoRAKeyMapper {
+struct LoRAKeyMapper {
     /// Translate a LoRA originalKey to the flattened model parameter key used by
     /// MLX Module.parameters().flattened().
     ///
@@ -206,7 +206,7 @@ public struct LoRAKeyMapper {
     ///   3. Replace ".ff.net.0.proj" with ".ff.project_in.proj"  (LTXFeedForward key "project_in")
     ///   4. Replace ".ff.net.2" with ".ff.project_out"  (LTXFeedForward key "project_out")
     ///   5. Append ".weight" (Linear weight parameter)
-    public static func loraKeyToModelKey(_ loraOriginalKey: String) -> String {
+    static func loraKeyToModelKey(_ loraOriginalKey: String) -> String {
         var key = loraOriginalKey
 
         // 1. Strip the "diffusion_model." wrapper prefix used by ComfyUI/Diffusers LoRA files
@@ -238,7 +238,7 @@ public struct LoRAKeyMapper {
     }
 
     /// Legacy camelCase mapper (not used for LoRA fusion, kept for reference)
-    public static func mapKey(_ pythonKey: String) -> String {
+    static func mapKey(_ pythonKey: String) -> String {
         var key = pythonKey
 
         // Common transformations
@@ -254,7 +254,7 @@ public struct LoRAKeyMapper {
     }
 
     /// Get all possible Swift keys for a Python key
-    public static func possibleSwiftKeys(for pythonKey: String) -> [String] {
+    static func possibleSwiftKeys(for pythonKey: String) -> [String] {
         return [
             mapKey(pythonKey),
             pythonKey  // Also try unchanged

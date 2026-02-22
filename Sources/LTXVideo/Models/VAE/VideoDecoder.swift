@@ -10,7 +10,7 @@ import MLXRandom
 // MARK: - Sinusoidal Timestep Embedding
 
 /// Create sinusoidal timestep embeddings (matching Python get_timestep_embedding)
-public func getTimestepEmbedding(_ timesteps: MLXArray, embeddingDim: Int = 256) -> MLXArray {
+func getTimestepEmbedding(_ timesteps: MLXArray, embeddingDim: Int = 256) -> MLXArray {
     var t = timesteps
     if t.ndim == 0 {
         t = t.reshaped([1])
@@ -34,16 +34,16 @@ func vaePixelNorm(_ x: MLXArray, eps: Float = 1e-8) -> MLXArray {
 // MARK: - VAE Timestep Embedder
 
 /// MLP for processing timestep embeddings
-public class VAETimestepEmbedder: Module {
+class VAETimestepEmbedder: Module {
     @ModuleInfo(key: "linear_1") var linear1: Linear
     @ModuleInfo(key: "linear_2") var linear2: Linear
 
-    public init(hiddenDim: Int, outputDim: Int, inputDim: Int = 256) {
+    init(hiddenDim: Int, outputDim: Int, inputDim: Int = 256) {
         self._linear1.wrappedValue = Linear(inputDim, hiddenDim)
         self._linear2.wrappedValue = Linear(hiddenDim, outputDim)
     }
 
-    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
         var h = linear1(x)
         h = MLXNN.silu(h)
         h = linear2(h)
@@ -54,16 +54,16 @@ public class VAETimestepEmbedder: Module {
 // MARK: - VAE Timestep Embedder Wrapper
 
 /// Wrapper to match safetensors key nesting: time_embedder.timestep_embedder.linear_1.weight
-public class VAETimestepEmbedderWrapper: Module {
+class VAETimestepEmbedderWrapper: Module {
     @ModuleInfo(key: "timestep_embedder") var timestepEmbedder: VAETimestepEmbedder
 
-    public init(hiddenDim: Int, outputDim: Int, inputDim: Int = 256) {
+    init(hiddenDim: Int, outputDim: Int, inputDim: Int = 256) {
         self._timestepEmbedder.wrappedValue = VAETimestepEmbedder(
             hiddenDim: hiddenDim, outputDim: outputDim, inputDim: inputDim
         )
     }
 
-    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
         return timestepEmbedder(x)
     }
 }
@@ -72,13 +72,13 @@ public class VAETimestepEmbedderWrapper: Module {
 
 /// 3D residual block with pixel norm and scale/shift conditioning
 /// Matches Python ResBlock3d: PixelNorm -> AdaLN(scale/shift) -> SiLU -> Conv
-public class VAEResBlock3d: Module {
+class VAEResBlock3d: Module {
     let channels: Int
     @ModuleInfo(key: "conv1") var conv1: CausalConv3dFull
     @ModuleInfo(key: "conv2") var conv2: CausalConv3dFull
     @ParameterInfo(key: "scale_shift_table") var scaleShiftTable: MLXArray
 
-    public init(channels: Int) {
+    init(channels: Int) {
         self.channels = channels
         self._conv1.wrappedValue = CausalConv3dFull(
             inChannels: channels, outChannels: channels, kernelSize: 3
@@ -90,7 +90,7 @@ public class VAEResBlock3d: Module {
         self._scaleShiftTable.wrappedValue = MLXArray.zeros([4, channels])
     }
 
-    public func callAsFunction(
+    func callAsFunction(
         _ x: MLXArray, causal: Bool = false, timeEmb: MLXArray? = nil
     ) -> MLXArray {
         let residual = x
@@ -133,12 +133,12 @@ public class VAEResBlock3d: Module {
 // MARK: - VAE ResBlock Group
 
 /// Group of 5 residual blocks with shared timestep embedding
-public class VAEResBlockGroup: Module {
+class VAEResBlockGroup: Module {
     let channels: Int
     @ModuleInfo(key: "res_blocks") var resBlocks: [VAEResBlock3d]
     @ModuleInfo(key: "time_embedder") var timeEmbedder: VAETimestepEmbedderWrapper
 
-    public init(channels: Int, numBlocks: Int = 5) {
+    init(channels: Int, numBlocks: Int = 5) {
         self.channels = channels
         self._resBlocks.wrappedValue = (0..<numBlocks).map { _ in
             VAEResBlock3d(channels: channels)
@@ -149,7 +149,7 @@ public class VAEResBlockGroup: Module {
         )
     }
 
-    public func callAsFunction(
+    func callAsFunction(
         _ x: MLXArray, causal: Bool = false, timestep: MLXArray? = nil
     ) -> MLXArray {
         // Compute time embedding once for all blocks
@@ -174,7 +174,7 @@ public class VAEResBlockGroup: Module {
 /// Factor (2,2,2) = 8x channel reduction (halved) + 2x upsample in T,H,W
 /// Frame trimming: removes first frame after D2S when temporal factor > 1
 /// This produces the correct 8*(T-1)+1 frame count formula
-public class VAEDepthToSpaceUpsample3d: Module {
+class VAEDepthToSpaceUpsample3d: Module {
     let factor: (Int, Int, Int)
     let upscaleFactor: Int
     let outChannels: Int
@@ -183,7 +183,7 @@ public class VAEDepthToSpaceUpsample3d: Module {
 
     @ModuleInfo(key: "conv") var conv: CausalConv3dFull
 
-    public init(inChannels: Int, factor: (Int, Int, Int) = (2, 2, 2), residual: Bool = true) {
+    init(inChannels: Int, factor: (Int, Int, Int) = (2, 2, 2), residual: Bool = true) {
         self.factor = factor
         self.useResidual = residual
         let (ft, fh, fw) = factor
@@ -211,7 +211,7 @@ public class VAEDepthToSpaceUpsample3d: Module {
         return out
     }
 
-    public func callAsFunction(_ x: MLXArray, causal: Bool = false) -> MLXArray {
+    func callAsFunction(_ x: MLXArray, causal: Bool = false) -> MLXArray {
         let (ft, fh, fw) = factor
         let factorProduct = ft * fh * fw
 
@@ -254,7 +254,7 @@ public class VAEDepthToSpaceUpsample3d: Module {
 // MARK: - Unpatchify
 
 /// Unpatchify operation: expand spatial patches
-public func unpatchify(
+func unpatchify(
     _ x: MLXArray,
     patchSizeHW: Int = 4,
     patchSizeT: Int = 1
@@ -292,12 +292,12 @@ public func unpatchify(
 /// - unpatchify: 48 -> 3 channels, 4x4 spatial
 ///
 /// Frame formula: output_frames = 8 * (latent_frames - 1) + 1
-public class VideoDecoder: Module {
+class VideoDecoder: Module {
     let patchSize: Int
     let causal: Bool
     let decodeNoiseScale: Float = 0.025
     /// Whether the VAE uses timestep conditioning (from config.json)
-    public var timestepConditioning: Bool = false
+    var timestepConditioning: Bool = false
 
     @ParameterInfo(key: "mean_of_means") var meanOfMeans: MLXArray
     @ParameterInfo(key: "std_of_means") var stdOfMeans: MLXArray
@@ -317,7 +317,7 @@ public class VideoDecoder: Module {
 
     @ModuleInfo(key: "last_time_embedder") var lastTimeEmbedder: VAETimestepEmbedderWrapper
 
-    public init(patchSize: Int = 4, causal: Bool = false) {
+    init(patchSize: Int = 4, causal: Bool = false) {
         self.patchSize = patchSize
         self.causal = causal
 
@@ -355,7 +355,7 @@ public class VideoDecoder: Module {
         )
     }
 
-    public func callAsFunction(_ sample: MLXArray, timestep: Float? = 0.05) -> MLXArray {
+    func callAsFunction(_ sample: MLXArray, timestep: Float? = 0.05) -> MLXArray {
         let batchSize = sample.dim(0)
 
         LTXDebug.log("VAE Decoder input: \(sample.shape)")
@@ -452,10 +452,23 @@ public class VideoDecoder: Module {
 // MARK: - Decode Video
 
 /// Decode a video latent tensor with the given decoder
-public func decodeVideo(
+///
+/// For short videos (latent frames <= `temporalTileSize`), decodes in a single pass.
+/// For longer videos, uses temporal tiling with overlap blending to reduce peak memory.
+///
+/// - Parameters:
+///   - latent: Latent tensor (B, C, F, H, W) or (C, F, H, W)
+///   - decoder: The VAE decoder
+///   - timestep: Optional timestep for conditioning
+///   - temporalTileSize: Max latent frames per chunk (0 = disabled). Default 8.
+///   - temporalTileOverlap: Latent frames of overlap between chunks. Default 1.
+/// - Returns: Decoded frames (F, H, W, C) in [0, 1]
+func decodeVideo(
     latent: MLXArray,
     decoder: VideoDecoder,
-    timestep: Float? = 0.05
+    timestep: Float? = 0.05,
+    temporalTileSize: Int = 0,
+    temporalTileOverlap: Int = 1
 ) -> MLXArray {
     var input = latent
 
@@ -464,7 +477,22 @@ public func decodeVideo(
         input = MLX.expandedDimensions(input, axis: 0)
     }
 
-    // Decode: output is (B, C, F, H, W) with values roughly in [-1, 1]
+    let latentFrames = input.dim(2)
+
+    // Use temporal tiling for long videos
+    if temporalTileSize > 0 && latentFrames > temporalTileSize {
+        LTXDebug.log("VAE temporal tiling: \(latentFrames) latent frames, tile=\(temporalTileSize), overlap=\(temporalTileOverlap)")
+        let decoded = decodeWithTemporalTiling(
+            input,
+            decoder: decoder,
+            timestep: timestep,
+            tileSize: temporalTileSize,
+            overlap: temporalTileOverlap
+        )
+        return decoded
+    }
+
+    // Single-pass decode for short videos
     let decoded = decoder(input, timestep: timestep)
 
     LTXDebug.log("VAE raw output: mean=\(decoded.mean().item(Float.self)), min=\(decoded.min().item(Float.self)), max=\(decoded.max().item(Float.self))")
@@ -473,6 +501,100 @@ public func decodeVideo(
     var frames = MLX.clip((decoded + 1.0) / 2.0, min: 0.0, max: 1.0)
 
     // Rearrange from (B, C, F, H, W) to (F, H, W, C)
+    frames = frames[0]  // Remove batch dim
+    frames = frames.transposed(1, 2, 3, 0)  // (C, F, H, W) -> (F, H, W, C)
+
+    return frames
+}
+
+/// Decode latent with temporal tiling for long videos
+///
+/// Splits the latent along the temporal axis into overlapping chunks,
+/// decodes each independently, and blends the overlap regions with
+/// linear interpolation for smooth transitions.
+///
+/// Frame formula per chunk: output_frames = 8 * (latent_frames - 1) + 1
+private func decodeWithTemporalTiling(
+    _ input: MLXArray,
+    decoder: VideoDecoder,
+    timestep: Float?,
+    tileSize: Int,
+    overlap: Int
+) -> MLXArray {
+    let totalLatentFrames = input.dim(2)
+    let stride = tileSize - overlap
+
+    // Pixel overlap = 8 * overlap (each latent frame expands to ~8 pixels)
+    let pixelOverlap = 8 * overlap
+
+    var decodedChunks: [MLXArray] = []  // Each is (B, C, F_chunk, H, W)
+    var chunkIdx = 0
+
+    var start = 0
+    while start < totalLatentFrames {
+        let end = min(start + tileSize, totalLatentFrames)
+        let chunk = input[0..., 0..., start..<end, 0..., 0...]
+        LTXDebug.log("  VAE tile \(chunkIdx): latent frames \(start)..<\(end) (\(end - start) frames)")
+
+        let decoded = decoder(chunk, timestep: timestep)
+        eval(decoded)
+        Memory.clearCache()
+
+        decodedChunks.append(decoded)
+        chunkIdx += 1
+
+        if end >= totalLatentFrames { break }
+        start += stride
+    }
+
+    if decodedChunks.count == 1 {
+        // Single chunk — no blending needed
+        let decoded = decodedChunks[0]
+        var frames = MLX.clip((decoded + 1.0) / 2.0, min: 0.0, max: 1.0)
+        frames = frames[0]
+        frames = frames.transposed(1, 2, 3, 0)
+        return frames
+    }
+
+    // Blend overlapping regions with linear interpolation
+    LTXDebug.log("Blending \(decodedChunks.count) temporal tiles (pixel overlap=\(pixelOverlap))")
+    var result = decodedChunks[0]
+
+    for i in 1..<decodedChunks.count {
+        let next = decodedChunks[i]
+        let resultFrames = result.dim(2)
+        let nextFrames = next.dim(2)
+
+        if pixelOverlap > 0 && pixelOverlap < resultFrames && pixelOverlap < nextFrames {
+            // Create linear blend weights for the overlap region
+            // Shape: (1, 1, pixelOverlap, 1, 1) for broadcasting over (B, C, F, H, W)
+            let weights = MLXArray(
+                (0..<pixelOverlap).map { Float($0) / Float(pixelOverlap) }
+            ).reshaped([1, 1, pixelOverlap, 1, 1])
+
+            // Extract overlap regions
+            let resultOverlap = result[0..., 0..., (resultFrames - pixelOverlap)..., 0..., 0...]
+            let nextOverlap = next[0..., 0..., 0..<pixelOverlap, 0..., 0...]
+
+            // Blend: linear interpolation
+            let blended = resultOverlap * (1 - weights) + nextOverlap * weights
+
+            // Concatenate: result[:-overlap] + blended + next[overlap:]
+            let resultPart = result[0..., 0..., 0..<(resultFrames - pixelOverlap), 0..., 0...]
+            let nextPart = next[0..., 0..., pixelOverlap..., 0..., 0...]
+            result = MLX.concatenated([resultPart, blended, nextPart], axis: 2)
+        } else {
+            // No overlap — just concatenate
+            result = MLX.concatenated([result, next], axis: 2)
+        }
+        eval(result)
+        Memory.clearCache()
+    }
+
+    LTXDebug.log("VAE tiled output: \(result.shape)")
+
+    // Normalize to [0, 1] and rearrange
+    var frames = MLX.clip((result + 1.0) / 2.0, min: 0.0, max: 1.0)
     frames = frames[0]  // Remove batch dim
     frames = frames.transposed(1, 2, 3, 0)  // (C, F, H, W) -> (F, H, W, C)
 

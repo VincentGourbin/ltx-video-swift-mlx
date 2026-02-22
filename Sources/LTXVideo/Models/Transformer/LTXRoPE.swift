@@ -8,7 +8,7 @@ import MLXNN
 // MARK: - RoPE Type
 
 /// RoPE implementation variants
-public enum LTXRopeType: String, Sendable {
+enum LTXRopeType: String, Sendable {
     /// Interleaved format: pairs adjacent dimensions (d0, d1), (d2, d3), ...
     case interleaved = "interleaved"
 
@@ -25,7 +25,7 @@ public enum LTXRopeType: String, Sendable {
 ///   - freqsCis: Tuple of (cos_freqs, sin_freqs)
 ///   - ropeType: Type of RoPE implementation
 /// - Returns: Tensor with rotary embeddings applied
-public func applyRotaryEmb(
+func applyRotaryEmb(
     _ input: MLXArray,
     freqsCis: (cos: MLXArray, sin: MLXArray),
     ropeType: LTXRopeType = .split
@@ -157,7 +157,7 @@ private func applySplitRotaryEmb(
 ///   - maxPosCount: Number of position dimensions
 ///   - innerDim: Inner dimension size
 /// - Returns: Frequency indices array
-public func generateFreqGrid(
+func generateFreqGrid(
     theta: Float,
     maxPosCount: Int,
     innerDim: Int
@@ -188,7 +188,7 @@ public func generateFreqGrid(
 ///   - indicesGrid: Grid of position indices, shape (B, n_pos_dims, T)
 ///   - maxPos: Maximum position for each dimension
 /// - Returns: Fractional positions, shape (B, T, n_pos_dims)
-public func getFractionalPositions(
+func getFractionalPositions(
     indicesGrid: MLXArray,
     maxPos: [Int]
 ) -> MLXArray {
@@ -212,7 +212,7 @@ public func getFractionalPositions(
 ///   - indicesGrid: Position grid, shape (B, n_dims, T)
 ///   - maxPos: Maximum positions per dimension
 /// - Returns: Frequencies array
-public func generateFreqs(
+func generateFreqs(
     indices: MLXArray,
     indicesGrid: MLXArray,
     maxPos: [Int]
@@ -246,7 +246,7 @@ public func generateFreqs(
 ///   - padSize: Padding size for dimensions that don't get RoPE
 ///   - numAttentionHeads: Number of attention heads
 /// - Returns: Tuple of (cos_freq, sin_freq), each shape (B, H, T, D//2)
-public func splitFreqsCis(
+func splitFreqsCis(
     freqs: MLXArray,
     padSize: Int,
     numAttentionHeads: Int
@@ -283,7 +283,7 @@ public func splitFreqsCis(
 ///   - freqs: Frequency array, shape (B, T, freq_dim)
 ///   - padSize: Padding size
 /// - Returns: Tuple of (cos_freq, sin_freq), each shape (B, T, dim)
-public func interleavedFreqsCis(
+func interleavedFreqsCis(
     freqs: MLXArray,
     padSize: Int
 ) -> (cos: MLXArray, sin: MLXArray) {
@@ -322,7 +322,7 @@ public func interleavedFreqsCis(
 ///   - numAttentionHeads: Number of attention heads
 ///   - ropeType: Type of RoPE (INTERLEAVED or SPLIT)
 /// - Returns: Tuple of (cos_freqs, sin_freqs) in float32
-public func precomputeFreqsCis(
+func precomputeFreqsCis(
     indicesGrid: MLXArray,
     dim: Int,
     theta: Float = 10000.0,
@@ -549,7 +549,7 @@ private func precomputeFreqsCisDoublePrecision(
 ///   - causalFix: Whether to apply causal temporal fix (default: true)
 /// - Returns: Position grid of shape (B, 3, T) where T = frames * height * width,
 ///            with pixel-space middle coordinates (temporal divided by fps)
-public func createPositionGrid(
+func createPositionGrid(
     batchSize: Int,
     frames: Int,
     height: Int,

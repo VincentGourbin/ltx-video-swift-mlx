@@ -9,29 +9,29 @@ import MLXNN
 // MARK: - Transformer Arguments
 
 /// Arguments passed to transformer blocks during forward pass
-public struct TransformerArgs {
+struct TransformerArgs {
     /// Hidden states (B, T, D)
-    public var x: MLXArray
+    var x: MLXArray
 
     /// Text context for cross-attention (B, S, D_ctx)
-    public var context: MLXArray
+    var context: MLXArray
 
     /// Timestep embeddings for AdaLN (B, T, 6, D)
-    public var timesteps: MLXArray
+    var timesteps: MLXArray
 
     /// RoPE position embeddings (cos, sin)
-    public var positionalEmbeddings: (cos: MLXArray, sin: MLXArray)
+    var positionalEmbeddings: (cos: MLXArray, sin: MLXArray)
 
     /// Optional attention mask for cross-attention
-    public var contextMask: MLXArray?
+    var contextMask: MLXArray?
 
     /// Raw embedded timestep for output projection
-    public var embeddedTimestep: MLXArray?
+    var embeddedTimestep: MLXArray?
 
     /// Whether this modality is enabled
-    public var enabled: Bool
+    var enabled: Bool
 
-    public init(
+    init(
         x: MLXArray,
         context: MLXArray,
         timesteps: MLXArray,
@@ -50,7 +50,7 @@ public struct TransformerArgs {
     }
 
     /// Return a new TransformerArgs with specified fields replaced
-    public func replacing(x: MLXArray) -> TransformerArgs {
+    func replacing(x: MLXArray) -> TransformerArgs {
         return TransformerArgs(
             x: x,
             context: context,
@@ -103,7 +103,7 @@ private func residualGate(
 ///     1. Self-attention with RoPE and AdaLN
 ///     2. Cross-attention to text context
 ///     3. Feed-forward network with AdaLN
-public class BasicTransformerBlock: Module {
+class BasicTransformerBlock: Module {
     let normEps: Float
 
     @ModuleInfo(key: "attn1") var attn1: LTXAttention
@@ -114,15 +114,15 @@ public class BasicTransformerBlock: Module {
     @ParameterInfo(key: "scale_shift_table") var scaleShiftTable: MLXArray
 
     /// Cross-attention output scaling factor (1.0 = no change, >1.0 = stronger prompt adherence)
-    public var crossAttentionScale: Float = 1.0
+    var crossAttentionScale: Float = 1.0
 
     /// STG: skip self-attention when true (for perturbed forward pass)
-    public var skipSelfAttention: Bool = false
+    var skipSelfAttention: Bool = false
 
     /// STG: skip feed-forward when true (for perturbed forward pass)
-    public var skipFeedForward: Bool = false
+    var skipFeedForward: Bool = false
 
-    public init(
+    init(
         dim: Int,
         numHeads: Int,
         headDim: Int,
@@ -184,7 +184,7 @@ public class BasicTransformerBlock: Module {
         )
     }
 
-    public func callAsFunction(_ args: TransformerArgs) -> TransformerArgs {
+    func callAsFunction(_ args: TransformerArgs) -> TransformerArgs {
         var x = args.x
 
         // Get AdaLN values for self-attention
@@ -235,12 +235,12 @@ public class BasicTransformerBlock: Module {
 // MARK: - Transformer Blocks Stack
 
 /// Stack of transformer blocks
-public class TransformerBlocks: Module {
+class TransformerBlocks: Module {
     @ModuleInfo(key: "blocks") var blocks: [BasicTransformerBlock]
 
     let memoryOptimization: MemoryOptimizationConfig
 
-    public init(
+    init(
         numLayers: Int,
         dim: Int,
         numHeads: Int,
@@ -264,7 +264,7 @@ public class TransformerBlocks: Module {
         }
     }
 
-    public func callAsFunction(_ args: TransformerArgs) -> TransformerArgs {
+    func callAsFunction(_ args: TransformerArgs) -> TransformerArgs {
         var current = args
         let evalFreq = memoryOptimization.evalFrequency
 

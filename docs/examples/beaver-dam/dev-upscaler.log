@@ -1,0 +1,1111 @@
+LTX-2 Video Generation
+======================
+Prompt: A beaver building a dam in a forest stream, detailed fur, water splashing, natural lighting
+Output: docs/examples/beaver-dam/dev-upscaler.mp4
+Resolution: 768x512
+Frames: 25
+Model: dev
+Seed: 42
+Two-stage: enabled
+Prompt enhancement: enabled
+
+Two-stage pipeline: 384x256 -> upscale 2x -> 768x512
+  Base model: dev + distilled LoRA
+Creating pipeline...
+Pipeline created
+Loading models (this may take a while)...
+[LTX] Loading models for LTX-2 Dev (~25GB)...
+  Loading Gemma model... (10%)
+[LTX] Downloading Gemma text encoder for LTX-2 Dev (~25GB) (if needed)...
+  Preparing to download text encoder... (0%)
+  Text encoder already downloaded (100%)
+  Tokenizer already downloaded (100%)
+[LTX] [TIME] Gemma download check: 0.0s
+[LTX] Loading Gemma3 model from /Users/vincent/Library/Caches/models/ltx-dev/text_encoder...
+[Gemma3] Config: 48 layers, 3840 hidden, 16 heads
+[Gemma3] Loaded 1065 weight tensors from safetensors
+[Gemma3] Weights loaded and evaluated successfully
+[LTX] [TIME] Gemma load: 7.4s — 48 layers
+  Loading tokenizer... (20%)
+[LTX] Loading tokenizer from /Users/vincent/Library/Caches/models/ltx-dev/tokenizer...
+[LTX] [TIME] Tokenizer load: 3.1s
+  Loading LTX-2 weights... (30%)
+[LTX] Downloading LTX-2 components for LTX-2 Dev (~25GB) (if needed)...
+  Downloading connector weights... (35%)
+  Connector weights already downloaded (100%)
+[LTX] Loading connector weights from: /Users/vincent/Library/Caches/models/ltx-dev/connectors/diffusion_pytorch_model.safetensors
+[LTX] Loaded 59 tensors
+[LTX] Mapped 30 text encoder weights
+  Downloading transformer weights... (40%)
+  Unified weights already downloaded (100%)
+[LTX] Loading transformer weights from: /Users/vincent/Library/Caches/models/ltx-dev/ltx-2-19b-dev.safetensors
+[LTX] Loaded 4052 tensors via mmap
+[LTX] Mapped 1215 transformer weights (from 1263 total)
+[LTX] Extracted 1215 transformer weights in 1.7s
+  Downloading VAE weights... (80%)
+  VAE weights already downloaded (100%)
+[LTX] Loading VAE weights from: /Users/vincent/Library/Caches/models/ltx-dev/vae/diffusion_pytorch_model.safetensors
+[LTX] Loaded 184 tensors
+[LTX] Mapped 92 VAE decoder weights (encoder weights skipped)
+[LTX] VAE mapped keys: ["conv_in.conv.bias", "conv_in.conv.weight", "conv_out.conv.bias", "conv_out.conv.weight", "mean_of_means", "std_of_means", "up_blocks_0.res_blocks.0.conv1.conv.bias", "up_blocks_0.res_blocks.0.conv1.conv.weight", "up_blocks_0.res_blocks.0.conv2.conv.bias", "up_blocks_0.res_blocks.0.conv2.conv.weight"]...
+[LTX] [TIME] Component downloads: 1.7s
+  Loading transformer... (50%)
+[LTX] Applying 1215 transformer weights...
+[LTX] Converted 49 float32 parameters to bfloat16
+[LTX] Applied 1215 weights to transformer (0 unmatched)
+[LTX] [TIME] Apply transformer weights: 0.0s
+[LTX] [TIME] Eval transformer weights: 3.4s
+  Loading VAE decoder... (70%)
+[LTX] VAE config: timestep_conditioning=false
+[LTX] Applying 92 VAE weights...
+[LTX] VAE: 42 model params NOT loaded:
+[LTX]   missing: last_scale_shift_table
+[LTX]   missing: last_time_embedder.timestep_embedder.linear_1.bias
+[LTX]   missing: last_time_embedder.timestep_embedder.linear_1.weight
+[LTX]   missing: last_time_embedder.timestep_embedder.linear_2.bias
+[LTX]   missing: last_time_embedder.timestep_embedder.linear_2.weight
+[LTX]   missing: timestep_scale_multiplier
+[LTX]   missing: up_blocks_0.res_blocks.0.scale_shift_table
+[LTX]   missing: up_blocks_0.res_blocks.1.scale_shift_table
+[LTX]   missing: up_blocks_0.res_blocks.2.scale_shift_table
+[LTX]   missing: up_blocks_0.res_blocks.3.scale_shift_table
+[LTX] Applied 92 weights to VAE (0 unmatched)
+[LTX] [TIME] VAE load: 0.0s
+  Loading text encoder... (90%)
+[LTX] Applying 30 text encoder weights...
+[LTX] Applied 30 weights to TextEncoder (0 unmatched)
+[LTX] [TIME] TextEncoder load: 0.0s
+  Models loaded successfully (100%)
+[LTX] All models loaded successfully
+Models loaded in 15.6s
+
+Generating video...
+Downloading upscaler weights (if needed)...
+Upscaler weights ready
+[LTX] Two-stage generation: 384x256 → 768x512
+[LTX] [MEM] two-stage start: active=47316MB peak=47321MB cache=7175MB
+[LTX] Enhancing prompt with Gemma...
+[LTX] Enhancing prompt: "A beaver building a dam in a forest stream, detailed fur, water splashing, natural lighting"
+[LTX] Stop tokens: eos=1, end_of_turn=106
+[LTX] Chat template failed (missingChatTemplate), falling back to raw tokenization
+[LTX] Enhancement input (fallback): 958 tokens
+[LTX] Generated 205 tokens in 24.1s
+[LTX] Enhanced prompt: "Style: realistic with natural lighting. A beaver, its fur a rich brown and detailed with subtle variations in texture, is actively building a dam across a narrow forest stream. The beaver stands on its hind legs, holding a branch approximately three feet long in its mouth. Water splashes gently as it carefully positions the branch between two rocks within the growing dam structure. Soft ambient sounds of the forest surround—rustling leaves, distant bird calls, trickling water. As the beaver places the branch, another beaver approaches and nudges it into place with its nose, producing a distinct *thud* sound. The first beaver then retrieves another branch, its paws gripping the material firmly. Water continues to flow around the dam, creating ripples that reflect the sunlight filtering through the trees. A gentle splashing sound occurs as the water level rises slightly behind the structure. The beaver pauses and surveys its work—its face set in a focused expression—then it turns back towards the stream and splashes into the cool mountain of natural sounds with renewed vigor."
+[LTX] [MEM] Phase textEncoding: cache limit set to 512MB
+[LTX] Tokenized: [1, 1024], padding=818, active=206
+[LTX]   First 5 tokens: [0, 0, 0, 0, 0]
+[LTX]   Last 10 tokens: [506, 5427, 10565, 529, 3756, 12054, 607, 37390, 46934, 236761]
+[LTX] Running Gemma forward pass...
+[LTX] Got 49 hidden states from Gemma
+[LTX] [TextEnc] Gemma hidden states: 49 layers
+[LTX] [TextEnc]   layer_0: dtype=bfloat16, mean=-0.012630253, std=0.96572614
+[LTX] [TextEnc]   layer_1: dtype=bfloat16, mean=0.28167453, std=10.5799465
+[LTX] [TextEnc]   layer_24: dtype=bfloat16, mean=15.598625, std=1006.0619
+[LTX] [TextEnc]   layer_47: dtype=bfloat16, mean=50.544353, std=2753.336
+[LTX] [TextEnc]   layer_48: dtype=bfloat16, mean=0.028456345, std=1.7480731
+[LTX] [TextEnc] After norm_concat: dtype=bfloat16, shape=[1, 1024, 188160], mean=5.365994e-09, std=0.013952466
+[LTX] [TextEnc] After FE: dtype=bfloat16, shape=[1, 1024, 3840], mean=5.982858e-07, std=0.036266044
+[LTX] [TextEnc] After connector: dtype=bfloat16, mean=0.0028190596, std=1.0000011
+[LTX] Text encoding: [1, 1024, 3840], mean=0.0028381348
+[LTX] Text mask: [1, 1024], active=1024/1024
+[LTX] Tokenized: [1, 1024], padding=824, active=200
+[LTX]   First 5 tokens: [0, 0, 0, 0, 0]
+[LTX]   Last 10 tokens: [30260, 98388, 236764, 86256, 18774, 236764, 653, 12498, 48479, 236761]
+[LTX] Running Gemma forward pass...
+[LTX] Got 49 hidden states from Gemma
+[LTX] [TextEnc] Gemma hidden states: 49 layers
+[LTX] [TextEnc]   layer_0: dtype=bfloat16, mean=-0.011144022, std=0.9651165
+[LTX] [TextEnc]   layer_1: dtype=bfloat16, mean=0.27434146, std=10.5069
+[LTX] [TextEnc]   layer_24: dtype=bfloat16, mean=19.594807, std=1250.0244
+[LTX] [TextEnc]   layer_47: dtype=bfloat16, mean=52.42237, std=2729.672
+[LTX] [TextEnc]   layer_48: dtype=bfloat16, mean=0.040589754, std=1.7516574
+[LTX] [TextEnc] After norm_concat: dtype=bfloat16, shape=[1, 1024, 188160], mean=7.2619404e-09, std=0.01496363
+[LTX] [TextEnc] After FE: dtype=bfloat16, shape=[1, 1024, 3840], mean=-5.357654e-05, std=0.03690997
+[LTX] [TextEnc] After connector: dtype=bfloat16, mean=0.0030690935, std=1.000001
+[LTX] Text encoding: [1, 1024, 3840], mean=0.0030822754
+[LTX] Text mask: [1, 1024], active=1024/1024
+[LTX] Text encoding: 9.1s
+[LTX] Unloading Gemma model to free memory...
+[LTX] Gemma model unloaded
+[LTX] Using seed: 42
+[LTX] [MEM] Phase denoising: cache limit set to 2048MB
+[LTX] === Stage 1: Half-resolution denoising (40 steps) ===
+[LTX] Stage 1 latent: 4x8x12
+[LTX] Scheduler set: 40 steps, shift=0.72083336, tokens=384
+[LTX] Stage 1 using dev sigmas (40 steps)
+  Step 1/40 (σ=1.0000)
+[LTX] Step 0: patchified [2, 384, 128], σ=1.0000
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.043s
+[LTX]   [TIME] prepareContext: 0.016s
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.201s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.079s
+[LTX]   [TIME] processOutput: 0.002s
+[LTX]   [TIME] TOTAL transformer forward: 4.342s
+[LTX]   Step 0: σ=1.0000→0.9883, vel mean=-0.0068, std=1.0626, latent mean=0.0034, std=0.9853
+[LTX]   Step 0 time: 4.34s
+  Step 2/40 (σ=0.9883)
+[LTX] Step 1: patchified [2, 384, 128], σ=0.9883
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.000s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.011s
+[LTX]   [TIME] prepareContext: 0.018s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 3.776s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 3.807s
+[LTX]   Step 1: σ=0.9883→0.9764, vel mean=-0.0001, std=1.0693, latent mean=0.0025, std=0.9738
+[LTX]   Step 1 time: 3.81s
+  Step 3/40 (σ=0.9764)
+[LTX] Step 2: patchified [2, 384, 128], σ=0.9764
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.017s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 3.756s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 3.793s
+[LTX]   Step 2: σ=0.9764→0.9641, vel mean=0.0026, std=1.1666, latent mean=0.0019, std=0.9621
+[LTX]   Step 2 time: 3.79s
+  Step 4/40 (σ=0.9641)
+[LTX] Step 3: patchified [2, 384, 128], σ=0.9641
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.015s
+[LTX]   [TIME] prepareContext: 0.017s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 3.775s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 3.808s
+[LTX]   Step 3: σ=0.9641→0.9514, vel mean=0.0097, std=1.1795, latent mean=0.0017, std=0.9504
+[LTX]   Step 3 time: 3.81s
+  Step 5/40 (σ=0.9514)
+[LTX] Step 4: patchified [2, 384, 128], σ=0.9514
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.017s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 3.978s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.015s
+[LTX]   Step 4: σ=0.9514→0.9384, vel mean=0.0093, std=1.1887, latent mean=0.0016, std=0.9389
+[LTX]   Step 4 time: 4.02s
+  Step 6/40 (σ=0.9384)
+[LTX] Step 5: patchified [2, 384, 128], σ=0.9384
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.021s
+[LTX]   [TIME] prepareContext: 0.019s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.356s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.398s
+[LTX]   Step 5: σ=0.9384→0.9251, vel mean=0.0080, std=1.1954, latent mean=0.0018, std=0.9273
+[LTX]   Step 5 time: 4.40s
+  Step 7/40 (σ=0.9251)
+[LTX] Step 6: patchified [2, 384, 128], σ=0.9251
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.019s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.215s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.254s
+[LTX]   Step 6: σ=0.9251→0.9114, vel mean=0.0030, std=1.2022, latent mean=0.0019, std=0.9155
+[LTX]   Step 6 time: 4.25s
+  Step 8/40 (σ=0.9114)
+[LTX] Step 7: patchified [2, 384, 128], σ=0.9114
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.012s
+[LTX]   [TIME] prepareContext: 0.020s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.231s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.264s
+[LTX]   Step 7: σ=0.9114→0.8973, vel mean=-0.0000, std=1.2159, latent mean=0.0020, std=0.9037
+[LTX]   Step 7 time: 4.26s
+  Step 9/40 (σ=0.8973)
+[LTX] Step 8: patchified [2, 384, 128], σ=0.8973
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.020s
+[LTX]   [TIME] prepareContext: 0.019s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.179s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.219s
+[LTX]   Step 8: σ=0.8973→0.8828, vel mean=-0.0014, std=1.2317, latent mean=0.0019, std=0.8920
+[LTX]   Step 8 time: 4.22s
+  Step 10/40 (σ=0.8828)
+[LTX] Step 9: patchified [2, 384, 128], σ=0.8828
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.019s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.218s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.256s
+[LTX]   Step 9: σ=0.8828→0.8678, vel mean=-0.0010, std=1.2455, latent mean=0.0018, std=0.8807
+[LTX]   Step 9 time: 4.26s
+  Step 11/40 (σ=0.8678)
+[LTX] Step 10: patchified [2, 384, 128], σ=0.8678
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.025s
+[LTX]   [TIME] prepareContext: 0.018s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.255s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.300s
+[LTX]   Step 10: σ=0.8678→0.8524, vel mean=-0.0005, std=1.2623, latent mean=0.0017, std=0.8696
+[LTX]   Step 10 time: 4.30s
+  Step 12/40 (σ=0.8524)
+[LTX] Step 11: patchified [2, 384, 128], σ=0.8524
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.019s
+[LTX]   [TIME] prepareContext: 0.020s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.139s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.180s
+[LTX]   Step 11: σ=0.8524→0.8366, vel mean=0.0033, std=1.2813, latent mean=0.0016, std=0.8588
+[LTX]   Step 11 time: 4.18s
+  Step 13/40 (σ=0.8366)
+[LTX] Step 12: patchified [2, 384, 128], σ=0.8366
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.019s
+[LTX]   [TIME] prepareContext: 0.020s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.248s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.289s
+[LTX]   Step 12: σ=0.8366→0.8202, vel mean=0.0042, std=1.2896, latent mean=0.0016, std=0.8483
+[LTX]   Step 12 time: 4.29s
+  Step 14/40 (σ=0.8202)
+[LTX] Step 13: patchified [2, 384, 128], σ=0.8202
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.020s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.412s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.452s
+[LTX]   Step 13: σ=0.8202→0.8034, vel mean=0.0045, std=1.2991, latent mean=0.0016, std=0.8380
+[LTX]   Step 13 time: 4.45s
+  Step 15/40 (σ=0.8034)
+[LTX] Step 14: patchified [2, 384, 128], σ=0.8034
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.019s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.244s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.283s
+[LTX]   Step 14: σ=0.8034→0.7860, vel mean=0.0052, std=1.3038, latent mean=0.0014, std=0.8282
+[LTX]   Step 14 time: 4.29s
+  Step 16/40 (σ=0.7860)
+[LTX] Step 15: patchified [2, 384, 128], σ=0.7860
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.020s
+[LTX]   [TIME] prepareContext: 0.020s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.270s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.312s
+[LTX]   Step 15: σ=0.7860→0.7680, vel mean=0.0059, std=1.3110, latent mean=0.0014, std=0.8190
+[LTX]   Step 15 time: 4.31s
+  Step 17/40 (σ=0.7680)
+[LTX] Step 16: patchified [2, 384, 128], σ=0.7680
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.019s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.395s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.434s
+[LTX]   Step 16: σ=0.7680→0.7495, vel mean=0.0061, std=1.3159, latent mean=0.0014, std=0.8103
+[LTX]   Step 16 time: 4.44s
+  Step 18/40 (σ=0.7495)
+[LTX] Step 17: patchified [2, 384, 128], σ=0.7495
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.020s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.622s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.662s
+[LTX]   Step 17: σ=0.7495→0.7303, vel mean=0.0055, std=1.3201, latent mean=0.0013, std=0.8023
+[LTX]   Step 17 time: 4.66s
+  Step 19/40 (σ=0.7303)
+[LTX] Step 18: patchified [2, 384, 128], σ=0.7303
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.015s
+[LTX]   [TIME] prepareContext: 0.020s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.845s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.882s
+[LTX]   Step 18: σ=0.7303→0.7105, vel mean=0.0054, std=1.3228, latent mean=0.0013, std=0.7952
+[LTX]   Step 18 time: 4.88s
+  Step 20/40 (σ=0.7105)
+[LTX] Step 19: patchified [2, 384, 128], σ=0.7105
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.028s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 4.928s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 4.976s
+[LTX]   Step 19: σ=0.7105→0.6900, vel mean=0.0055, std=1.3244, latent mean=0.0013, std=0.7891
+[LTX]   Step 19 time: 4.99s
+  Step 21/40 (σ=0.6900)
+[LTX] Step 20: patchified [2, 384, 128], σ=0.6900
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.022s
+[LTX]   [TIME] prepareContext: 0.021s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.045s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.090s
+[LTX]   Step 20: σ=0.6900→0.6688, vel mean=0.0053, std=1.3247, latent mean=0.0013, std=0.7841
+[LTX]   Step 20 time: 5.09s
+  Step 22/40 (σ=0.6688)
+[LTX] Step 21: patchified [2, 384, 128], σ=0.6688
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.017s
+[LTX]   [TIME] prepareContext: 0.023s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.049s
+[LTX]   [TIME] processOutput: 0.004s
+[LTX]   [TIME] TOTAL transformer forward: 5.094s
+[LTX]   Step 21: σ=0.6688→0.6468, vel mean=0.0051, std=1.3274, latent mean=0.0012, std=0.7804
+[LTX]   Step 21 time: 5.09s
+  Step 23/40 (σ=0.6468)
+[LTX] Step 22: patchified [2, 384, 128], σ=0.6468
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.024s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.126s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.170s
+[LTX]   Step 22: σ=0.6468→0.6240, vel mean=0.0050, std=1.3285, latent mean=0.0012, std=0.7782
+[LTX]   Step 22 time: 5.17s
+  Step 24/40 (σ=0.6240)
+[LTX] Step 23: patchified [2, 384, 128], σ=0.6240
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.019s
+[LTX]   [TIME] prepareContext: 0.023s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.149s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.193s
+[LTX]   Step 23: σ=0.6240→0.6004, vel mean=0.0051, std=1.3286, latent mean=0.0011, std=0.7776
+[LTX]   Step 23 time: 5.19s
+  Step 25/40 (σ=0.6004)
+[LTX] Step 24: patchified [2, 384, 128], σ=0.6004
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.023s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.134s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.177s
+[LTX]   Step 24: σ=0.6004→0.5758, vel mean=0.0047, std=1.3285, latent mean=0.0011, std=0.7788
+[LTX]   Step 24 time: 5.19s
+  Step 26/40 (σ=0.5758)
+[LTX] Step 25: patchified [2, 384, 128], σ=0.5758
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.020s
+[LTX]   [TIME] prepareContext: 0.022s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.156s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.200s
+[LTX]   Step 25: σ=0.5758→0.5504, vel mean=0.0043, std=1.3288, latent mean=0.0011, std=0.7820
+[LTX]   Step 25 time: 5.20s
+  Step 27/40 (σ=0.5504)
+[LTX] Step 26: patchified [2, 384, 128], σ=0.5504
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.017s
+[LTX]   [TIME] prepareContext: 0.022s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.175s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.216s
+[LTX]   Step 26: σ=0.5504→0.5239, vel mean=0.0039, std=1.3282, latent mean=0.0010, std=0.7875
+[LTX]   Step 26 time: 5.22s
+  Step 28/40 (σ=0.5239)
+[LTX] Step 27: patchified [2, 384, 128], σ=0.5239
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.024s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.143s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.186s
+[LTX]   Step 27: σ=0.5239→0.4964, vel mean=0.0038, std=1.3259, latent mean=0.0010, std=0.7954
+[LTX]   Step 27 time: 5.19s
+  Step 29/40 (σ=0.4964)
+[LTX] Step 28: patchified [2, 384, 128], σ=0.4964
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.017s
+[LTX]   [TIME] prepareContext: 0.023s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.144s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.186s
+[LTX]   Step 28: σ=0.4964→0.4677, vel mean=0.0033, std=1.3246, latent mean=0.0009, std=0.8059
+[LTX]   Step 28 time: 5.19s
+  Step 30/40 (σ=0.4677)
+[LTX] Step 29: patchified [2, 384, 128], σ=0.4677
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.021s
+[LTX]   [TIME] prepareContext: 0.024s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.084s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.130s
+[LTX]   Step 29: σ=0.4677→0.4378, vel mean=0.0034, std=1.3213, latent mean=0.0008, std=0.8193
+[LTX]   Step 29 time: 5.14s
+  Step 31/40 (σ=0.4378)
+[LTX] Step 30: patchified [2, 384, 128], σ=0.4378
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.021s
+[LTX]   [TIME] prepareContext: 0.024s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.057s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.104s
+[LTX]   Step 30: σ=0.4378→0.4067, vel mean=0.0032, std=1.3193, latent mean=0.0007, std=0.8356
+[LTX]   Step 30 time: 5.10s
+  Step 32/40 (σ=0.4067)
+[LTX] Step 31: patchified [2, 384, 128], σ=0.4067
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.024s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.149s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.193s
+[LTX]   Step 31: σ=0.4067→0.3742, vel mean=0.0026, std=1.3148, latent mean=0.0006, std=0.8554
+[LTX]   Step 31 time: 5.19s
+  Step 33/40 (σ=0.3742)
+[LTX] Step 32: patchified [2, 384, 128], σ=0.3742
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.024s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.091s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.135s
+[LTX]   Step 32: σ=0.3742→0.3403, vel mean=0.0027, std=1.3113, latent mean=0.0005, std=0.8786
+[LTX]   Step 32 time: 5.14s
+  Step 34/40 (σ=0.3403)
+[LTX] Step 33: patchified [2, 384, 128], σ=0.3403
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.022s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.091s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.133s
+[LTX]   Step 33: σ=0.3403→0.3048, vel mean=0.0027, std=1.3055, latent mean=0.0005, std=0.9055
+[LTX]   Step 33 time: 5.13s
+  Step 35/40 (σ=0.3048)
+[LTX] Step 34: patchified [2, 384, 128], σ=0.3048
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.017s
+[LTX]   [TIME] prepareContext: 0.022s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.088s
+[LTX]   [TIME] processOutput: 0.002s
+[LTX]   [TIME] TOTAL transformer forward: 5.130s
+[LTX]   Step 34: σ=0.3048→0.2677, vel mean=0.0025, std=1.3003, latent mean=0.0004, std=0.9364
+[LTX]   Step 34 time: 5.13s
+  Step 36/40 (σ=0.2677)
+[LTX] Step 35: patchified [2, 384, 128], σ=0.2677
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.022s
+[LTX]   [TIME] prepareContext: 0.022s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.106s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.151s
+[LTX]   Step 35: σ=0.2677→0.2288, vel mean=0.0022, std=1.2912, latent mean=0.0003, std=0.9713
+[LTX]   Step 35 time: 5.15s
+  Step 37/40 (σ=0.2288)
+[LTX] Step 36: patchified [2, 384, 128], σ=0.2288
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.022s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.290s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.332s
+[LTX]   Step 36: σ=0.2288→0.1879, vel mean=0.0023, std=1.2810, latent mean=0.0002, std=1.0105
+[LTX]   Step 36 time: 5.33s
+  Step 38/40 (σ=0.1879)
+[LTX] Step 37: patchified [2, 384, 128], σ=0.1879
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.000s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.012s
+[LTX]   [TIME] prepareContext: 0.025s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 6.301s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 6.341s
+[LTX]   Step 37: σ=0.1879→0.1451, vel mean=0.0022, std=1.2693, latent mean=0.0002, std=1.0543
+[LTX]   Step 37 time: 6.34s
+  Step 39/40 (σ=0.1451)
+[LTX] Step 38: patchified [2, 384, 128], σ=0.1451
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.014s
+[LTX]   [TIME] prepareContext: 0.026s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.859s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.900s
+[LTX]   Step 38: σ=0.1451→0.1000, vel mean=0.0019, std=1.2521, latent mean=0.0002, std=1.1028
+[LTX]   Step 38 time: 5.90s
+  Step 40/40 (σ=0.1000)
+[LTX] Step 39: patchified [2, 384, 128], σ=0.1000
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 384, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 8, width: 12)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 384, 4096]
+[LTX]   [TIME] prepareTimestep: 0.019s
+[LTX]   [TIME] prepareContext: 0.026s
+[LTX]   [DIAG] RoPE cache hit (2_4_8_12)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 384, 64]
+[LTX]   RoPE sin shape: [2, 32, 384, 64]
+[LTX]   [TIME] all transformer blocks: 5.338s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 5.385s
+[LTX]   Step 39: σ=0.1000→0.0000, vel mean=0.0017, std=1.2335, latent mean=0.0000, std=1.2159
+[LTX]   Step 39 time: 5.39s
+[LTX] Stage 1 complete: 191.5s
+[LTX] Stage 1 latent stats: mean=4.9578648e-05, std=1.2158831
+[LTX] === Upscaling latent 2x ===
+[LTX] Loading spatial upscaler from /Users/vincent/Library/Caches/models/ltx-upscaler/diffusion_pytorch_model.safetensors...
+[LTX] Detected mid_channels: 1024
+[LTX] Upscaler model has 72 parameter tensors, loaded 72 from file
+[LTX] Verify initial_conv.weight: shape=[1024, 3, 3, 3, 128], mean=-0.00021665228, std=0.024886075
+[LTX] Verify res_blocks.0.conv1.weight: shape=[1024, 3, 3, 3, 1024], mean=0.0008435387
+[LTX] Upscaler parameter keys (72):
+[LTX]   final_conv.bias: [128]
+[LTX]   final_conv.weight: [128, 3, 3, 3, 1024]
+[LTX]   initial_conv.bias: [1024]
+[LTX]   initial_conv.weight: [1024, 3, 3, 3, 128]
+[LTX]   initial_norm.bias: [1024]
+[LTX]   initial_norm.weight: [1024]
+[LTX]   post_upsample_res_blocks.0.conv1.bias: [1024]
+[LTX]   post_upsample_res_blocks.0.conv1.weight: [1024, 3, 3, 3, 1024]
+[LTX]   post_upsample_res_blocks.0.conv2.bias: [1024]
+[LTX]   post_upsample_res_blocks.0.conv2.weight: [1024, 3, 3, 3, 1024]
+[LTX]   ... and 62 more
+[LTX] VAE stats: mean shape=[128], std shape=[128]
+[LTX] After denormalize: mean=0.0011187987, std=0.17196098
+[LTX] After upscaler: shape=[1, 128, 4, 16, 24], mean=-0.0027480812, std=0.16350774
+[LTX] After renormalize: mean=-0.023125187, std=1.096545
+[LTX] After AdaIN: mean=4.9578648e-05, std=1.2158831
+[LTX] Upscaled latent shape: [1, 128, 4, 16, 24]
+[LTX] Upscale time: 0.4s
+[LTX] === Stage 2: Full-resolution refinement (3 steps) ===
+[LTX] Stage 2 latent: 4x16x24
+[LTX] Added stage 2 noise (σ=0.909375)
+[LTX] Stage 2 input stats: mean=0.0017618376, std=0.9185744
+  Step 1/3 (σ=0.9094)
+[LTX] Step 0: patchified [2, 1536, 128], σ=0.9094
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 1536, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.022s
+[LTX]   [TIME] prepareContext: 0.030s
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.834s
+[LTX]   RoPE cos shape: [2, 32, 1536, 64]
+[LTX]   RoPE sin shape: [2, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 18.680s
+[LTX]   [TIME] processOutput: 0.004s
+[LTX]   [TIME] TOTAL transformer forward: 19.572s
+[LTX]   Step 0: σ=0.9094→0.7250, vel mean=-0.0120, std=1.2689, latent mean=0.0033, std=0.7977
+[LTX]   Step 0 time: 19.57s
+  Step 2/3 (σ=0.7250)
+[LTX] Step 1: patchified [2, 1536, 128], σ=0.7250
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 1536, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.023s
+[LTX]   [TIME] prepareContext: 0.028s
+[LTX]   [DIAG] RoPE cache hit (2_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 1536, 64]
+[LTX]   RoPE sin shape: [2, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 16.346s
+[LTX]   [TIME] processOutput: 0.003s
+[LTX]   [TIME] TOTAL transformer forward: 16.401s
+[LTX]   Step 1: σ=0.7250→0.4219, vel mean=-0.0111, std=1.3387, latent mean=0.0069, std=0.7881
+[LTX]   Step 1 time: 16.40s
+  Step 3/3 (σ=0.4219)
+[LTX] Step 2: patchified [2, 1536, 128], σ=0.4219
+[LTX] Transformer input shapes:
+[LTX]   latent: [2, 1536, 128]
+[LTX]   context: [2, 1024, 3840]
+[LTX]   timesteps: [2]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [2, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.017s
+[LTX]   [TIME] prepareContext: 0.021s
+[LTX]   [DIAG] RoPE cache hit (2_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [2, 32, 1536, 64]
+[LTX]   RoPE sin shape: [2, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 15.405s
+[LTX]   [TIME] processOutput: 0.002s
+[LTX]   [TIME] TOTAL transformer forward: 15.446s
+[LTX]   Step 2: σ=0.4219→0.0000, vel mean=-0.0088, std=1.2990, latent mean=0.0108, std=1.1140
+[LTX]   Step 2 time: 15.45s
+[LTX] Stage 2 complete: 51.4s
+[LTX] Stage 2 output stats: mean=0.010759158, std=1.1139919, min=-6.255295, max=7.087178
+[LTX] Transformer unloaded for VAE decode phase
+[LTX] [MEM] after transformer unload: active=28901MB peak=54523MB cache=0MB
+[LTX] [MEM] Phase vaeDecode: cache limit set to 512MB
+[LTX] Decoding latents to video... (timestep=nil)
+[LTX] VAE Decoder input: [1, 128, 4, 16, 24]
+[LTX] After denormalize: mean=0.001305446
+[LTX] After conv_in: [1, 1024, 4, 16, 24], mean=0.038918354
+[LTX] After up_blocks_0 (res): [1, 1024, 4, 16, 24], mean=0.0032629566
+[LTX] After up_blocks_1 (d2s): [1, 512, 7, 32, 48], mean=-0.10389964
+[LTX] After up_blocks_2 (res): [1, 512, 7, 32, 48], mean=-0.0022096226
+[LTX] After up_blocks_3 (d2s): [1, 256, 13, 64, 96], mean=-0.249743
+[LTX] After up_blocks_4 (res): [1, 256, 13, 64, 96], mean=-0.06622724
+[LTX] After up_blocks_5 (d2s): [1, 128, 25, 128, 192], mean=-0.6445839
+[LTX] After up_blocks_6 (res): [1, 128, 25, 128, 192], mean=-1.6768854
+[LTX] After conv_out: [1, 48, 25, 128, 192], mean=-0.17884627
+[LTX] After unpatchify: [1, 3, 25, 512, 768]
+[LTX] VAE raw output: mean=-0.17884627, min=-1.8387372, max=1.705724
+[LTX] VAE decode: 4.1s
+[LTX] [MEM] after two-stage VAE decode: active=30021MB peak=54523MB cache=412MB
+[LTX] Total two-stage time: 281.2s
+Generation completed in 281.4s
+
+Exporting to docs/examples/beaver-dam/dev-upscaler.mp4...
+Video saved to: /Users/vincent/Developpements/ltx-video-swift-mlx/docs/examples/beaver-dam/dev-upscaler.mp4
+
+--- Summary ---
+Frames: 25
+Resolution: 768x512
+Seed: 42
+Generation time: 281.2s
+
+--- Profiling ---
+Text Encoding (Gemma + FE + Connector): 9.1s
+Denoising (43 steps):                 242.9s
+  Step 0: 4.3s
+  Step 1: 3.8s
+  Step 2: 3.8s
+  Step 3: 3.8s
+  Step 4: 4.0s
+  Step 5: 4.4s
+  Step 6: 4.3s
+  Step 7: 4.3s
+  Step 8: 4.2s
+  Step 9: 4.3s
+  Step 10: 4.3s
+  Step 11: 4.2s
+  Step 12: 4.3s
+  Step 13: 4.5s
+  Step 14: 4.3s
+  Step 15: 4.3s
+  Step 16: 4.4s
+  Step 17: 4.7s
+  Step 18: 4.9s
+  Step 19: 5.0s
+  Step 20: 5.1s
+  Step 21: 5.1s
+  Step 22: 5.2s
+  Step 23: 5.2s
+  Step 24: 5.2s
+  Step 25: 5.2s
+  Step 26: 5.2s
+  Step 27: 5.2s
+  Step 28: 5.2s
+  Step 29: 5.1s
+  Step 30: 5.1s
+  Step 31: 5.2s
+  Step 32: 5.1s
+  Step 33: 5.1s
+  Step 34: 5.1s
+  Step 35: 5.2s
+  Step 36: 5.3s
+  Step 37: 6.3s
+  Step 38: 5.9s
+  Step 39: 5.4s
+  Step 40: 19.6s
+  Step 41: 16.4s
+  Step 42: 15.4s
+  Average per step:                      5.6s
+VAE Decoding:                            4.1s
+Model Loading:                           15.6s
+Pipeline total (excl. loading/export):   256.1s
+
+--- Memory ---
+Peak GPU memory:                         54523 MB
+Mean GPU memory (denoising):              27100 MB

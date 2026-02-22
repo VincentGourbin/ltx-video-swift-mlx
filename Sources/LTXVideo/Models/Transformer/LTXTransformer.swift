@@ -17,9 +17,9 @@ import MLXNN
 /// - Output: Velocity predictions for diffusion (B, T, C)
 ///
 /// This is the core denoising model that predicts velocities.
-public class LTXTransformer: Module {
+class LTXTransformer: Module {
     /// Set to true to dump detailed intermediates on the next forward pass (step 0 diagnostics)
-    nonisolated(unsafe) public static var dumpNextForwardPass = false
+    nonisolated(unsafe) static var dumpNextForwardPass = false
 
     let config: LTXTransformerConfig
     let ropeType: LTXRopeType
@@ -49,7 +49,7 @@ public class LTXTransformer: Module {
     // Scale-shift table for output
     @ParameterInfo(key: "scale_shift_table") var scaleShiftTable: MLXArray
 
-    public init(
+    init(
         config: LTXTransformerConfig = .default,
         ropeType: LTXRopeType = .split,
         memoryOptimization: MemoryOptimizationConfig = .default,
@@ -199,7 +199,7 @@ public class LTXTransformer: Module {
     }
 
     /// Clear the RoPE cache (e.g., when switching resolution between stages)
-    public func clearRoPECache() {
+    func clearRoPECache() {
         cachedRoPE = nil
         cachedRoPEKey = nil
     }
@@ -232,7 +232,7 @@ public class LTXTransformer: Module {
     ///   - contextMask: Optional attention mask for text (B, S)
     ///   - latentShape: Shape of latent (frames, height, width) for position embeddings
     /// - Returns: Velocity predictions (B, T, C)
-    public func callAsFunction(
+    func callAsFunction(
         latent: MLXArray,
         context: MLXArray,
         timesteps: MLXArray,
@@ -454,9 +454,20 @@ public class LTXTransformer: Module {
                 eval(args.x)
                 let xMean = args.x.mean().item(Float.self)
                 print("[BLOCK_MEAN] block \(i): mean=\(xMean)")
-            } else if i == transformerBlocks.count - 1 {
-                // Match Python: only eval after the last block
-                // Python evaluates the full 48-block graph at once
+            } else if memoryOptimization.evalFrequency > 0
+                        && (i + 1) % memoryOptimization.evalFrequency == 0 {
+                // Periodic eval to bound compute graph memory (flux-2 pattern)
+                eval(args.x)
+                if memoryOptimization.clearCacheOnEval {
+                    Memory.clearCache()
+                }
+            }
+        }
+        // Final eval if not already done at the last block
+        if !dumpMode {
+            let lastDone = memoryOptimization.evalFrequency > 0
+                && transformerBlocks.count % memoryOptimization.evalFrequency == 0
+            if !lastDone {
                 eval(args.x)
             }
         }
@@ -483,7 +494,7 @@ extension LTXTransformer {
     /// - Parameters:
     ///   - scale: Cross-attention output multiplier (1.0 = no change)
     ///   - blocks: Range of block indices to apply to (nil = all blocks)
-    public func setCrossAttentionScale(_ scale: Float, forBlocks blocks: ClosedRange<Int>? = nil) {
+    func setCrossAttentionScale(_ scale: Float, forBlocks blocks: ClosedRange<Int>? = nil) {
         let range = blocks ?? 0...(transformerBlocks.count - 1)
         for i in range {
             guard i >= 0 && i < transformerBlocks.count else { continue }
@@ -498,7 +509,7 @@ extension LTXTransformer {
     ///   - skipSelfAttention: Whether to skip self-attention
     ///   - skipFeedForward: Whether to skip feed-forward
     ///   - blockIndices: Which block indices to modify
-    public func setSTGSkipFlags(skipSelfAttention: Bool, skipFeedForward: Bool = false, blockIndices: [Int]) {
+    func setSTGSkipFlags(skipSelfAttention: Bool, skipFeedForward: Bool = false, blockIndices: [Int]) {
         for i in blockIndices {
             guard i >= 0 && i < transformerBlocks.count else { continue }
             transformerBlocks[i].skipSelfAttention = skipSelfAttention
@@ -507,7 +518,7 @@ extension LTXTransformer {
     }
 
     /// Reset all STG skip flags to false
-    public func clearSTGSkipFlags() {
+    func clearSTGSkipFlags() {
         for block in transformerBlocks {
             block.skipSelfAttention = false
             block.skipFeedForward = false
@@ -519,7 +530,7 @@ extension LTXTransformer {
 
 extension LTXTransformer {
     /// Create transformer for a specific model variant
-    public convenience init(model: LTXModel, memoryOptimization: MemoryOptimizationConfig = .default) {
+    convenience init(model: LTXModel, memoryOptimization: MemoryOptimizationConfig = .default) {
         self.init(
             config: model.transformerConfig,
             ropeType: .split,

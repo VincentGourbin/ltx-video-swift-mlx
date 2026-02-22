@@ -15,7 +15,7 @@ import MLXRandom
 /// - Parameters:
 ///   - latent: Input tensor of shape (B, C, F, H, W)
 /// - Returns: Patchified tensor of shape (B, T, C) where T = F*H*W
-public func patchify(_ latent: MLXArray) -> MLXArray {
+func patchify(_ latent: MLXArray) -> MLXArray {
     let b = latent.dim(0)
     let c = latent.dim(1)
     let f = latent.dim(2)
@@ -37,7 +37,7 @@ public func patchify(_ latent: MLXArray) -> MLXArray {
 ///   - x: Input tensor of shape (B, T, C)
 ///   - shape: Target latent shape
 /// - Returns: Unpatchified tensor of shape (B, C, F, H, W)
-public func unpatchify(_ x: MLXArray, shape: VideoLatentShape) -> MLXArray {
+func unpatchify(_ x: MLXArray, shape: VideoLatentShape) -> MLXArray {
     let b = shape.batch
     let c = shape.channels
     let f = shape.frames
@@ -64,7 +64,7 @@ public func unpatchify(_ x: MLXArray, shape: VideoLatentShape) -> MLXArray {
 ///   - seed: Optional random seed for reproducibility
 ///   - dtype: Data type for the noise tensor (default: bfloat16 matching Python)
 /// - Returns: Random noise tensor
-public func generateNoise(
+func generateNoise(
     shape: VideoLatentShape,
     seed: UInt64? = nil,
     dtype: DType = .float32
@@ -81,7 +81,7 @@ public func generateNoise(
 }
 
 /// Generate noise with specific sigma level
-public func generateScaledNoise(
+func generateScaledNoise(
     shape: VideoLatentShape,
     sigma: Float,
     seed: UInt64? = nil,
@@ -99,7 +99,7 @@ public func generateScaledNoise(
 ///
 /// - Parameter latent: Input latent tensor
 /// - Returns: Doubled latent tensor for CFG
-public func prepareForCFG(_ latent: MLXArray) -> MLXArray {
+func prepareForCFG(_ latent: MLXArray) -> MLXArray {
     return MLX.concatenated([latent, latent], axis: 0)
 }
 
@@ -107,7 +107,7 @@ public func prepareForCFG(_ latent: MLXArray) -> MLXArray {
 ///
 /// - Parameter output: Combined output from CFG forward pass
 /// - Returns: Tuple of (unconditional, conditional) outputs
-public func splitCFGOutput(_ output: MLXArray) -> (uncond: MLXArray, cond: MLXArray) {
+func splitCFGOutput(_ output: MLXArray) -> (uncond: MLXArray, cond: MLXArray) {
     let batchSize = output.dim(0) / 2
     let uncond = output[0..<batchSize]
     let cond = output[batchSize...]
@@ -126,7 +126,7 @@ public func splitCFGOutput(_ output: MLXArray) -> (uncond: MLXArray, cond: MLXAr
 ///   - cond: Conditional output
 ///   - guidanceScale: CFG scale factor
 /// - Returns: Guided output (same dtype as inputs)
-public func applyCFG(
+func applyCFG(
     uncond: MLXArray,
     cond: MLXArray,
     guidanceScale: Float
@@ -139,7 +139,7 @@ public func applyCFG(
 }
 
 /// Combined CFG application from concatenated output
-public func applyCFG(
+func applyCFG(
     output: MLXArray,
     guidanceScale: Float
 ) -> MLXArray {
@@ -159,7 +159,7 @@ public func applyCFG(
 ///   - condOutput: Conditional-only output (B, C, F, H, W)
 ///   - phi: Rescale factor (0.0 = no rescale, 0.7 = recommended)
 /// - Returns: Rescaled output
-public func applyGuidanceRescale(
+func applyGuidanceRescale(
     cfgOutput: MLXArray,
     condOutput: MLXArray,
     phi: Float
@@ -195,7 +195,7 @@ public func applyGuidanceRescale(
 ///     Spatial dimensions can differ; only per-channel stats are used.
 ///   - factor: Blending factor (1.0 = full AdaIN, 0.0 = no change)
 /// - Returns: AdaIN-filtered latent with same shape as input
-public func adainFilterLatent(
+func adainFilterLatent(
     _ latent: MLXArray,
     reference: MLXArray,
     factor: Float = 1.0
@@ -226,7 +226,7 @@ public func adainFilterLatent(
 // MARK: - Latent Normalization
 
 /// Normalize latent to have zero mean and unit variance per channel
-public func normalizeLatent(_ latent: MLXArray, eps: Float = 1e-6) -> MLXArray {
+func normalizeLatent(_ latent: MLXArray, eps: Float = 1e-6) -> MLXArray {
     // Compute mean and std per channel
     let mean = MLX.mean(latent, axes: [2, 3, 4], keepDims: true)
     let variance = MLX.variance(latent, axes: [2, 3, 4], keepDims: true)
@@ -236,7 +236,7 @@ public func normalizeLatent(_ latent: MLXArray, eps: Float = 1e-6) -> MLXArray {
 }
 
 /// Denormalize latent using per-channel statistics
-public func denormalizeLatent(
+func denormalizeLatent(
     _ latent: MLXArray,
     mean: MLXArray,
     std: MLXArray
@@ -251,7 +251,7 @@ public func denormalizeLatent(
 // MARK: - Utility Functions
 
 /// Get the number of tokens for a given video shape
-public func tokenCount(frames: Int, height: Int, width: Int) -> Int {
+func tokenCount(frames: Int, height: Int, width: Int) -> Int {
     // In latent space
     let scaleFactors = SpatioTemporalScaleFactors.default
     let latent = scaleFactors.pixelToLatent(frames: frames, height: height, width: width)
@@ -259,7 +259,7 @@ public func tokenCount(frames: Int, height: Int, width: Int) -> Int {
 }
 
 /// Validate and adjust dimensions to meet LTX-2 constraints
-public func adjustDimensions(
+func adjustDimensions(
     frames: Int,
     height: Int,
     width: Int
@@ -288,7 +288,7 @@ public func adjustDimensions(
 // MARK: - Memory Estimation
 
 /// Estimate memory usage for video generation in bytes
-public func estimateMemoryUsage(
+func estimateMemoryUsage(
     shape: VideoLatentShape,
     numSteps: Int,
     cfg: Bool = true,
@@ -316,7 +316,7 @@ public func estimateMemoryUsage(
 }
 
 /// Format bytes as human-readable string
-public func formatBytes(_ bytes: Int64) -> String {
+func formatBytes(_ bytes: Int64) -> String {
     let gb = Double(bytes) / (1024 * 1024 * 1024)
     if gb >= 1.0 {
         return String(format: "%.1f GB", gb)

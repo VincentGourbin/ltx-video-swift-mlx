@@ -6,7 +6,7 @@ import MLX
 import MLXNN
 
 /// Weight loader for Gemma 3 models (standard and quantized)
-public enum Gemma3WeightLoader {
+enum Gemma3WeightLoader {
 
     /// Load Gemma 3 weights from a model directory.
     ///
@@ -19,7 +19,7 @@ public enum Gemma3WeightLoader {
     /// - Parameters:
     ///   - model: The Gemma3TextModel to load weights into
     ///   - weightsDir: Directory containing safetensors + config.json
-    public static func loadWeights(
+    static func loadWeights(
         into model: Gemma3TextModel,
         from weightsDir: URL
     ) throws {
@@ -71,7 +71,7 @@ public enum Gemma3WeightLoader {
     ///
     /// - Parameter directory: Model directory with config.json + safetensors
     /// - Returns: Loaded Gemma3TextModel
-    public static func loadModel(from directory: URL) throws -> Gemma3TextModel {
+    static func loadModel(from directory: URL) throws -> Gemma3TextModel {
         let config = try Gemma3Config.load(from: directory)
         print("[Gemma3] Config: \(config.hiddenLayers) layers, \(config.hiddenSize) hidden, \(config.attentionHeads) heads")
         if let q = config.quantization {

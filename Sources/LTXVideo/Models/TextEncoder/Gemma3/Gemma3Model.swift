@@ -171,7 +171,7 @@ class Gemma3DecoderLayer: Module {
 
 /// Inner model (embed_tokens + layers + norm) matching MLXLLM's Gemma3Model.
 /// Weight keys: model.embed_tokens, model.layers, model.norm
-public class Gemma3InnerModel: Module {
+class Gemma3InnerModel: Module {
     @ModuleInfo(key: "embed_tokens") var embedTokens: Embedding
     @ModuleInfo var layers: [Gemma3DecoderLayer]
     @ModuleInfo var norm: Gemma.RMSNorm
@@ -317,11 +317,11 @@ public class Gemma3InnerModel: Module {
 /// try Gemma3WeightLoader.loadWeights(into: encoder, from: modelDirectory)
 /// let (lastHidden, allHidden) = encoder(tokenIds, outputHiddenStates: true)
 /// ```
-public class Gemma3TextModel: Module {
-    @ModuleInfo public var model: Gemma3InnerModel
-    public let config: Gemma3Config
+class Gemma3TextModel: Module {
+    @ModuleInfo var model: Gemma3InnerModel
+    let config: Gemma3Config
 
-    public init(_ config: Gemma3Config) {
+    init(_ config: Gemma3Config) {
         self.config = config
         self.model = Gemma3InnerModel(config)
         super.init()
@@ -334,7 +334,7 @@ public class Gemma3TextModel: Module {
     ///   - attentionMask: Optional padding mask [B, T] where 1=real token, 0=padding
     ///   - outputHiddenStates: Whether to collect all intermediate hidden states (default: true)
     /// - Returns: (lastHiddenState [B, T, D], allHiddenStates [49 x [B, T, D]])
-    public func callAsFunction(
+    func callAsFunction(
         _ inputs: MLXArray,
         attentionMask: MLXArray? = nil,
         outputHiddenStates: Bool = true
@@ -344,7 +344,7 @@ public class Gemma3TextModel: Module {
 
     /// Sanitize weight keys from safetensors format.
     /// Handles `language_model.` prefix from VLM conversions.
-    public func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
+    func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
         var processedWeights = weights
 
         // Handle VLM models with language_model prefix
@@ -387,7 +387,7 @@ extension Gemma3TextModel {
     ///   - repetitionContextSize: How many recent tokens to apply repetition penalty to
     ///   - eosTokenId: Token ID that signals end of generation
     /// - Returns: Array of generated token IDs (not including input)
-    public func generateTokens(
+    func generateTokens(
         inputIds: MLXArray,
         maxNewTokens: Int = 512,
         temperature: Float = 0.7,
@@ -516,4 +516,4 @@ extension Gemma3TextModel {
 // MARK: - Backward Compatibility
 
 /// Type alias for backward compatibility with existing code that uses `Gemma3TextEncoder`
-public typealias Gemma3TextEncoder = Gemma3TextModel
+typealias Gemma3TextEncoder = Gemma3TextModel

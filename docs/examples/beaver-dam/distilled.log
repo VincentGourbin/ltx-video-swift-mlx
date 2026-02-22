@@ -1,0 +1,331 @@
+LTX-2 Video Generation
+======================
+Prompt: A beaver building a dam in a forest stream, detailed fur, water splashing, natural lighting
+Output: docs/examples/beaver-dam/distilled.mp4
+Resolution: 768x512
+Frames: 25
+Model: distilled
+Seed: 42
+Prompt enhancement: enabled
+
+Creating pipeline...
+Pipeline created
+Loading models (this may take a while)...
+[LTX] Loading models for LTX-2 Distilled (~16GB)...
+  Loading Gemma model... (10%)
+[LTX] Downloading Gemma text encoder for LTX-2 Distilled (~16GB) (if needed)...
+  Preparing to download text encoder... (0%)
+  Text encoder already downloaded (100%)
+  Tokenizer already downloaded (100%)
+[LTX] [TIME] Gemma download check: 0.0s
+[LTX] Loading Gemma3 model from /Users/vincent/Library/Caches/models/ltx-distilled/text_encoder...
+[Gemma3] Config: 48 layers, 3840 hidden, 16 heads
+[Gemma3] Loaded 2189 weight tensors from safetensors
+[Gemma3] Weights loaded and evaluated successfully
+[LTX] [TIME] Gemma load: 7.4s — 48 layers
+  Loading tokenizer... (20%)
+[LTX] Loading tokenizer from /Users/vincent/Library/Caches/models/ltx-distilled/tokenizer...
+[LTX] [TIME] Tokenizer load: 3.1s
+  Loading LTX-2 weights... (30%)
+[LTX] Downloading LTX-2 components for LTX-2 Distilled (~16GB) (if needed)...
+  Downloading connector weights... (35%)
+  Connector weights already downloaded (100%)
+[LTX] Loading connector weights from: /Users/vincent/Library/Caches/models/ltx-distilled/connectors/diffusion_pytorch_model.safetensors
+[LTX] Loaded 59 tensors
+[LTX] Mapped 30 text encoder weights
+  Downloading transformer weights... (40%)
+  Unified weights already downloaded (100%)
+[LTX] Loading transformer weights from: /Users/vincent/Library/Caches/models/ltx-distilled/ltx-2-19b-distilled.safetensors
+[LTX] Loaded 4052 tensors via mmap
+[LTX] Mapped 1215 transformer weights (from 1263 total)
+[LTX] Extracted 1215 transformer weights in 1.5s
+  Downloading VAE weights... (80%)
+  VAE weights already downloaded (100%)
+[LTX] Loading VAE weights from: /Users/vincent/Library/Caches/models/ltx-distilled/vae/diffusion_pytorch_model.safetensors
+[LTX] Loaded 184 tensors
+[LTX] Mapped 92 VAE decoder weights (encoder weights skipped)
+[LTX] VAE mapped keys: ["conv_in.conv.bias", "conv_in.conv.weight", "conv_out.conv.bias", "conv_out.conv.weight", "mean_of_means", "std_of_means", "up_blocks_0.res_blocks.0.conv1.conv.bias", "up_blocks_0.res_blocks.0.conv1.conv.weight", "up_blocks_0.res_blocks.0.conv2.conv.bias", "up_blocks_0.res_blocks.0.conv2.conv.weight"]...
+[LTX] [TIME] Component downloads: 1.5s
+  Loading transformer... (50%)
+[LTX] Applying 1215 transformer weights...
+[LTX] Converted 49 float32 parameters to bfloat16
+[LTX] Applied 1215 weights to transformer (0 unmatched)
+[LTX] [TIME] Apply transformer weights: 0.0s
+[LTX] [TIME] Eval transformer weights: 4.7s
+  Loading VAE decoder... (70%)
+[LTX] VAE config: timestep_conditioning=false
+[LTX] Applying 92 VAE weights...
+[LTX] VAE: 42 model params NOT loaded:
+[LTX]   missing: last_scale_shift_table
+[LTX]   missing: last_time_embedder.timestep_embedder.linear_1.bias
+[LTX]   missing: last_time_embedder.timestep_embedder.linear_1.weight
+[LTX]   missing: last_time_embedder.timestep_embedder.linear_2.bias
+[LTX]   missing: last_time_embedder.timestep_embedder.linear_2.weight
+[LTX]   missing: timestep_scale_multiplier
+[LTX]   missing: up_blocks_0.res_blocks.0.scale_shift_table
+[LTX]   missing: up_blocks_0.res_blocks.1.scale_shift_table
+[LTX]   missing: up_blocks_0.res_blocks.2.scale_shift_table
+[LTX]   missing: up_blocks_0.res_blocks.3.scale_shift_table
+[LTX] Applied 92 weights to VAE (0 unmatched)
+[LTX] [TIME] VAE load: 0.0s
+  Loading text encoder... (90%)
+[LTX] Applying 30 text encoder weights...
+[LTX] Applied 30 weights to TextEncoder (0 unmatched)
+[LTX] [TIME] TextEncoder load: 0.0s
+  Models loaded successfully (100%)
+[LTX] All models loaded successfully
+Models loaded in 16.8s
+
+Generating video...
+[LTX] [MEM] generation start: active=47316MB peak=47321MB cache=7175MB
+[LTX] Generating video: 768x512, 25 frames
+[LTX] Prompt: A beaver building a dam in a forest stream, detailed fur, water splashing, natural lighting
+[LTX] [MEM] Phase textEncoding: cache limit set to 512MB
+[LTX] Enhancing prompt with Gemma...
+[LTX] Enhancing prompt: "A beaver building a dam in a forest stream, detailed fur, water splashing, natural lighting"
+[LTX] Stop tokens: eos=1, end_of_turn=106
+[LTX] Chat template failed (missingChatTemplate), falling back to raw tokenization
+[LTX] Enhancement input (fallback): 958 tokens
+[LTX] Generated 189 tokens in 23.2s
+[LTX] Enhanced prompt: "Style: realistic with natural lighting. A beaver, its fur a rich brown color and detailed with subtle variations in tone, is actively building a dam across a narrow forest stream. The beaver stands on its hind legs, using its large front paws to carry a small log towards the growing structure of interwoven branches and mud. Water splashes gently as the log lands against the dam, creating ripples that spread outwards. Ambient sounds of the forest surround—rustling leaves, distant birdsong, the steady murmur of the stream. As the beaver secures the log with its teeth, a louder splash is heard as water flows over the partially completed dam. The beaver then dives into the clear stream, resurfacing moments later with another branch in its mouth. It returns to the dam and repeats the process, the sound of soft splashes continuing as the dam grows incrementally—a low rumble of flowing water mixes with the sounds of the beaver' a subtle grunt as it works."
+[LTX] Using enhanced prompt for generation
+[LTX] Encoding text prompt... (CFG=1.0, enabled=false)
+[LTX] Tokenized: [1, 1024], padding=834, active=190
+[LTX]   First 5 tokens: [0, 0, 0, 0, 0]
+[LTX]   Last 10 tokens: [506, 152422, 236789, 496, 29110, 49138, 618, 625, 4146, 236761]
+[LTX] Running Gemma forward pass...
+[LTX] Got 49 hidden states from Gemma
+[LTX] [TextEnc] Gemma hidden states: 49 layers
+[LTX] [TextEnc]   layer_0: dtype=bfloat16, mean=-0.012799438, std=0.9654752
+[LTX] [TextEnc]   layer_1: dtype=bfloat16, mean=0.28608933, std=10.515361
+[LTX] [TextEnc]   layer_24: dtype=bfloat16, mean=14.893258, std=961.35297
+[LTX] [TextEnc]   layer_47: dtype=bfloat16, mean=50.296455, std=2735.7083
+[LTX] [TextEnc]   layer_48: dtype=bfloat16, mean=0.028647441, std=1.756526
+[LTX] [TextEnc] After norm_concat: dtype=bfloat16, shape=[1, 1024, 188160], mean=-1.0066857e-08, std=0.013513759
+[LTX] [TextEnc] After FE: dtype=bfloat16, shape=[1, 1024, 3840], mean=-7.874367e-06, std=0.03516316
+[LTX] [TextEnc] After connector: dtype=bfloat16, mean=0.0026326901, std=0.9999953
+[LTX] Text encoding: [1, 1024, 3840], mean=0.0026397705
+[LTX] Text mask: [1, 1024], active=1024/1024
+[LTX] promptEmbeddings shape: [1, 1024, 3840]
+[LTX] [DIAG] pos emb: mean=0.00263977, std=1.00000000
+[LTX] [DIAG] pos emb[0,0,:5] = [-0.188477, 0.570312, -0.251953, -0.335938, -0.238281]
+[LTX] [DIAG] pos emb[0,512,:5] = [0.220703, 0.613281, -0.121582, 0.024170, -0.072266]
+[LTX] textEmbeddings shape (no CFG): [1, 1024, 3840]
+[LTX] Unloading Gemma model to free memory...
+[LTX] Gemma model unloaded
+[LTX] Text encoding: 28.2s
+[LTX] [MEM] after text encoding: active=26936MB peak=52943MB cache=0MB
+[LTX] Latent shape: 4x16x24
+[LTX] Using seed: 42
+[LTX] Initial latent shape: [1, 128, 4, 16, 24]
+[LTX] [DIAG] Initial noise: mean=-0.00014699, std=1.00163078
+[LTX] Scheduler set: distilled mode with 8 steps
+[LTX] Sigma schedule: ["1.0000", "0.9937", "0.9875", "0.9812", "0.9750", "0.9094", "0.7250", "0.4219", "0.0000"]
+[LTX] [MEM] Phase denoising: cache limit set to 2048MB
+[LTX] Starting denoising loop (8 steps)...
+  Step 1/8 (σ=1.0000)
+[LTX] Step 0: patchified [1, 1536, 128], σ=1.0000
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.020s
+[LTX]   [TIME] prepareContext: 0.013s
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.821s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 7.425s
+[LTX]   [TIME] processOutput: 0.003s
+[LTX]   [TIME] TOTAL transformer forward: 8.284s
+[LTX]   Step 0: σ=1.0000→0.9937, vel mean=0.0267, std=1.1235, latent mean=-0.0003, std=0.9983
+  Step 2/8 (σ=0.9937)
+[LTX] Step 1: patchified [1, 1536, 128], σ=0.9937
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.019s
+[LTX]   [TIME] prepareContext: 0.009s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 8.366s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 8.396s
+[LTX]   Step 1: σ=0.9937→0.9875, vel mean=0.0068, std=1.2265, latent mean=-0.0004, std=0.9951
+  Step 3/8 (σ=0.9875)
+[LTX] Step 2: patchified [1, 1536, 128], σ=0.9875
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.017s
+[LTX]   [TIME] prepareContext: 0.011s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 8.627s
+[LTX]   [TIME] processOutput: 0.002s
+[LTX]   [TIME] TOTAL transformer forward: 8.659s
+[LTX]   Step 2: σ=0.9875→0.9812, vel mean=0.0067, std=1.2451, latent mean=-0.0004, std=0.9921
+  Step 4/8 (σ=0.9812)
+[LTX] Step 3: patchified [1, 1536, 128], σ=0.9812
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.031s
+[LTX]   [TIME] prepareContext: 0.009s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 8.819s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 8.862s
+[LTX]   Step 3: σ=0.9812→0.9750, vel mean=-0.0032, std=1.2953, latent mean=-0.0004, std=0.9891
+  Step 5/8 (σ=0.9750)
+[LTX] Step 4: patchified [1, 1536, 128], σ=0.9750
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.018s
+[LTX]   [TIME] prepareContext: 0.015s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 11.514s
+[LTX]   [TIME] processOutput: 0.002s
+[LTX]   [TIME] TOTAL transformer forward: 11.549s
+[LTX]   Step 4: σ=0.9750→0.9094, vel mean=-0.0057, std=1.3316, latent mean=-0.0000, std=0.9611
+  Step 6/8 (σ=0.9094)
+[LTX] Step 5: patchified [1, 1536, 128], σ=0.9094
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.004s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.019s
+[LTX]   [TIME] prepareContext: 0.017s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 12.493s
+[LTX]   [TIME] processOutput: 0.002s
+[LTX]   [TIME] TOTAL transformer forward: 12.535s
+[LTX]   Step 5: σ=0.9094→0.7250, vel mean=-0.0212, std=1.5187, latent mean=0.0039, std=0.9307
+  Step 7/8 (σ=0.7250)
+[LTX] Step 6: patchified [1, 1536, 128], σ=0.7250
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.016s
+[LTX]   [TIME] prepareContext: 0.017s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 11.448s
+[LTX]   [TIME] processOutput: 0.002s
+[LTX]   [TIME] TOTAL transformer forward: 11.484s
+[LTX]   Step 6: σ=0.7250→0.4219, vel mean=-0.0179, std=1.6059, latent mean=0.0093, std=1.0768
+  Step 8/8 (σ=0.4219)
+[LTX] Step 7: patchified [1, 1536, 128], σ=0.4219
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.016s
+[LTX]   [TIME] prepareContext: 0.015s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 10.199s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 10.231s
+[LTX]   Step 7: σ=0.4219→0.0000, vel mean=-0.0143, std=1.5539, latent mean=0.0153, std=1.5558
+[LTX] [DIAG] Final latent: mean=0.015327102, std=1.555752, min=-7.583993, max=7.18706
+[LTX] [DIAG] Spatial variance (ch0, f0): 2.4752529
+[LTX] [DIAG] scale_shift_table: mean=-0.16015625, std=0.30859375
+[LTX] [DIAG] block0.scale_shift_table: mean=-0.08691406, std=0.20019531
+[LTX] [DIAG] block0.attn1.q_norm.weight: mean=0.18261719, std=0.17382812 (1.0/0.0 = NOT loaded)
+[LTX] Transformer unloaded for VAE decode phase
+[LTX] [MEM] after transformer unload: active=26962MB peak=52943MB cache=0MB
+[LTX] [MEM] Phase vaeDecode: cache limit set to 512MB
+[LTX] Decoding latents to video... (timestep=nil)
+[LTX] VAE Decoder input: [1, 128, 4, 16, 24]
+[LTX] After denormalize: mean=0.0013901959
+[LTX] After conv_in: [1, 1024, 4, 16, 24], mean=0.0385782
+[LTX] After up_blocks_0 (res): [1, 1024, 4, 16, 24], mean=0.005261773
+[LTX] After up_blocks_1 (d2s): [1, 512, 7, 32, 48], mean=-0.0995038
+[LTX] After up_blocks_2 (res): [1, 512, 7, 32, 48], mean=-0.0152299125
+[LTX] After up_blocks_3 (d2s): [1, 256, 13, 64, 96], mean=-0.24908909
+[LTX] After up_blocks_4 (res): [1, 256, 13, 64, 96], mean=-0.02663504
+[LTX] After up_blocks_5 (d2s): [1, 128, 25, 128, 192], mean=-0.6640086
+[LTX] After up_blocks_6 (res): [1, 128, 25, 128, 192], mean=-1.8445696
+[LTX] After conv_out: [1, 48, 25, 128, 192], mean=-0.1125873
+[LTX] After unpatchify: [1, 3, 25, 512, 768]
+[LTX] VAE raw output: mean=-0.1125873, min=-1.4934831, max=1.6583886
+[LTX] Decoded video shape: [25, 512, 768, 3]
+[LTX] Generated 25 frames
+[LTX] [MEM] after VAE decode: active=28082MB peak=52943MB cache=427MB
+Generation completed in 113.0s
+
+Exporting to docs/examples/beaver-dam/distilled.mp4...
+Video saved to: /Users/vincent/Developpements/ltx-video-swift-mlx/docs/examples/beaver-dam/distilled.mp4
+
+--- Summary ---
+Frames: 25
+Resolution: 768x512
+Seed: 42
+Generation time: 112.8s
+
+--- Profiling ---
+Text Encoding (Gemma + FE + Connector): 0.0s
+Denoising (8 steps):                 80.0s
+  Step 0: 8.3s
+  Step 1: 8.4s
+  Step 2: 8.7s
+  Step 3: 8.9s
+  Step 4: 11.6s
+  Step 5: 12.5s
+  Step 6: 11.5s
+  Step 7: 10.2s
+  Average per step:                      10.0s
+VAE Decoding:                            4.3s
+Model Loading:                           16.8s
+Pipeline total (excl. loading/export):   84.3s
+
+--- Memory ---
+Peak GPU memory:                         52943 MB
+Mean GPU memory (denoising):              26962 MB

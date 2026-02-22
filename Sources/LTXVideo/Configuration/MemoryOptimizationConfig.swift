@@ -3,12 +3,27 @@
 
 import Foundation
 
-/// Memory optimization configuration for LTX-2 generation
-///
 /// Controls how aggressively the pipeline manages GPU memory during generation.
-/// Higher optimization levels trade speed for lower peak memory usage.
 ///
-/// Follows the pattern from flux-2-swift-mlx.
+/// Higher optimization levels trade speed for lower peak memory usage. Choose
+/// a preset based on your machine's available RAM, or use
+/// ``recommended(forRAMGB:)`` for automatic selection.
+///
+/// ## Presets
+/// | Preset | Eval Freq | Cache Clear | Unload | VAE Tiling | Best For |
+/// |--------|-----------|-------------|--------|------------|----------|
+/// | ``disabled`` | 8 | No | No | No | 128+ GB |
+/// | ``light`` | 4 | No | Yes | No | 64-96 GB |
+/// | ``moderate`` | 2 | Yes | Yes | 8 frames | 32-64 GB |
+/// | ``aggressive`` | 1 | Yes | Yes | 6 frames | 16-32 GB |
+///
+/// ## Example
+/// ```swift
+/// let pipeline = LTXPipeline(
+///     model: .dev,
+///     memoryOptimization: .moderate
+/// )
+/// ```
 public struct MemoryOptimizationConfig: Sendable {
     /// How often to evaluate lazy computation graphs (every N transformer blocks)
     /// Lower values = more frequent eval = lower peak memory but slower
@@ -24,16 +39,28 @@ public struct MemoryOptimizationConfig: Sendable {
     /// Sleep duration (seconds) after unloading a component, to allow GPU memory reclaim
     public var unloadSleepSeconds: Double
 
+    /// VAE temporal tile size (latent frames per chunk). 0 = disabled (decode all at once).
+    /// For long videos, tiling reduces peak VAE memory by ~75%.
+    /// Recommended: 8 for videos > 97 frames, 0 for shorter videos.
+    public var vaeTemporalTileSize: Int
+
+    /// VAE temporal tile overlap (latent frames). Blended with linear interpolation.
+    public var vaeTemporalTileOverlap: Int
+
     public init(
         evalFrequency: Int = 4,
         clearCacheOnEval: Bool = false,
         unloadAfterUse: Bool = true,
-        unloadSleepSeconds: Double = 0.5
+        unloadSleepSeconds: Double = 0.5,
+        vaeTemporalTileSize: Int = 0,
+        vaeTemporalTileOverlap: Int = 1
     ) {
         self.evalFrequency = evalFrequency
         self.clearCacheOnEval = clearCacheOnEval
         self.unloadAfterUse = unloadAfterUse
         self.unloadSleepSeconds = unloadSleepSeconds
+        self.vaeTemporalTileSize = vaeTemporalTileSize
+        self.vaeTemporalTileOverlap = vaeTemporalTileOverlap
     }
 
     // MARK: - Presets
@@ -43,7 +70,8 @@ public struct MemoryOptimizationConfig: Sendable {
         evalFrequency: 8,
         clearCacheOnEval: false,
         unloadAfterUse: false,
-        unloadSleepSeconds: 0
+        unloadSleepSeconds: 0,
+        vaeTemporalTileSize: 0
     )
 
     /// Light optimization — eval every 4 blocks, unload after use
@@ -51,23 +79,28 @@ public struct MemoryOptimizationConfig: Sendable {
         evalFrequency: 4,
         clearCacheOnEval: false,
         unloadAfterUse: true,
-        unloadSleepSeconds: 0.3
+        unloadSleepSeconds: 0.3,
+        vaeTemporalTileSize: 0
     )
 
-    /// Moderate optimization — eval every 2 blocks, clear cache
+    /// Moderate optimization — eval every 2 blocks, clear cache, VAE tiling
     public static let moderate = MemoryOptimizationConfig(
         evalFrequency: 2,
         clearCacheOnEval: true,
         unloadAfterUse: true,
-        unloadSleepSeconds: 0.5
+        unloadSleepSeconds: 0.5,
+        vaeTemporalTileSize: 8,
+        vaeTemporalTileOverlap: 1
     )
 
-    /// Aggressive optimization — eval every block, clear cache
+    /// Aggressive optimization — eval every block, clear cache, VAE tiling
     public static let aggressive = MemoryOptimizationConfig(
         evalFrequency: 1,
         clearCacheOnEval: true,
         unloadAfterUse: true,
-        unloadSleepSeconds: 1.0
+        unloadSleepSeconds: 1.0,
+        vaeTemporalTileSize: 6,
+        vaeTemporalTileOverlap: 1
     )
 
     /// Default preset

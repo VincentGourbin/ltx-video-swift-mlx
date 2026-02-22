@@ -10,15 +10,15 @@ import MLXNN
 // Note: Gemma3Config is defined in Gemma3/Gemma3Config.swift
 
 /// Configuration for the text encoder (projection layers)
-public struct TextEncoderConfig: Sendable {
-    public let hiddenDim: Int
-    public let numGemmaLayers: Int
-    public let connectorHeads: Int
-    public let connectorHeadDim: Int
-    public let connectorLayers: Int
-    public let numRegisters: Int
+struct TextEncoderConfig: Sendable {
+    let hiddenDim: Int
+    let numGemmaLayers: Int
+    let connectorHeads: Int
+    let connectorHeadDim: Int
+    let connectorLayers: Int
+    let numRegisters: Int
 
-    public static let `default` = TextEncoderConfig(
+    static let `default` = TextEncoderConfig(
         hiddenDim: 3840,
         numGemmaLayers: 49,  // 48 layers + 1 embedding
         connectorHeads: 30,
@@ -27,7 +27,7 @@ public struct TextEncoderConfig: Sendable {
         numRegisters: 128
     )
 
-    public init(
+    init(
         hiddenDim: Int = 3840,
         numGemmaLayers: Int = 49,
         connectorHeads: Int = 30,
@@ -47,11 +47,11 @@ public struct TextEncoderConfig: Sendable {
 // MARK: - Encoder Output
 
 /// Output from the video Gemma encoder
-public struct VideoGemmaEncoderOutput {
+struct VideoGemmaEncoderOutput {
     /// Encoded video features (B, T, 3840)
-    public let videoEncoding: MLXArray
+    let videoEncoding: MLXArray
     /// Attention mask (B, T)
-    public let attentionMask: MLXArray
+    let attentionMask: MLXArray
 }
 
 // MARK: - Feature Extractor
@@ -122,13 +122,13 @@ private func normAndConcatPaddedBatch(
 
 /// Feature extractor for Gemma hidden states
 /// Projects concatenated hidden states from all layers to fixed dimension
-public class GemmaFeaturesExtractor: Module {
+class GemmaFeaturesExtractor: Module {
     let hiddenDim: Int
     let numLayers: Int
 
     @ModuleInfo(key: "aggregate_embed") var aggregateEmbed: Linear
 
-    public init(hiddenDim: Int = 3840, numLayers: Int = 49) {
+    init(hiddenDim: Int = 3840, numLayers: Int = 49) {
         self.hiddenDim = hiddenDim
         self.numLayers = numLayers
 
@@ -141,7 +141,7 @@ public class GemmaFeaturesExtractor: Module {
     }
 
     /// Project concatenated hidden states
-    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
         return aggregateEmbed(x)
     }
 
@@ -150,7 +150,7 @@ public class GemmaFeaturesExtractor: Module {
     /// Runs the FE matmul (188160→3840) in float32 for numerical stability,
     /// then casts back to input dtype. This eliminates bf16 accumulation order
     /// differences vs Python for the large dot products (188160 multiply-accumulates).
-    public func extractFromHiddenStates(
+    func extractFromHiddenStates(
         hiddenStates: [MLXArray],
         attentionMask: MLXArray,
         paddingSide: String = "left"
@@ -192,7 +192,7 @@ public class GemmaFeaturesExtractor: Module {
 /// - RMSNorm is applied on full inner_dim (3840) BEFORE head reshape
 /// - SPLIT RoPE is applied on (B, H, T, D) AFTER head reshape
 /// - This matches Python LTX-2-MLX connector.Attention behavior
-public class ConnectorAttention: Module {
+class ConnectorAttention: Module {
     let heads: Int
     let dimHead: Int
     let innerDim: Int
@@ -205,7 +205,7 @@ public class ConnectorAttention: Module {
     @ModuleInfo(key: "q_norm") var qNorm: RMSNorm
     @ModuleInfo(key: "k_norm") var kNorm: RMSNorm
 
-    public init(
+    init(
         dim: Int,
         heads: Int = 30,
         dimHead: Int = 128,
@@ -225,7 +225,7 @@ public class ConnectorAttention: Module {
         self._kNorm.wrappedValue = RMSNorm(dims: innerDim, eps: normEps)
     }
 
-    public func callAsFunction(
+    func callAsFunction(
         _ x: MLXArray,
         mask: MLXArray? = nil,
         pe: (cos: MLXArray, sin: MLXArray)? = nil
@@ -269,11 +269,11 @@ public class ConnectorAttention: Module {
 // MARK: - Feed-Forward for Connector
 
 /// GELU feed-forward for connector
-public class ConnectorFeedForward: Module {
+class ConnectorFeedForward: Module {
     @ModuleInfo(key: "project_in") var projectIn: GELUProjection
     @ModuleInfo(key: "project_out") var projectOut: Linear
 
-    public init(dim: Int, dimOut: Int? = nil) {
+    init(dim: Int, dimOut: Int? = nil) {
         let outDim = dimOut ?? dim
         let innerDim = dim * 4
 
@@ -281,7 +281,7 @@ public class ConnectorFeedForward: Module {
         self._projectOut.wrappedValue = Linear(innerDim, outDim, bias: true)
     }
 
-    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
         var out = projectIn(x)
         out = projectOut(out)
         return out
@@ -289,14 +289,14 @@ public class ConnectorFeedForward: Module {
 }
 
 /// GELU projection layer
-public class GELUProjection: Module {
+class GELUProjection: Module {
     @ModuleInfo(key: "proj") var proj: Linear
 
-    public init(dim: Int, innerDim: Int) {
+    init(dim: Int, innerDim: Int) {
         self._proj.wrappedValue = Linear(dim, innerDim, bias: true)
     }
 
-    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
         // Python connector uses nn.gelu() (exact erf-based), NOT nn.gelu_approx()
         return MLXNN.gelu(proj(x))
     }
@@ -305,13 +305,13 @@ public class GELUProjection: Module {
 // MARK: - Transformer Block 1D
 
 /// Simple 1D transformer block for sequence processing
-public class BasicTransformerBlock1D: Module {
+class BasicTransformerBlock1D: Module {
     let normEps: Float
 
     @ModuleInfo(key: "attn1") var attn1: ConnectorAttention
     @ModuleInfo(key: "ff") var ff: ConnectorFeedForward
 
-    public init(
+    init(
         dim: Int,
         heads: Int = 30,
         dimHead: Int = 128,
@@ -329,7 +329,7 @@ public class BasicTransformerBlock1D: Module {
         self._ff.wrappedValue = ConnectorFeedForward(dim: dim, dimOut: dim)
     }
 
-    public func callAsFunction(
+    func callAsFunction(
         _ x: MLXArray,
         mask: MLXArray? = nil,
         pe: (cos: MLXArray, sin: MLXArray)? = nil
@@ -370,7 +370,7 @@ public class BasicTransformerBlock1D: Module {
 
 /// 1D embeddings connector for processing text features
 /// Applies transformer blocks with RoPE and learnable registers
-public class Embeddings1DConnector: Module {
+class Embeddings1DConnector: Module {
     let numAttentionHeads: Int
     let innerDim: Int
     let positionalEmbeddingTheta: Float
@@ -381,7 +381,7 @@ public class Embeddings1DConnector: Module {
     @ModuleInfo(key: "transformer_1d_blocks") var transformer1DBlocks: [BasicTransformerBlock1D]
     @ParameterInfo(key: "learnable_registers") var learnableRegisters: MLXArray
 
-    public init(
+    init(
         attentionHeadDim: Int = 128,
         numAttentionHeads: Int = 30,
         numLayers: Int = 2,
@@ -465,7 +465,7 @@ public class Embeddings1DConnector: Module {
         return (newHiddenStates, newMask)
     }
 
-    public func callAsFunction(
+    func callAsFunction(
         _ hiddenStates: MLXArray,
         attentionMask: MLXArray? = nil
     ) -> (MLXArray, MLXArray) {
@@ -530,11 +530,11 @@ public class Embeddings1DConnector: Module {
 ///
 /// Output is 3840-dim embeddings. Caption projection (3840 → 4096)
 /// is handled by the transformer model.
-public class VideoGemmaTextEncoderModel: Module {
-    @ModuleInfo(key: "feature_extractor") public var featureExtractor: GemmaFeaturesExtractor
+class VideoGemmaTextEncoderModel: Module {
+    @ModuleInfo(key: "feature_extractor") var featureExtractor: GemmaFeaturesExtractor
     @ModuleInfo(key: "embeddings_connector") var embeddingsConnector: Embeddings1DConnector
 
-    public init(
+    init(
         featureExtractor: GemmaFeaturesExtractor? = nil,
         embeddingsConnector: Embeddings1DConnector? = nil
     ) {
@@ -570,7 +570,7 @@ public class VideoGemmaTextEncoderModel: Module {
     ///   - attentionMask: Binary attention mask [B, T]
     ///   - paddingSide: Side where padding was applied
     /// - Returns: VideoGemmaEncoderOutput with encoded text (3840 dim)
-    public func encodeFromHiddenStates(
+    func encodeFromHiddenStates(
         hiddenStates: [MLXArray],
         attentionMask: MLXArray,
         paddingSide: String = "left"
@@ -626,7 +626,7 @@ public class VideoGemmaTextEncoderModel: Module {
     }
 
     /// Encode from already-projected features
-    public func encodeProjected(
+    func encodeProjected(
         projectedFeatures: MLXArray,
         attentionMask: MLXArray
     ) -> VideoGemmaEncoderOutput {
@@ -643,7 +643,7 @@ public class VideoGemmaTextEncoderModel: Module {
         )
     }
 
-    public func callAsFunction(
+    func callAsFunction(
         hiddenStates: [MLXArray],
         attentionMask: MLXArray,
         paddingSide: String = "left"
@@ -659,7 +659,7 @@ public class VideoGemmaTextEncoderModel: Module {
 // MARK: - Factory Functions
 
 /// Create a text encoder with default LTX-2 configuration
-public func createTextEncoder(
+func createTextEncoder(
     config: TextEncoderConfig = .default
 ) -> VideoGemmaTextEncoderModel {
     let featureExtractor = GemmaFeaturesExtractor(
@@ -688,12 +688,12 @@ public func createTextEncoder(
 /// This class wraps the text encoding pipeline and provides a simple interface
 /// for encoding prompts. The actual Gemma model should be loaded separately
 /// and hidden states passed to the encode methods.
-public class LTXTextEncoder: Module {
-    public let config: TextEncoderConfig
+class LTXTextEncoder: Module {
+    let config: TextEncoderConfig
 
     @ModuleInfo(key: "encoder") var encoder: VideoGemmaTextEncoderModel
 
-    public init(config: TextEncoderConfig = .default) {
+    init(config: TextEncoderConfig = .default) {
         self.config = config
         self._encoder.wrappedValue = createTextEncoder(config: config)
     }
@@ -705,7 +705,7 @@ public class LTXTextEncoder: Module {
     ///   - attentionMask: Binary attention mask [B, T]
     ///   - paddingSide: Padding side ("left" or "right")
     /// - Returns: Encoded features (B, T, 3840) and attention mask
-    public func encode(
+    func encode(
         hiddenStates: [MLXArray],
         attentionMask: MLXArray,
         paddingSide: String = "left"
@@ -718,7 +718,7 @@ public class LTXTextEncoder: Module {
     }
 
     /// Get the output dimension of the encoder
-    public var outputDimension: Int {
+    var outputDimension: Int {
         return config.hiddenDim
     }
 }

@@ -7,32 +7,32 @@ import Foundation
 // MARK: - Spatio-Temporal Scale Factors
 
 /// Scale factors for converting between pixel and latent space
-public struct SpatioTemporalScaleFactors: Sendable {
+struct SpatioTemporalScaleFactors: Sendable {
     /// Temporal scale factor (frames to latent temporal dimension)
-    public let time: Int
+    let time: Int
 
     /// Height scale factor
-    public let height: Int
+    let height: Int
 
     /// Width scale factor
-    public let width: Int
+    let width: Int
 
     /// Default LTX-2 scale factors
     /// Output: F = 8*(F'-1) + 1, H = 32*H', W = 32*W'
-    public static let `default` = SpatioTemporalScaleFactors(
+    static let `default` = SpatioTemporalScaleFactors(
         time: 8,
         height: 32,
         width: 32
     )
 
-    public init(time: Int, height: Int, width: Int) {
+    init(time: Int, height: Int, width: Int) {
         self.time = time
         self.height = height
         self.width = width
     }
 
     /// Compute latent dimensions from pixel dimensions
-    public func pixelToLatent(frames: Int, height: Int, width: Int) -> (frames: Int, height: Int, width: Int) {
+    func pixelToLatent(frames: Int, height: Int, width: Int) -> (frames: Int, height: Int, width: Int) {
         // For LTX-2: F' = (F - 1) / time_scale + 1, but we use simplified version
         let latentFrames = (frames - 1) / time + 1
         let latentHeight = height / self.height
@@ -41,7 +41,7 @@ public struct SpatioTemporalScaleFactors: Sendable {
     }
 
     /// Compute pixel dimensions from latent dimensions
-    public func latentToPixel(frames: Int, height: Int, width: Int) -> (frames: Int, height: Int, width: Int) {
+    func latentToPixel(frames: Int, height: Int, width: Int) -> (frames: Int, height: Int, width: Int) {
         let pixelFrames = (frames - 1) * time + 1
         let pixelHeight = height * self.height
         let pixelWidth = width * self.width
@@ -52,38 +52,38 @@ public struct SpatioTemporalScaleFactors: Sendable {
 // MARK: - Video Latent Shape
 
 /// Shape information for video latents
-public struct VideoLatentShape: Sendable {
+struct VideoLatentShape: Sendable {
     /// Batch size
-    public let batch: Int
+    let batch: Int
 
     /// Number of latent channels (128 for LTX-2)
-    public let channels: Int
+    let channels: Int
 
     /// Number of latent frames (temporal dimension)
-    public let frames: Int
+    let frames: Int
 
     /// Latent height
-    public let height: Int
+    let height: Int
 
     /// Latent width
-    public let width: Int
+    let width: Int
 
     /// Total number of spatial-temporal tokens
-    public var tokenCount: Int {
+    var tokenCount: Int {
         return frames * height * width
     }
 
     /// Shape as array [B, C, F, H, W]
-    public var shape: [Int] {
+    var shape: [Int] {
         return [batch, channels, frames, height, width]
     }
 
     /// Shape for patchified representation [B, T, C] where T = F*H*W
-    public var patchifiedShape: [Int] {
+    var patchifiedShape: [Int] {
         return [batch, tokenCount, channels]
     }
 
-    public init(batch: Int, channels: Int, frames: Int, height: Int, width: Int) {
+    init(batch: Int, channels: Int, frames: Int, height: Int, width: Int) {
         self.batch = batch
         self.channels = channels
         self.frames = frames
@@ -92,7 +92,7 @@ public struct VideoLatentShape: Sendable {
     }
 
     /// Create from pixel dimensions
-    public static func fromPixelDimensions(
+    static func fromPixelDimensions(
         batch: Int = 1,
         channels: Int = 128,
         frames: Int,
@@ -111,7 +111,7 @@ public struct VideoLatentShape: Sendable {
     }
 
     /// Get corresponding pixel dimensions
-    public func pixelDimensions(
+    func pixelDimensions(
         scaleFactors: SpatioTemporalScaleFactors = .default
     ) -> (frames: Int, height: Int, width: Int) {
         return scaleFactors.latentToPixel(frames: frames, height: height, width: width)
@@ -122,7 +122,7 @@ public struct VideoLatentShape: Sendable {
 
 extension VideoLatentShape {
     /// Validate that dimensions are compatible with LTX-2 constraints
-    public func validate() throws {
+    func validate() throws {
         // Get pixel dimensions
         let (pixelFrames, pixelHeight, pixelWidth) = pixelDimensions()
 
@@ -159,21 +159,21 @@ extension VideoLatentShape {
 
 extension VideoLatentShape {
     /// Standard 480p video at ~5 seconds
-    public static let standard480p = VideoLatentShape.fromPixelDimensions(
+    static let standard480p = VideoLatentShape.fromPixelDimensions(
         frames: 121,  // 8*15 + 1 = ~5 seconds at 24fps
         height: 480,
         width: 704
     )
 
     /// Standard 512x512 square video
-    public static let standard512 = VideoLatentShape.fromPixelDimensions(
+    static let standard512 = VideoLatentShape.fromPixelDimensions(
         frames: 25,   // 8*3 + 1 = ~1 second at 24fps
         height: 512,
         width: 512
     )
 
     /// 768x512 landscape
-    public static let landscape768x512 = VideoLatentShape.fromPixelDimensions(
+    static let landscape768x512 = VideoLatentShape.fromPixelDimensions(
         frames: 49,   // 8*6 + 1 = ~2 seconds at 24fps
         height: 512,
         width: 768

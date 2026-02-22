@@ -5,23 +5,53 @@ import Foundation
 @preconcurrency import MLX
 import MLXNN
 
-/// LTX-2 Video Generation Framework
+/// LTX-2 Video Generation Framework for Apple Silicon
 ///
-/// This framework provides text-to-video generation using the LTX-2 model
-/// optimized for Apple Silicon via MLX.
+/// Provides text-to-video generation using the LTX-2 model from Lightricks,
+/// optimized for Apple Silicon via the MLX framework.
 ///
-/// ## Usage
+/// ## Quick Start
 /// ```swift
+/// import LTXVideo
+///
 /// let pipeline = LTXPipeline(model: .distilled)
 /// try await pipeline.loadModels()
-/// let video = try await pipeline.generateVideo(
-///     prompt: "A cat walking in the garden",
-///     width: 512,
-///     height: 512,
-///     numFrames: 25
+/// let result = try await pipeline.generateVideo(
+///     prompt: "A cat walking in a garden",
+///     config: LTXVideoGenerationConfig(width: 512, height: 512, numFrames: 25)
 /// )
-/// try pipeline.exportVideo(video, to: "output.mp4")
+/// try await VideoExporter.exportVideo(
+///     frames: result.frames, width: 512, height: 512, to: URL(fileURLWithPath: "output.mp4")
+/// )
 /// ```
+///
+/// ## Two-Stage Pipeline (Higher Quality)
+/// ```swift
+/// let pipeline = LTXPipeline(model: .dev)
+/// try await pipeline.loadModels()
+/// let loraPath = try await pipeline.downloadDistilledLoRA()
+/// try await pipeline.fuseLoRA(from: loraPath)
+/// let upscalerPath = try await pipeline.downloadUpscalerWeights()
+///
+/// let config = LTXVideoGenerationConfig(
+///     width: 768, height: 512, numFrames: 241,
+///     numSteps: 8, cfgScale: 1.0, twoStage: true
+/// )
+/// let result = try await pipeline.generateVideoTwoStage(
+///     prompt: "Ocean waves at sunset",
+///     config: config,
+///     upscalerWeightsPath: upscalerPath
+/// )
+/// ```
+///
+/// ## Model Variants
+/// - ``LTXModel/distilled``: Fast generation (~16 GB RAM, 8 steps)
+/// - ``LTXModel/dev``: Best quality (~25 GB RAM, 40 steps)
+///
+/// ## Constraints
+/// - **Frame count**: Must be `8n + 1` (9, 17, 25, 33, 41, ...)
+/// - **Resolution**: Width and height must be divisible by 32
+/// - **Two-stage**: Width and height must be divisible by 64
 public enum LTXVideo {
     /// Framework version
     public static let version = "0.1.0"
@@ -219,8 +249,9 @@ public actor LTXProfiler {
 
 // MARK: - Video Generation Result
 
-/// Result of video generation
-/// Detailed timing breakdown for generation profiling
+/// Detailed timing breakdown for each phase of the generation pipeline.
+///
+/// Populated when profiling is enabled via `profile: true` on generation methods.
 public struct GenerationTimings: Sendable {
     /// Text encoding time (Gemma + Feature Extractor + Connector)
     public var textEncoding: TimeInterval = 0
@@ -232,28 +263,80 @@ public struct GenerationTimings: Sendable {
     public var totalDenoise: TimeInterval { denoiseSteps.reduce(0, +) }
     /// Average per-step denoising time
     public var avgStepTime: TimeInterval { denoiseSteps.isEmpty ? 0 : totalDenoise / Double(denoiseSteps.count) }
+
+    /// Peak GPU memory usage in MB (sampled during generation)
+    public var peakMemoryMB: Int = 0
+    /// Mean GPU memory usage in MB (averaged over denoising steps)
+    public var meanMemoryMB: Int = 0
+    /// Memory samples collected during denoising (in bytes)
+    internal var memorySamples: [Int] = []
+
+    /// Record a memory sample and update peak/mean
+    internal mutating func sampleMemory() {
+        let snapshot = Memory.snapshot()
+        let activeBytes = snapshot.activeMemory
+        memorySamples.append(activeBytes)
+        let activeMB = activeBytes / (1024 * 1024)
+        if activeMB > peakMemoryMB {
+            peakMemoryMB = activeMB
+        }
+        if !memorySamples.isEmpty {
+            let totalBytes = memorySamples.reduce(0, +)
+            meanMemoryMB = totalBytes / memorySamples.count / (1024 * 1024)
+        }
+    }
+
+    /// Update peak from Memory.peakMemory (captures GPU-level peak)
+    internal mutating func capturePeakMemory() {
+        let snapshot = Memory.snapshot()
+        let peakMB = snapshot.peakMemory / (1024 * 1024)
+        if peakMB > peakMemoryMB {
+            peakMemoryMB = peakMB
+        }
+    }
 }
 
+/// The output of a video generation run.
+///
+/// Contains the generated frames as an MLX tensor, the seed used for
+/// reproducibility, timing information, and convenience accessors for
+/// frame count and dimensions.
+///
+/// ## Exporting
+/// Use ``VideoExporter/exportVideo(frames:width:height:fps:to:)`` to save
+/// the result as an MP4 file:
+/// ```swift
+/// try await VideoExporter.exportVideo(
+///     frames: result.frames,
+///     width: result.width,
+///     height: result.height,
+///     to: URL(fileURLWithPath: "output.mp4")
+/// )
+/// ```
 public struct VideoGenerationResult: @unchecked Sendable {
-    /// Generated frames as MLX array (F, H, W, C) in [0, 255] uint8
+    /// Generated video frames as an MLX array.
+    ///
+    /// Shape: `(F, H, W, C)` where `F` = frame count, `H` = height,
+    /// `W` = width, `C` = 3 (RGB). Values are uint8 in `[0, 255]`.
     public let frames: MLXArray
 
-    /// Number of frames
+    /// Number of generated frames
     public var numFrames: Int { frames.dim(0) }
 
-    /// Frame height
+    /// Frame height in pixels
     public var height: Int { frames.dim(1) }
 
-    /// Frame width
+    /// Frame width in pixels
     public var width: Int { frames.dim(2) }
 
-    /// Generation seed used
+    /// The random seed used for generation (useful for reproducibility)
     public let seed: UInt64
 
-    /// Total generation time in seconds
+    /// Total wall-clock generation time in seconds (excludes model loading)
     public let generationTime: TimeInterval
 
-    /// Detailed timing breakdown (populated when profiling)
+    /// Per-phase timing breakdown. Only populated when `profile: true`
+    /// is passed to the generation method.
     public let timings: GenerationTimings?
 
     public init(frames: MLXArray, seed: UInt64, generationTime: TimeInterval, timings: GenerationTimings? = nil) {

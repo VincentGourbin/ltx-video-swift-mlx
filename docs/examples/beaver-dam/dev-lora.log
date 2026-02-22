@@ -1,0 +1,1273 @@
+LTX-2 Video Generation
+======================
+Prompt: A beaver building a dam in a forest stream, detailed fur, water splashing, natural lighting
+Output: docs/examples/beaver-dam/dev-lora.mp4
+Resolution: 768x512
+Frames: 25
+Model: dev
+Distilled LoRA: enabled
+Seed: 42
+Prompt enhancement: enabled
+
+Distilled LoRA: will fuse into dev model (8 steps, no CFG)
+Creating pipeline...
+Pipeline created
+Loading models (this may take a while)...
+[LTX] Loading models for LTX-2 Dev (~25GB)...
+  Loading Gemma model... (10%)
+[LTX] Downloading Gemma text encoder for LTX-2 Dev (~25GB) (if needed)...
+  Preparing to download text encoder... (0%)
+  Text encoder already downloaded (100%)
+  Tokenizer already downloaded (100%)
+[LTX] [TIME] Gemma download check: 0.0s
+[LTX] Loading Gemma3 model from /Users/vincent/Library/Caches/models/ltx-dev/text_encoder...
+[Gemma3] Config: 48 layers, 3840 hidden, 16 heads
+[Gemma3] Loaded 1065 weight tensors from safetensors
+[Gemma3] Weights loaded and evaluated successfully
+[LTX] [TIME] Gemma load: 7.4s — 48 layers
+  Loading tokenizer... (20%)
+[LTX] Loading tokenizer from /Users/vincent/Library/Caches/models/ltx-dev/tokenizer...
+[LTX] [TIME] Tokenizer load: 3.1s
+  Loading LTX-2 weights... (30%)
+[LTX] Downloading LTX-2 components for LTX-2 Dev (~25GB) (if needed)...
+  Downloading connector weights... (35%)
+  Connector weights already downloaded (100%)
+[LTX] Loading connector weights from: /Users/vincent/Library/Caches/models/ltx-dev/connectors/diffusion_pytorch_model.safetensors
+[LTX] Loaded 59 tensors
+[LTX] Mapped 30 text encoder weights
+  Downloading transformer weights... (40%)
+  Unified weights already downloaded (100%)
+[LTX] Loading transformer weights from: /Users/vincent/Library/Caches/models/ltx-dev/ltx-2-19b-dev.safetensors
+[LTX] Loaded 4052 tensors via mmap
+[LTX] Mapped 1215 transformer weights (from 1263 total)
+[LTX] Extracted 1215 transformer weights in 1.3s
+  Downloading VAE weights... (80%)
+  VAE weights already downloaded (100%)
+[LTX] Loading VAE weights from: /Users/vincent/Library/Caches/models/ltx-dev/vae/diffusion_pytorch_model.safetensors
+[LTX] Loaded 184 tensors
+[LTX] Mapped 92 VAE decoder weights (encoder weights skipped)
+[LTX] VAE mapped keys: ["conv_in.conv.bias", "conv_in.conv.weight", "conv_out.conv.bias", "conv_out.conv.weight", "mean_of_means", "std_of_means", "up_blocks_0.res_blocks.0.conv1.conv.bias", "up_blocks_0.res_blocks.0.conv1.conv.weight", "up_blocks_0.res_blocks.0.conv2.conv.bias", "up_blocks_0.res_blocks.0.conv2.conv.weight"]...
+[LTX] [TIME] Component downloads: 1.3s
+  Loading transformer... (50%)
+[LTX] Applying 1215 transformer weights...
+[LTX] Converted 49 float32 parameters to bfloat16
+[LTX] Applied 1215 weights to transformer (0 unmatched)
+[LTX] [TIME] Apply transformer weights: 0.0s
+[LTX] [TIME] Eval transformer weights: 3.8s
+  Loading VAE decoder... (70%)
+[LTX] VAE config: timestep_conditioning=false
+[LTX] Applying 92 VAE weights...
+[LTX] VAE: 42 model params NOT loaded:
+[LTX]   missing: last_scale_shift_table
+[LTX]   missing: last_time_embedder.timestep_embedder.linear_1.bias
+[LTX]   missing: last_time_embedder.timestep_embedder.linear_1.weight
+[LTX]   missing: last_time_embedder.timestep_embedder.linear_2.bias
+[LTX]   missing: last_time_embedder.timestep_embedder.linear_2.weight
+[LTX]   missing: timestep_scale_multiplier
+[LTX]   missing: up_blocks_0.res_blocks.0.scale_shift_table
+[LTX]   missing: up_blocks_0.res_blocks.1.scale_shift_table
+[LTX]   missing: up_blocks_0.res_blocks.2.scale_shift_table
+[LTX]   missing: up_blocks_0.res_blocks.3.scale_shift_table
+[LTX] Applied 92 weights to VAE (0 unmatched)
+[LTX] [TIME] VAE load: 0.0s
+  Loading text encoder... (90%)
+[LTX] Applying 30 text encoder weights...
+[LTX] Applied 30 weights to TextEncoder (0 unmatched)
+[LTX] [TIME] TextEncoder load: 0.0s
+  Models loaded successfully (100%)
+[LTX] All models loaded successfully
+Models loaded in 15.7s
+Downloading distilled LoRA (if needed)...
+Fusing distilled LoRA into transformer...
+[LTX] LoRA: Processing 1371 layers in 50 batches
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.4.video_to_audio_attn.to_v.weight, skipping
+[LTX]   Batch 'transformer_blocks.4': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.0.audio_attn1.to_q.weight, skipping
+[LTX]   Batch 'transformer_blocks.0': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.5.audio_to_video_attn.to_q.weight, skipping
+[LTX]   Batch 'transformer_blocks.5': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.36.video_to_audio_attn.to_out.weight, skipping
+[LTX]   Batch 'transformer_blocks.36': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.8.audio_attn1.to_v.weight, skipping
+[LTX]   Batch 'transformer_blocks.8': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.7.video_to_audio_attn.to_v.weight, skipping
+[LTX]   Batch 'transformer_blocks.7': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.37.audio_ff.net.2.weight, skipping
+[LTX]   Batch 'transformer_blocks.37': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.10.audio_to_video_attn.to_v.weight, skipping
+[LTX]   Batch 'transformer_blocks.10': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.40.audio_attn1.to_q.weight, skipping
+[LTX]   Batch 'transformer_blocks.40': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.47.audio_ff.net.2.weight, skipping
+[LTX]   Batch 'transformer_blocks.47': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.18.audio_attn1.to_v.weight, skipping
+[LTX]   Batch 'transformer_blocks.18': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.30.audio_attn2.to_k.weight, skipping
+[LTX]   Batch 'transformer_blocks.30': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.3.audio_ff.net.2.weight, skipping
+[LTX]   Batch 'transformer_blocks.3': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.39.audio_attn1.to_q.weight, skipping
+[LTX]   Batch 'transformer_blocks.39': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.15.audio_attn1.to_q.weight, skipping
+[LTX]   Batch 'transformer_blocks.15': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.34.video_to_audio_attn.to_out.weight, skipping
+[LTX]   Batch 'transformer_blocks.34': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.43.audio_to_video_attn.to_v.weight, skipping
+[LTX]   Batch 'transformer_blocks.43': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.41.audio_to_video_attn.to_out.weight, skipping
+[LTX]   Batch 'transformer_blocks.41': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.6.audio_to_video_attn.to_q.weight, skipping
+[LTX]   Batch 'transformer_blocks.6': fused 10 layers
+[LTX] LoRA fuse: no model weight for audio_adaln_single.emb.timestep_embedder.linear_1.weight, skipping
+[LTX] LoRA fuse: no model weight for av_ca_v2a_gate_adaln_single.emb.timestep_embedder.linear_1.weight, skipping
+[LTX] LoRA fuse: no model weight for audio_caption_projection.linear_1.weight, skipping
+[LTX] LoRA fuse: no model weight for av_ca_v2a_gate_adaln_single.emb.timestep_embedder.linear_2.weight, skipping
+[LTX] LoRA fuse: no model weight for audio_patchify_proj.weight, skipping
+[LTX] LoRA fuse: no model weight for av_ca_a2v_gate_adaln_single.linear.weight, skipping
+[LTX] LoRA fuse: no model weight for av_ca_a2v_gate_adaln_single.emb.timestep_embedder.linear_1.weight, skipping
+[LTX] LoRA fuse: no model weight for av_ca_video_scale_shift_adaln_single.emb.timestep_embedder.linear_1.weight, skipping
+[LTX] LoRA fuse: no model weight for adaln_single.emb.timestep_embedder.linear_2.weight, skipping
+[LTX] LoRA fuse: no model weight for adaln_single.emb.timestep_embedder.linear_1.weight, skipping
+[LTX] LoRA fuse: no model weight for av_ca_v2a_gate_adaln_single.linear.weight, skipping
+[LTX] LoRA fuse: no model weight for av_ca_audio_scale_shift_adaln_single.emb.timestep_embedder.linear_2.weight, skipping
+[LTX] LoRA fuse: no model weight for audio_proj_out.weight, skipping
+[LTX] LoRA fuse: no model weight for av_ca_video_scale_shift_adaln_single.emb.timestep_embedder.linear_2.weight, skipping
+[LTX] LoRA fuse: no model weight for av_ca_video_scale_shift_adaln_single.linear.weight, skipping
+[LTX] LoRA fuse: no model weight for av_ca_audio_scale_shift_adaln_single.emb.timestep_embedder.linear_1.weight, skipping
+[LTX] LoRA fuse: no model weight for av_ca_audio_scale_shift_adaln_single.linear.weight, skipping
+[LTX] LoRA fuse: no model weight for audio_adaln_single.emb.timestep_embedder.linear_2.weight, skipping
+[LTX] LoRA fuse: no model weight for audio_adaln_single.linear.weight, skipping
+[LTX] LoRA fuse: no model weight for av_ca_a2v_gate_adaln_single.emb.timestep_embedder.linear_2.weight, skipping
+[LTX] LoRA fuse: no model weight for audio_caption_projection.linear_2.weight, skipping
+[LTX]   Batch 'diffusion_model': fused 5 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.14.audio_attn2.to_v.weight, skipping
+[LTX]   Batch 'transformer_blocks.14': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.26.video_to_audio_attn.to_out.weight, skipping
+[LTX]   Batch 'transformer_blocks.26': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.19.audio_attn2.to_out.weight, skipping
+[LTX]   Batch 'transformer_blocks.19': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.32.audio_to_video_attn.to_out.weight, skipping
+[LTX]   Batch 'transformer_blocks.32': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.11.video_to_audio_attn.to_v.weight, skipping
+[LTX]   Batch 'transformer_blocks.11': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.31.audio_to_video_attn.to_v.weight, skipping
+[LTX]   Batch 'transformer_blocks.31': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.17.video_to_audio_attn.to_v.weight, skipping
+[LTX]   Batch 'transformer_blocks.17': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.13.video_to_audio_attn.to_out.weight, skipping
+[LTX]   Batch 'transformer_blocks.13': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.42.video_to_audio_attn.to_q.weight, skipping
+[LTX]   Batch 'transformer_blocks.42': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.44.video_to_audio_attn.to_out.weight, skipping
+[LTX]   Batch 'transformer_blocks.44': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.29.audio_to_video_attn.to_out.weight, skipping
+[LTX]   Batch 'transformer_blocks.29': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.2.audio_ff.net.0.proj.weight, skipping
+[LTX]   Batch 'transformer_blocks.2': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.1.video_to_audio_attn.to_out.weight, skipping
+[LTX]   Batch 'transformer_blocks.1': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.23.video_to_audio_attn.to_q.weight, skipping
+[LTX]   Batch 'transformer_blocks.23': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.22.audio_attn1.to_v.weight, skipping
+[LTX]   Batch 'transformer_blocks.22': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.33.video_to_audio_attn.to_k.weight, skipping
+[LTX]   Batch 'transformer_blocks.33': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.16.video_to_audio_attn.to_out.weight, skipping
+[LTX]   Batch 'transformer_blocks.16': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.12.audio_attn2.to_q.weight, skipping
+[LTX]   Batch 'transformer_blocks.12': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.38.video_to_audio_attn.to_out.weight, skipping
+[LTX]   Batch 'transformer_blocks.38': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.46.audio_attn2.to_out.weight, skipping
+[LTX]   Batch 'transformer_blocks.46': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.28.audio_attn1.to_k.weight, skipping
+[LTX]   Batch 'transformer_blocks.28': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.27.audio_ff.net.2.weight, skipping
+[LTX]   Batch 'transformer_blocks.27': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.21.audio_to_video_attn.to_k.weight, skipping
+[LTX]   Batch 'transformer_blocks.21': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.24.audio_attn2.to_v.weight, skipping
+[LTX]   Batch 'transformer_blocks.24': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.9.audio_ff.net.2.weight, skipping
+[LTX]   Batch 'transformer_blocks.9': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.25.video_to_audio_attn.to_q.weight, skipping
+[LTX]   Batch 'transformer_blocks.25': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.35.audio_attn1.to_v.weight, skipping
+[LTX]   Batch 'transformer_blocks.35': fused 10 layers
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.video_to_audio_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.45.audio_to_video_attn.to_q.weight, skipping
+[LTX]   Batch 'transformer_blocks.45': fused 10 layers
+[LTX] LoRA fuse: no model weight for text_embedding_projection.aggregate_embed.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_to_video_attn.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.video_to_audio_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_attn2.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_attn2.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_attn2.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_ff.net.0.proj.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_attn1.to_k.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_attn1.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.video_to_audio_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.video_to_audio_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_attn2.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_ff.net.2.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_to_video_attn.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_attn1.to_q.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_to_video_attn.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_to_video_attn.to_v.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.audio_attn1.to_out.weight, skipping
+[LTX] LoRA fuse: no model weight for transformer_blocks.20.video_to_audio_attn.to_k.weight, skipping
+[LTX]   Batch 'transformer_blocks.20': fused 10 layers
+[LTX] LoRA fused 485 layers (saved 485 originals)
+  Fused 485 layers (scale=1.0)
+
+Generating video...
+[LTX] [MEM] generation start: active=47316MB peak=51607MB cache=0MB
+[LTX] Generating video: 768x512, 25 frames
+[LTX] Prompt: A beaver building a dam in a forest stream, detailed fur, water splashing, natural lighting
+[LTX] [MEM] Phase textEncoding: cache limit set to 512MB
+[LTX] Enhancing prompt with Gemma...
+[LTX] Enhancing prompt: "A beaver building a dam in a forest stream, detailed fur, water splashing, natural lighting"
+[LTX] Stop tokens: eos=1, end_of_turn=106
+[LTX] Chat template failed (missingChatTemplate), falling back to raw tokenization
+[LTX] Enhancement input (fallback): 958 tokens
+[LTX] Generated 192 tokens in 25.1s
+[LTX] Enhanced prompt: "Style: realistic with natural lighting. A beaver, its fur detailed and glossy brown, is submerged in a clear forest stream, actively building a dam from fallen branches and mud. The beaver swims purposefully towards a pile of logs, pushing one large branch into place with its strong front paws. Water splashes gently as it maneuvers the branch, creating small ripples on the surface. As it works, other branches are dragged through the water—their leaves glistening wetly. The beaver pauses briefly, sitting upright to survey its progress, droplets of water cascading from its fur; a quiet gurgling sound emanates from the stream as water flows around the partially constructed dam. A few small rocks and pebbles are added to the structure with deliberate movements. Subtle sounds of forest ambiance surround the scene—birdsong fills the air, rustling leaves in trees by the stream bank, a faint buzzing of insects. The beaver continues building its creation methodically and quietly pushing mud between branches."
+[LTX] Using enhanced prompt for generation
+[LTX] Encoding text prompt... (CFG=1.0, enabled=false)
+[LTX] Tokenized: [1, 1024], padding=831, active=193
+[LTX]   First 5 tokens: [0, 0, 0, 0, 0]
+[LTX]   Last 10 tokens: [11381, 1996, 1805, 532, 36574, 22224, 14791, 1534, 15092, 236761]
+[LTX] Running Gemma forward pass...
+[LTX] Got 49 hidden states from Gemma
+[LTX] [TextEnc] Gemma hidden states: 49 layers
+[LTX] [TextEnc]   layer_0: dtype=bfloat16, mean=-0.012875502, std=0.9653409
+[LTX] [TextEnc]   layer_1: dtype=bfloat16, mean=0.2821451, std=10.491243
+[LTX] [TextEnc]   layer_24: dtype=bfloat16, mean=15.032057, std=972.19995
+[LTX] [TextEnc]   layer_47: dtype=bfloat16, mean=50.67145, std=2755.211
+[LTX] [TextEnc]   layer_48: dtype=bfloat16, mean=0.02884641, std=1.7271183
+[LTX] [TextEnc] After norm_concat: dtype=bfloat16, shape=[1, 1024, 188160], mean=-5.940547e-09, std=0.013523631
+[LTX] [TextEnc] After FE: dtype=bfloat16, shape=[1, 1024, 3840], mean=-3.266993e-05, std=0.03533393
+[LTX] [TextEnc] After connector: dtype=bfloat16, mean=0.0026335667, std=0.9999992
+[LTX] Text encoding: [1, 1024, 3840], mean=0.0026397705
+[LTX] Text mask: [1, 1024], active=1024/1024
+[LTX] promptEmbeddings shape: [1, 1024, 3840]
+[LTX] [DIAG] pos emb: mean=0.00263977, std=1.00000000
+[LTX] [DIAG] pos emb[0,0,:5] = [-0.197266, 0.558594, -0.251953, -0.328125, -0.234375]
+[LTX] [DIAG] pos emb[0,512,:5] = [0.217773, 0.613281, -0.124512, 0.019409, -0.067383]
+[LTX] textEmbeddings shape (no CFG): [1, 1024, 3840]
+[LTX] Unloading Gemma model to free memory...
+[LTX] Gemma model unloaded
+[LTX] Text encoding: 30.2s
+[LTX] [MEM] after text encoding: active=26936MB peak=52943MB cache=0MB
+[LTX] Latent shape: 4x16x24
+[LTX] Using seed: 42
+[LTX] Initial latent shape: [1, 128, 4, 16, 24]
+[LTX] [DIAG] Initial noise: mean=-0.00014699, std=1.00163078
+[LTX] Scheduler set: 8 steps, shift=1.1333333, tokens=1536
+[LTX] Sigma schedule: ["1.0000", "0.9429", "0.8741", "0.7896", "0.6835", "0.5463", "0.3616", "0.1000", "0.0000"]
+[LTX] [MEM] Phase denoising: cache limit set to 2048MB
+[LTX] Starting denoising loop (8 steps)...
+  Step 1/8 (σ=1.0000)
+[LTX] Step 0: patchified [1, 1536, 128], σ=1.0000
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.048s
+[LTX]   [TIME] prepareContext: 0.017s
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.788s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 8.841s
+[LTX]   [TIME] processOutput: 0.003s
+[LTX]   [TIME] TOTAL transformer forward: 9.698s
+[LTX]   Step 0: σ=1.0000→0.9429, vel mean=0.0329, std=1.0315, latent mean=-0.0020, std=0.9711
+  Step 2/8 (σ=0.9429)
+[LTX] Step 1: patchified [1, 1536, 128], σ=0.9429
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.016s
+[LTX]   [TIME] prepareContext: 0.012s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 8.327s
+[LTX]   [TIME] processOutput: 0.002s
+[LTX]   [TIME] TOTAL transformer forward: 8.357s
+[LTX]   Step 1: σ=0.9429→0.8741, vel mean=0.0083, std=1.3037, latent mean=-0.0026, std=0.9412
+  Step 3/8 (σ=0.8741)
+[LTX] Step 2: patchified [1, 1536, 128], σ=0.8741
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.021s
+[LTX]   [TIME] prepareContext: 0.011s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 8.344s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 8.379s
+[LTX]   Step 2: σ=0.8741→0.7896, vel mean=0.0053, std=1.5033, latent mean=-0.0030, std=0.9142
+  Step 4/8 (σ=0.7896)
+[LTX] Step 3: patchified [1, 1536, 128], σ=0.7896
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.015s
+[LTX]   [TIME] prepareContext: 0.012s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 8.248s
+[LTX]   [TIME] processOutput: 0.002s
+[LTX]   [TIME] TOTAL transformer forward: 8.278s
+[LTX]   Step 3: σ=0.7896→0.6835, vel mean=0.0056, std=1.5500, latent mean=-0.0036, std=0.9083
+  Step 5/8 (σ=0.6835)
+[LTX] Step 4: patchified [1, 1536, 128], σ=0.6835
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.015s
+[LTX]   [TIME] prepareContext: 0.012s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 8.319s
+[LTX]   [TIME] processOutput: 0.002s
+[LTX]   [TIME] TOTAL transformer forward: 8.348s
+[LTX]   Step 4: σ=0.6835→0.5463, vel mean=0.0030, std=1.5652, latent mean=-0.0040, std=0.9485
+  Step 6/8 (σ=0.5463)
+[LTX] Step 5: patchified [1, 1536, 128], σ=0.5463
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.004s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.019s
+[LTX]   [TIME] prepareContext: 0.012s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 8.181s
+[LTX]   [TIME] processOutput: 0.002s
+[LTX]   [TIME] TOTAL transformer forward: 8.218s
+[LTX]   Step 5: σ=0.5463→0.3616, vel mean=0.0038, std=1.5490, latent mean=-0.0047, std=1.0783
+  Step 7/8 (σ=0.3616)
+[LTX] Step 6: patchified [1, 1536, 128], σ=0.3616
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.016s
+[LTX]   [TIME] prepareContext: 0.012s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 8.113s
+[LTX]   [TIME] processOutput: 0.001s
+[LTX]   [TIME] TOTAL transformer forward: 8.143s
+[LTX]   Step 6: σ=0.3616→0.1000, vel mean=0.0030, std=1.3982, latent mean=-0.0055, std=1.3341
+  Step 8/8 (σ=0.1000)
+[LTX] Step 7: patchified [1, 1536, 128], σ=0.1000
+[LTX] Transformer input shapes:
+[LTX]   latent: [1, 1536, 128]
+[LTX]   context: [1, 1024, 3840]
+[LTX]   timesteps: [1]
+[LTX]   latentShape: (frames: 4, height: 16, width: 24)
+[LTX]   [TIME] patchifyProj: 0.001s
+[LTX]   after patchifyProj: [1, 1536, 4096]
+[LTX]   [TIME] prepareTimestep: 0.019s
+[LTX]   [TIME] prepareContext: 0.012s
+[LTX]   [DIAG] RoPE cache hit (1_4_16_24)
+[LTX]   [TIME] preparePositionalEmbeddings (RoPE): 0.000s
+[LTX]   RoPE cos shape: [1, 32, 1536, 64]
+[LTX]   RoPE sin shape: [1, 32, 1536, 64]
+[LTX]   [TIME] all transformer blocks: 8.051s
+[LTX]   [TIME] processOutput: 0.002s
+[LTX]   [TIME] TOTAL transformer forward: 8.084s
+[LTX]   Step 7: σ=0.1000→0.0000, vel mean=0.0096, std=1.0811, latent mean=-0.0065, std=1.4335
+[LTX] [DIAG] Final latent: mean=-0.0064865947, std=1.4335455, min=-7.82378, max=7.1501184
+[LTX] [DIAG] Spatial variance (ch0, f0): 2.4899235
+[LTX] [DIAG] scale_shift_table: mean=-0.16015625, std=0.30859375
+[LTX] [DIAG] block0.scale_shift_table: mean=-0.08691406, std=0.20019531
+[LTX] [DIAG] block0.attn1.q_norm.weight: mean=0.18261719, std=0.17382812 (1.0/0.0 = NOT loaded)
+[LTX] Transformer unloaded for VAE decode phase
+[LTX] [MEM] after transformer unload: active=26962MB peak=52943MB cache=0MB
+[LTX] [MEM] Phase vaeDecode: cache limit set to 512MB
+[LTX] Decoding latents to video... (timestep=nil)
+[LTX] VAE Decoder input: [1, 128, 4, 16, 24]
+[LTX] After denormalize: mean=-0.0011769019
+[LTX] After conv_in: [1, 1024, 4, 16, 24], mean=0.03615009
+[LTX] After up_blocks_0 (res): [1, 1024, 4, 16, 24], mean=0.0028422892
+[LTX] After up_blocks_1 (d2s): [1, 512, 7, 32, 48], mean=-0.10638246
+[LTX] After up_blocks_2 (res): [1, 512, 7, 32, 48], mean=-0.018346416
+[LTX] After up_blocks_3 (d2s): [1, 256, 13, 64, 96], mean=-0.2598938
+[LTX] After up_blocks_4 (res): [1, 256, 13, 64, 96], mean=-0.033340354
+[LTX] After up_blocks_5 (d2s): [1, 128, 25, 128, 192], mean=-0.692935
+[LTX] After up_blocks_6 (res): [1, 128, 25, 128, 192], mean=-1.923822
+[LTX] After conv_out: [1, 48, 25, 128, 192], mean=-0.2049648
+[LTX] After unpatchify: [1, 3, 25, 512, 768]
+[LTX] VAE raw output: mean=-0.2049648, min=-1.4432752, max=1.6273725
+[LTX] Decoded video shape: [25, 512, 768, 3]
+[LTX] Generated 25 frames
+[LTX] [MEM] after VAE decode: active=28082MB peak=52943MB cache=427MB
+Generation completed in 102.4s
+
+Exporting to docs/examples/beaver-dam/dev-lora.mp4...
+Video saved to: /Users/vincent/Developpements/ltx-video-swift-mlx/docs/examples/beaver-dam/dev-lora.mp4
+
+--- Summary ---
+Frames: 25
+Resolution: 768x512
+Seed: 42
+Generation time: 102.2s
+
+--- Profiling ---
+Text Encoding (Gemma + FE + Connector): 30.2s
+Denoising (8 steps):                 67.5s
+  Step 0: 9.7s
+  Step 1: 8.4s
+  Step 2: 8.4s
+  Step 3: 8.3s
+  Step 4: 8.4s
+  Step 5: 8.2s
+  Step 6: 8.1s
+  Step 7: 8.1s
+  Average per step:                      8.4s
+VAE Decoding:                            4.1s
+Model Loading:                           15.7s
+Pipeline total (excl. loading/export):   101.9s
+
+--- Memory ---
+Peak GPU memory:                         52943 MB
+Mean GPU memory (denoising):              26962 MB

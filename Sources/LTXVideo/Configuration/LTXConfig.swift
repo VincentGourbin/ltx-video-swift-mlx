@@ -164,7 +164,28 @@ extension LTXTransformerConfig: CustomStringConvertible {
 
 // MARK: - Video Generation Configuration
 
-/// Configuration for video generation
+/// Parameters controlling video generation output.
+///
+/// Configure resolution, frame count, inference steps, guidance, and advanced
+/// features like STG (Spatio-Temporal Guidance) and two-stage upscaling.
+///
+/// ## Constraints
+/// - **Width/Height**: Must be divisible by 32 (or 64 for two-stage)
+/// - **Frame count**: Must be `8n + 1` (9, 17, 25, ..., 241)
+/// - **CFG scale**: 1.0 disables classifier-free guidance (required for distilled)
+///
+/// ## Example
+/// ```swift
+/// let config = LTXVideoGenerationConfig(
+///     width: 768,
+///     height: 512,
+///     numFrames: 121,    // 5 seconds at 24fps
+///     numSteps: 8,
+///     cfgScale: 1.0,
+///     seed: 42
+/// )
+/// try config.validate()
+/// ```
 public struct LTXVideoGenerationConfig: Sendable {
     /// Video width in pixels (must be divisible by 32)
     public var width: Int

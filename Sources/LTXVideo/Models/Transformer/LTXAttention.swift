@@ -9,16 +9,16 @@ import MLXNN
 // MARK: - RMS Normalization
 
 /// Root Mean Square Layer Normalization
-public class RMSNorm: Module, UnaryLayer {
+class RMSNorm: Module, UnaryLayer {
     @ParameterInfo(key: "weight") var weight: MLXArray
     let eps: Float
 
-    public init(dims: Int, eps: Float = 1e-6) {
+    init(dims: Int, eps: Float = 1e-6) {
         self.eps = eps
         self._weight.wrappedValue = MLXArray.ones([dims])
     }
 
-    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
         return MLXFast.rmsNorm(x, weight: weight, eps: eps)
     }
 }
@@ -27,7 +27,7 @@ public class RMSNorm: Module, UnaryLayer {
 ///
 /// Matches Python: `mx.fast.rms_norm(x, mx.ones((x.shape[-1],), dtype=x.dtype), eps)`
 /// Weight dtype must match input dtype to avoid float32 promotion.
-public func rmsNorm(_ x: MLXArray, eps: Float = 1e-6) -> MLXArray {
+func rmsNorm(_ x: MLXArray, eps: Float = 1e-6) -> MLXArray {
     let weight = MLXArray.ones([x.dim(-1)]).asType(x.dtype)
     return MLXFast.rmsNorm(x, weight: weight, eps: eps)
 }
@@ -38,7 +38,7 @@ public func rmsNorm(_ x: MLXArray, eps: Float = 1e-6) -> MLXArray {
 ///
 /// Uses MLXFast.scaledDotProductAttention which is memory-efficient
 /// (Flash Attention style) and runs optimized Metal kernels.
-public func scaledDotProductAttention(
+func scaledDotProductAttention(
     query: MLXArray,
     key: MLXArray,
     value: MLXArray,
@@ -71,9 +71,9 @@ private func attentionCore(
     let tK = k.dim(1)
 
     // Reshape for multi-head attention: (B, T, H*D) -> (B, H, T, D)
-    var qReshaped = q.reshaped([b, tQ, heads, dimHead]).transposed(0, 2, 1, 3)
-    var kReshaped = k.reshaped([b, tK, heads, dimHead]).transposed(0, 2, 1, 3)
-    var vReshaped = v.reshaped([b, tK, heads, dimHead]).transposed(0, 2, 1, 3)
+    let qReshaped = q.reshaped([b, tQ, heads, dimHead]).transposed(0, 2, 1, 3)
+    let kReshaped = k.reshaped([b, tK, heads, dimHead]).transposed(0, 2, 1, 3)
+    let vReshaped = v.reshaped([b, tK, heads, dimHead]).transposed(0, 2, 1, 3)
 
     // Handle mask dimensions
     var attnMask = mask
@@ -109,7 +109,7 @@ private func attentionCore(
 /// - RMSNorm applied to Q and K before attention
 /// - RoPE applied to Q and K (if position embeddings provided)
 /// - Standard scaled dot-product attention
-public class LTXAttention: Module {
+class LTXAttention: Module {
     let ropeType: LTXRopeType
     let heads: Int
     let dimHead: Int
@@ -122,7 +122,7 @@ public class LTXAttention: Module {
     @ModuleInfo(key: "to_v") var toV: Linear
     @ModuleInfo(key: "to_out") var toOut: Linear
 
-    public init(
+    init(
         queryDim: Int,
         contextDim: Int? = nil,
         heads: Int = 8,
@@ -150,7 +150,7 @@ public class LTXAttention: Module {
         self._toOut.wrappedValue = Linear(innerDim, queryDim, bias: true)
     }
 
-    public func callAsFunction(
+    func callAsFunction(
         _ x: MLXArray,
         context: MLXArray? = nil,
         mask: MLXArray? = nil,
@@ -185,10 +185,10 @@ public class LTXAttention: Module {
 // MARK: - Self-Attention
 
 /// Self-attention layer (convenience wrapper)
-public class SelfAttention: Module {
+class SelfAttention: Module {
     @ModuleInfo var attn: LTXAttention
 
-    public init(
+    init(
         dim: Int,
         heads: Int = 8,
         dimHead: Int = 64,
@@ -205,7 +205,7 @@ public class SelfAttention: Module {
         )
     }
 
-    public func callAsFunction(
+    func callAsFunction(
         _ x: MLXArray,
         mask: MLXArray? = nil,
         pe: (cos: MLXArray, sin: MLXArray)? = nil
@@ -217,10 +217,10 @@ public class SelfAttention: Module {
 // MARK: - Cross-Attention
 
 /// Cross-attention layer (convenience wrapper)
-public class CrossAttention: Module {
+class CrossAttention: Module {
     @ModuleInfo var attn: LTXAttention
 
-    public init(
+    init(
         queryDim: Int,
         contextDim: Int,
         heads: Int = 8,
@@ -238,7 +238,7 @@ public class CrossAttention: Module {
         )
     }
 
-    public func callAsFunction(
+    func callAsFunction(
         _ x: MLXArray,
         context: MLXArray,
         mask: MLXArray? = nil

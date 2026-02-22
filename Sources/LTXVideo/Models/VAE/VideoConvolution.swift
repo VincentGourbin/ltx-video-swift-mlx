@@ -8,7 +8,7 @@ import MLXNN
 // MARK: - Padding Mode
 
 /// Padding mode types for convolutions
-public enum PaddingModeType: String, Sendable {
+enum PaddingModeType: String, Sendable {
     case zeros = "zeros"
     case reflect = "reflect"
     case replicate = "replicate"
@@ -17,7 +17,7 @@ public enum PaddingModeType: String, Sendable {
 // MARK: - Normalization Type
 
 /// Normalization layer types for VAE
-public enum NormLayerType: String, Sendable {
+enum NormLayerType: String, Sendable {
     case groupNorm = "group_norm"
     case pixelNorm = "pixel_norm"
 }
@@ -25,16 +25,16 @@ public enum NormLayerType: String, Sendable {
 // MARK: - Pixel Norm
 
 /// Per-pixel (per-location) RMS normalization layer
-public class PixelNorm: Module, UnaryLayer {
+class PixelNorm: Module, UnaryLayer {
     let dim: Int
     let eps: Float
 
-    public init(dim: Int = 1, eps: Float = 1e-8) {
+    init(dim: Int = 1, eps: Float = 1e-8) {
         self.dim = dim
         self.eps = eps
     }
 
-    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
         let rms = MLX.sqrt(MLX.mean(x * x, axis: dim, keepDims: true) + eps)
         return x / rms
     }
@@ -47,7 +47,7 @@ public class PixelNorm: Module, UnaryLayer {
 /// This approach avoids native 3D convolutions by:
 /// 1. Applying 2D conv across spatial dimensions for each frame
 /// 2. Applying 1D conv across temporal dimension for each spatial location
-public class DualConv3d: Module {
+class DualConv3d: Module {
     @ModuleInfo var conv1: Conv2d
     @ModuleInfo var conv2: Conv1d
 
@@ -55,7 +55,7 @@ public class DualConv3d: Module {
     let stride: (Int, Int, Int)
     let padding: (Int, Int, Int)
 
-    public init(
+    init(
         inChannels: Int,
         outChannels: Int,
         kernelSize: (Int, Int, Int),
@@ -91,7 +91,7 @@ public class DualConv3d: Module {
         )
     }
 
-    public func callAsFunction(_ x: MLXArray, skipTimeConv: Bool = false) -> MLXArray {
+    func callAsFunction(_ x: MLXArray, skipTimeConv: Bool = false) -> MLXArray {
         let b = x.dim(0)
         let c = x.dim(1)
         let d = x.dim(2)
@@ -141,12 +141,12 @@ public class DualConv3d: Module {
 // MARK: - Causal Conv3D
 
 /// Causal 3D convolution with temporal causal padding
-public class CausalConv3d: Module {
+class CausalConv3d: Module {
     @ModuleInfo var conv: DualConv3d
 
     let timeKernelSize: Int
 
-    public init(
+    init(
         inChannels: Int,
         outChannels: Int,
         kernelSize: Int = 3,
@@ -169,7 +169,7 @@ public class CausalConv3d: Module {
         )
     }
 
-    public func callAsFunction(_ x: MLXArray, causal: Bool = true) -> MLXArray {
+    func callAsFunction(_ x: MLXArray, causal: Bool = true) -> MLXArray {
         var input = x
 
         if causal {
@@ -199,7 +199,7 @@ public class CausalConv3d: Module {
 /// Uses 2D+1D decomposition for forward pass but stores weights in
 /// standard 3D conv format (out_channels, in_channels, T, H, W).
 /// This allows direct loading of PyTorch Conv3d weights from safetensors.
-public class Conv3dFull: Module {
+class Conv3dFull: Module {
     @ParameterInfo(key: "weight") var weight: MLXArray
     @ParameterInfo(key: "bias") var bias: MLXArray?
 
@@ -209,7 +209,7 @@ public class Conv3dFull: Module {
     let stride: (Int, Int, Int)
     let padding: (Int, Int, Int)
 
-    public init(
+    init(
         inChannels: Int,
         outChannels: Int,
         kernelSize: Int = 3,
@@ -232,7 +232,7 @@ public class Conv3dFull: Module {
         }
     }
 
-    public func callAsFunction(_ x: MLXArray, causal: Bool = false) -> MLXArray {
+    func callAsFunction(_ x: MLXArray, causal: Bool = false) -> MLXArray {
         let b = x.dim(0)
         let c = x.dim(1)
         let (kt, kh, kw) = kernelSize
@@ -330,12 +330,12 @@ public class Conv3dFull: Module {
 
 /// Causal 3D convolution that stores full 3D weights (PyTorch compatible).
 /// This is the main convolution class for VAE decoder weight loading.
-public class CausalConv3dFull: Module {
+class CausalConv3dFull: Module {
     @ModuleInfo(key: "conv") var conv: Conv3dFull
 
     let timeKernelSize: Int
 
-    public init(
+    init(
         inChannels: Int,
         outChannels: Int,
         kernelSize: Int = 3,
@@ -358,7 +358,7 @@ public class CausalConv3dFull: Module {
         )
     }
 
-    public func callAsFunction(_ x: MLXArray, causal: Bool = true) -> MLXArray {
+    func callAsFunction(_ x: MLXArray, causal: Bool = true) -> MLXArray {
         return conv(x, causal: causal)
     }
 }
@@ -366,10 +366,10 @@ public class CausalConv3dFull: Module {
 // MARK: - Pointwise Conv3D
 
 /// Pointwise (1x1x1) 3D convolution
-public class PointwiseConv3d: Module {
+class PointwiseConv3d: Module {
     @ModuleInfo var conv: Conv2d
 
-    public init(inChannels: Int, outChannels: Int, bias: Bool = true) {
+    init(inChannels: Int, outChannels: Int, bias: Bool = true) {
         self._conv.wrappedValue = Conv2d(
             inputChannels: inChannels,
             outputChannels: outChannels,
@@ -378,7 +378,7 @@ public class PointwiseConv3d: Module {
         )
     }
 
-    public func callAsFunction(_ x: MLXArray) -> MLXArray {
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
         let b = x.dim(0)
         let c = x.dim(1)
         let d = x.dim(2)

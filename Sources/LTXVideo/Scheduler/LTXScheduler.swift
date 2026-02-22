@@ -15,7 +15,7 @@ private let MAX_SHIFT_ANCHOR = 4096
 // MARK: - Distilled Sigma Values
 
 /// Official distilled sigma schedule from LTX-2 (9 values for 8 steps)
-public let DISTILLED_SIGMA_VALUES: [Float] = [
+let DISTILLED_SIGMA_VALUES: [Float] = [
     1.0,
     0.99375,
     0.9875,
@@ -28,7 +28,7 @@ public let DISTILLED_SIGMA_VALUES: [Float] = [
 ]
 
 /// Stage 2 distilled sigma values (for two-stage generation)
-public let STAGE_2_DISTILLED_SIGMA_VALUES: [Float] = [
+let STAGE_2_DISTILLED_SIGMA_VALUES: [Float] = [
     0.909375,
     0.725,
     0.421875,
@@ -41,20 +41,20 @@ public let STAGE_2_DISTILLED_SIGMA_VALUES: [Float] = [
 ///
 /// Generates a sigma schedule with token-count-dependent shifting.
 /// Supports both standard and distilled modes.
-public class LTXScheduler: @unchecked Sendable {
+class LTXScheduler: @unchecked Sendable {
     /// Number of training timesteps
-    public let numTrainTimesteps: Int
+    let numTrainTimesteps: Int
 
     /// Current sigmas (noise levels in [0, 1] range)
-    public private(set) var sigmas: [Float] = []
+    private(set) var sigmas: [Float] = []
 
     /// Current step index during sampling
-    public private(set) var stepIndex: Int = 0
+    private(set) var stepIndex: Int = 0
 
     /// Whether using distilled mode
-    public private(set) var isDistilled: Bool = false
+    private(set) var isDistilled: Bool = false
 
-    public init(numTrainTimesteps: Int = 1000, isDistilled: Bool = false) {
+    init(numTrainTimesteps: Int = 1000, isDistilled: Bool = false) {
         self.numTrainTimesteps = numTrainTimesteps
         self.isDistilled = isDistilled
     }
@@ -71,7 +71,7 @@ public class LTXScheduler: @unchecked Sendable {
     ///   - baseShift: Base shift value for small token counts
     ///   - stretch: Whether to stretch sigmas to terminal value
     ///   - terminal: Target terminal sigma value
-    public func setTimesteps(
+    func setTimesteps(
         numSteps: Int,
         distilled: Bool = false,
         latentTokenCount: Int? = nil,
@@ -145,7 +145,7 @@ public class LTXScheduler: @unchecked Sendable {
     /// Set custom sigma values directly
     ///
     /// - Parameter customSigmas: Pre-computed sigma schedule
-    public func setCustomSigmas(_ customSigmas: [Float]) {
+    func setCustomSigmas(_ customSigmas: [Float]) {
         guard !customSigmas.isEmpty else {
             LTXDebug.log("Warning: Empty custom sigmas provided")
             return
@@ -172,7 +172,7 @@ public class LTXScheduler: @unchecked Sendable {
     ///   - modelOutput: Predicted velocity from transformer
     ///   - sample: Current noisy sample
     /// - Returns: Updated sample for next step
-    public func step(modelOutput: MLXArray, sample: MLXArray) -> MLXArray {
+    func step(modelOutput: MLXArray, sample: MLXArray) -> MLXArray {
         guard stepIndex < sigmas.count - 1 else {
             return sample
         }
@@ -193,34 +193,34 @@ public class LTXScheduler: @unchecked Sendable {
     }
 
     /// Get the current sigma for this step
-    public var currentSigma: Float {
+    var currentSigma: Float {
         guard stepIndex < sigmas.count else { return 0 }
         return sigmas[stepIndex]
     }
 
     /// Get the initial sigma (for noise initialization)
-    public var initialSigma: Float {
+    var initialSigma: Float {
         sigmas.first ?? 1.0
     }
 
     /// Current progress (0.0 to 1.0)
-    public var progress: Float {
+    var progress: Float {
         guard sigmas.count > 1 else { return 0 }
         return Float(stepIndex) / Float(sigmas.count - 1)
     }
 
     /// Remaining steps
-    public var remainingSteps: Int {
+    var remainingSteps: Int {
         max(0, sigmas.count - 1 - stepIndex)
     }
 
     /// Total effective steps
-    public var totalSteps: Int {
+    var totalSteps: Int {
         max(0, sigmas.count - 1)
     }
 
     /// Reset scheduler state
-    public func reset() {
+    func reset() {
         stepIndex = 0
     }
 
@@ -228,7 +228,7 @@ public class LTXScheduler: @unchecked Sendable {
     ///
     /// - Parameter numSteps: Number of denoising steps
     /// - Returns: Array of sigmas including terminal 0.0
-    public func getSigmas(numSteps: Int) -> [Float] {
+    func getSigmas(numSteps: Int) -> [Float] {
         setTimesteps(numSteps: numSteps, distilled: isDistilled)
         return sigmas
     }
@@ -263,7 +263,7 @@ public class LTXScheduler: @unchecked Sendable {
     ///   - sigma: Current sigma
     ///   - sigmaNext: Next sigma
     /// - Returns: Updated latent
-    public func step(
+    func step(
         latent: MLXArray,
         velocity: MLXArray,
         sigma: Float,
@@ -292,7 +292,7 @@ public class LTXScheduler: @unchecked Sendable {
     /// Add noise to latents for a given sigma
     ///
     /// For flow matching: x_t = (1 - t) * x_0 + t * noise
-    public func addNoise(
+    func addNoise(
         originalSamples: MLXArray,
         noise: MLXArray,
         sigma: Float
@@ -302,7 +302,7 @@ public class LTXScheduler: @unchecked Sendable {
     }
 
     /// Scale noise for the current sigma
-    public func scaleNoise(
+    func scaleNoise(
         sample: MLXArray,
         sigma: Float,
         noise: MLXArray
@@ -312,7 +312,7 @@ public class LTXScheduler: @unchecked Sendable {
     }
 
     /// Get velocity target for training
-    public func getVelocity(sample: MLXArray, noise: MLXArray) -> MLXArray {
+    func getVelocity(sample: MLXArray, noise: MLXArray) -> MLXArray {
         // Velocity target: v = noise - sample
         return noise - sample
     }
@@ -327,7 +327,7 @@ public class LTXScheduler: @unchecked Sendable {
 ///   - distilled: If true, use predefined distilled sigma values
 ///   - latentTokenCount: Optional token count for shift calculation
 /// - Returns: Sigma schedule as array
-public func getSigmaSchedule(
+func getSigmaSchedule(
     numSteps: Int,
     distilled: Bool = false,
     latentTokenCount: Int? = nil
