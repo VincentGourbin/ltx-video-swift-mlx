@@ -17,7 +17,39 @@ All videos generated with: `--enhance-prompt --seed 42 --profile --debug -w 768 
 
 *Hardware: Apple Silicon M3 Max 96GB. Peak RAM includes model loading phase.*
 
-## Visual Comparison (Frame 12)
+## Video Comparison
+
+### Single-stage
+
+<table>
+<tr>
+<td align="center"><b>1. Distilled</b> (113s)</td>
+<td align="center"><b>2. Dev</b> (799s)</td>
+<td align="center"><b>3. Dev + LoRA</b> (102s)</td>
+</tr>
+<tr>
+<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/beaver-dam/distilled.mp4" controls width="256"></video></td>
+<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/beaver-dam/dev.mp4" controls width="256"></video></td>
+<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/beaver-dam/dev-lora.mp4" controls width="256"></video></td>
+</tr>
+</table>
+
+### Two-stage (with 2x spatial upscaler)
+
+<table>
+<tr>
+<td align="center"><b>4. Distilled + Upscaler</b> (81s)</td>
+<td align="center"><b>5. Dev + Upscaler</b> (281s)</td>
+<td align="center"><b>6. Dev + LoRA + Upscaler</b> (78s)</td>
+</tr>
+<tr>
+<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/beaver-dam/distilled-upscaler.mp4" controls width="256"></video></td>
+<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/beaver-dam/dev-upscaler.mp4" controls width="256"></video></td>
+<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/beaver-dam/two-stage.mp4" controls width="256"></video></td>
+</tr>
+</table>
+
+### Still Frame Comparison (Frame 12)
 
 | Distilled | Dev | Dev + LoRA |
 |-----------|-----|------------|
@@ -41,7 +73,7 @@ ltx-video generate "A beaver building a dam in a forest stream, detailed fur, wa
     -w 768 -h 512 -f 25 -o docs/examples/beaver-dam/distilled.mp4
 ```
 
-**Video**: [distilled.mp4](distilled.mp4)
+<video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/beaver-dam/distilled.mp4" controls width="512"></video>
 
 <details>
 <summary>Profiling output</summary>
@@ -77,7 +109,7 @@ ltx-video generate "A beaver building a dam in a forest stream, detailed fur, wa
     -w 768 -h 512 -f 25 -o docs/examples/beaver-dam/dev.mp4
 ```
 
-**Video**: [dev.mp4](dev.mp4)
+<video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/beaver-dam/dev.mp4" controls width="512"></video>
 
 <details>
 <summary>Profiling output</summary>
@@ -116,7 +148,7 @@ ltx-video generate "A beaver building a dam in a forest stream, detailed fur, wa
     -w 768 -h 512 -f 25 -o docs/examples/beaver-dam/dev-lora.mp4
 ```
 
-**Video**: [dev-lora.mp4](dev-lora.mp4)
+<video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/beaver-dam/dev-lora.mp4" controls width="512"></video>
 
 <details>
 <summary>Profiling output</summary>
@@ -153,7 +185,7 @@ ltx-video generate "A beaver building a dam in a forest stream, detailed fur, wa
     -w 768 -h 512 -f 25 -o docs/examples/beaver-dam/distilled-upscaler.mp4
 ```
 
-**Video**: [distilled-upscaler.mp4](distilled-upscaler.mp4)
+<video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/beaver-dam/distilled-upscaler.mp4" controls width="512"></video>
 
 <details>
 <summary>Profiling output</summary>
@@ -190,7 +222,7 @@ ltx-video generate "A beaver building a dam in a forest stream, detailed fur, wa
     -w 768 -h 512 -f 25 -o docs/examples/beaver-dam/dev-upscaler.mp4
 ```
 
-**Video**: [dev-upscaler.mp4](dev-upscaler.mp4)
+<video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/beaver-dam/dev-upscaler.mp4" controls width="512"></video>
 
 <details>
 <summary>Profiling output</summary>
@@ -226,7 +258,7 @@ ltx-video generate "A beaver building a dam in a forest stream, detailed fur, wa
     -w 768 -h 512 -f 25 -o docs/examples/beaver-dam/two-stage.mp4
 ```
 
-**Video**: [two-stage.mp4](two-stage.mp4)
+<video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/beaver-dam/two-stage.mp4" controls width="512"></video>
 
 <details>
 <summary>Profiling output</summary>
