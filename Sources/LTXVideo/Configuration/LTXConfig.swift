@@ -130,7 +130,12 @@ public struct LTXTransformerConfig: Codable, Sendable {
         ropeTheta: Float = 10000.0,
         maxPos: [Int] = [20, 2048, 2048],
         timestepScaleMultiplier: Int = 1000,
-        normEps: Float = 1e-6
+        normEps: Float = 1e-6,
+        audioNumAttentionHeads: Int = 32,
+        audioAttentionHeadDim: Int = 64,
+        audioInChannels: Int = 128,
+        audioOutChannels: Int = 128,
+        audioMaxPos: [Int] = [20]
     ) {
         self.numLayers = numLayers
         self.numAttentionHeads = numAttentionHeads
@@ -143,7 +148,29 @@ public struct LTXTransformerConfig: Codable, Sendable {
         self.maxPos = maxPos
         self.timestepScaleMultiplier = timestepScaleMultiplier
         self.normEps = normEps
+        self.audioNumAttentionHeads = audioNumAttentionHeads
+        self.audioAttentionHeadDim = audioAttentionHeadDim
+        self.audioInChannels = audioInChannels
+        self.audioOutChannels = audioOutChannels
+        self.audioMaxPos = audioMaxPos
     }
+
+    // MARK: - Audio Configuration
+
+    /// Audio inner dimension (32 heads * 64 dim_head = 2048)
+    public var audioNumAttentionHeads: Int
+    /// Audio attention head dimension
+    public var audioAttentionHeadDim: Int
+    /// Audio inner dimension
+    public var audioInnerDim: Int { audioNumAttentionHeads * audioAttentionHeadDim }
+    /// Audio input/output channels (128, same as video)
+    public var audioInChannels: Int
+    /// Audio output channels
+    public var audioOutChannels: Int
+    /// Audio cross-attention dimension
+    public var audioCrossAttentionDim: Int { audioInnerDim }
+    /// Audio RoPE max positions
+    public var audioMaxPos: [Int]
 
     /// Default LTX-2 configuration
     public static let `default` = LTXTransformerConfig()
@@ -234,6 +261,15 @@ public struct LTXVideoGenerationConfig: Sendable {
     /// Whether to enhance the prompt using Gemma before generation.
     public var enhancePrompt: Bool
 
+    /// Path to input image for image-to-video generation.
+    /// nil = text-to-video (default), non-nil = image-to-video.
+    public var imagePath: String?
+
+    /// Noise scale for image conditioning. Adds quadratically-decreasing noise to the
+    /// conditioned frame to allow smoother motion transitions. 0.0 = disabled (matches Diffusers default),
+    /// 0.15 = optional for natural motion.
+    public var imageCondNoiseScale: Float
+
     public init(
         width: Int = 704,
         height: Int = 480,
@@ -248,7 +284,9 @@ public struct LTXVideoGenerationConfig: Sendable {
         stgScale: Float = 0.0,
         stgBlocks: [Int] = [29],
         twoStage: Bool = false,
-        enhancePrompt: Bool = false
+        enhancePrompt: Bool = false,
+        imagePath: String? = nil,
+        imageCondNoiseScale: Float = 0.0
     ) {
         self.width = width
         self.height = height
@@ -264,6 +302,8 @@ public struct LTXVideoGenerationConfig: Sendable {
         self.stgBlocks = stgBlocks
         self.twoStage = twoStage
         self.enhancePrompt = enhancePrompt
+        self.imagePath = imagePath
+        self.imageCondNoiseScale = imageCondNoiseScale
     }
 
     /// Validate the configuration
@@ -302,6 +342,13 @@ public struct LTXVideoGenerationConfig: Sendable {
 
         guard cfgScale >= 1.0 && cfgScale <= 20.0 else {
             throw LTXError.invalidConfiguration("CFG scale must be between 1.0 and 20.0, got \(cfgScale)")
+        }
+
+        // Validate image path exists if provided
+        if let imagePath = imagePath {
+            guard FileManager.default.fileExists(atPath: imagePath) else {
+                throw LTXError.fileNotFound("Input image not found: \(imagePath)")
+            }
         }
     }
 

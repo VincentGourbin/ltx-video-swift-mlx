@@ -208,6 +208,7 @@ class Conv3dFull: Module {
     let kernelSize: (Int, Int, Int)
     let stride: (Int, Int, Int)
     let padding: (Int, Int, Int)
+    let spatialPaddingMode: PaddingModeType
 
     init(
         inChannels: Int,
@@ -215,13 +216,15 @@ class Conv3dFull: Module {
         kernelSize: Int = 3,
         stride: (Int, Int, Int) = (1, 1, 1),
         padding: (Int, Int, Int) = (1, 1, 1),
-        bias: Bool = true
+        bias: Bool = true,
+        spatialPaddingMode: PaddingModeType = .reflect
     ) {
         self.inChannels = inChannels
         self.outChannels = outChannels
         self.kernelSize = (kernelSize, kernelSize, kernelSize)
         self.stride = stride
         self.padding = padding
+        self.spatialPaddingMode = spatialPaddingMode
 
         // Weight shape: (out_channels, in_channels, T, H, W) - PyTorch format
         self._weight.wrappedValue = MLXArray.zeros([outChannels, inChannels, kernelSize, kernelSize, kernelSize])
@@ -240,20 +243,38 @@ class Conv3dFull: Module {
 
         var input = x
 
-        // Apply spatial reflect padding (matches PyTorch decoder_spatial_padding_mode=REFLECT)
+        // Apply spatial padding
         if p > 0 {
-            let h = input.dim(3)
-            let w = input.dim(4)
-
-            // Reflect height: mirror interior neighbors (row 1 at top, row h-2 at bottom for p=1)
-            let hPadTop = input[0..., 0..., 0..., 1..<(1 + p), 0...]
-            let hPadBot = input[0..., 0..., 0..., (h - 1 - p)..<(h - 1), 0...]
-            input = MLX.concatenated([hPadTop, input, hPadBot], axis: 3)
-
-            // Reflect width: mirror interior neighbors
-            let wPadLeft = input[0..., 0..., 0..., 0..., 1..<(1 + p)]
-            let wPadRight = input[0..., 0..., 0..., 0..., (w - 1 - p)..<(w - 1)]
-            input = MLX.concatenated([wPadLeft, input, wPadRight], axis: 4)
+            switch spatialPaddingMode {
+            case .zeros:
+                // Zero padding
+                let hPadTop = MLXArray.zeros(like: input[0..., 0..., 0..., 0..<p, 0...])
+                let hPadBot = MLXArray.zeros(like: input[0..., 0..., 0..., 0..<p, 0...])
+                input = MLX.concatenated([hPadTop, input, hPadBot], axis: 3)
+                let wPadLeft = MLXArray.zeros(like: input[0..., 0..., 0..., 0..., 0..<p])
+                let wPadRight = MLXArray.zeros(like: input[0..., 0..., 0..., 0..., 0..<p])
+                input = MLX.concatenated([wPadLeft, input, wPadRight], axis: 4)
+            case .reflect:
+                // Reflect: mirror interior neighbors (row 1 at top, row h-2 at bottom for p=1)
+                let h = input.dim(3)
+                let w = input.dim(4)
+                let hPadTop = input[0..., 0..., 0..., 1..<(1 + p), 0...]
+                let hPadBot = input[0..., 0..., 0..., (h - 1 - p)..<(h - 1), 0...]
+                input = MLX.concatenated([hPadTop, input, hPadBot], axis: 3)
+                let wPadLeft = input[0..., 0..., 0..., 0..., 1..<(1 + p)]
+                let wPadRight = input[0..., 0..., 0..., 0..., (w - 1 - p)..<(w - 1)]
+                input = MLX.concatenated([wPadLeft, input, wPadRight], axis: 4)
+            case .replicate:
+                // Replicate: repeat edge pixels
+                let h = input.dim(3)
+                let hPadTop = MLX.repeated(input[0..., 0..., 0..., 0..<1, 0...], count: p, axis: 3)
+                let hPadBot = MLX.repeated(input[0..., 0..., 0..., (h - 1)..<h, 0...], count: p, axis: 3)
+                input = MLX.concatenated([hPadTop, input, hPadBot], axis: 3)
+                let newW = input.dim(4)
+                let wPadLeft = MLX.repeated(input[0..., 0..., 0..., 0..., 0..<1], count: p, axis: 4)
+                let wPadRight = MLX.repeated(input[0..., 0..., 0..., 0..., (newW - 1)..<newW], count: p, axis: 4)
+                input = MLX.concatenated([wPadLeft, input, wPadRight], axis: 4)
+            }
         }
 
         // Temporal padding
@@ -340,7 +361,8 @@ class CausalConv3dFull: Module {
         outChannels: Int,
         kernelSize: Int = 3,
         stride: (Int, Int, Int) = (1, 1, 1),
-        bias: Bool = true
+        bias: Bool = true,
+        spatialPaddingMode: PaddingModeType = .reflect
     ) {
         self.timeKernelSize = kernelSize
 
@@ -354,7 +376,8 @@ class CausalConv3dFull: Module {
             kernelSize: kernelSize,
             stride: stride,
             padding: (0, heightPad, widthPad),  // Temporal padding handled causally
-            bias: bias
+            bias: bias,
+            spatialPaddingMode: spatialPaddingMode
         )
     }
 

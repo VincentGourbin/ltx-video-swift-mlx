@@ -84,9 +84,48 @@ class LTXScheduler: @unchecked Sendable {
         self.stepIndex = 0
 
         if distilled {
-            // Use predefined distilled sigma values
-            self.sigmas = DISTILLED_SIGMA_VALUES
-            LTXDebug.log("Scheduler set: distilled mode with \(sigmas.count - 1) steps")
+            // Start with predefined distilled sigma values (without terminal 0)
+            var sigmaValues = DISTILLED_SIGMA_VALUES.filter { $0 > 0 }
+
+            // Apply dynamic time shifting if token count is provided
+            // Matches Diffusers FlowMatchEulerDiscreteScheduler with use_dynamic_shifting=True
+            if let tokenCount = latentTokenCount {
+                let clampedTokens = min(tokenCount, MAX_SHIFT_ANCHOR)
+                let x1 = Float(BASE_SHIFT_ANCHOR)
+                let x2 = Float(MAX_SHIFT_ANCHOR)
+                let mm = (maxShift - baseShift) / (x2 - x1)
+                let b = baseShift - mm * x1
+                let mu = Float(clampedTokens) * mm + b
+                let expMu = exp(mu)
+
+                sigmaValues = sigmaValues.map { sigma in
+                    if sigma == 0 || sigma == 1.0 {
+                        return sigma
+                    }
+                    return expMu / (expMu + (1.0 / sigma - 1.0))
+                }
+
+                // Stretch to terminal value
+                if stretch {
+                    let oneMinusSigmas = sigmaValues.map { 1.0 - $0 }
+                    let lastOneMinus = oneMinusSigmas.last ?? 0
+                    if lastOneMinus > 0 {
+                        let scaleFactor = lastOneMinus / (1.0 - terminal)
+                        sigmaValues = sigmaValues.map { sigma in
+                            if sigma == 0 { return Float(0) }
+                            return 1.0 - ((1.0 - sigma) / scaleFactor)
+                        }
+                    }
+                }
+
+                LTXDebug.log("Scheduler set: distilled mode with dynamic shift (mu=\(String(format: "%.3f", mu)), tokens=\(clampedTokens))")
+            } else {
+                LTXDebug.log("Scheduler set: distilled mode (raw sigmas)")
+            }
+
+            // Append terminal 0
+            sigmaValues.append(0.0)
+            self.sigmas = sigmaValues
         } else {
             // Compute sigma schedule
             // Clamp token count to MAX_SHIFT_ANCHOR (matching Python: min(num_tokens, MAX_SHIFT_ANCHOR))

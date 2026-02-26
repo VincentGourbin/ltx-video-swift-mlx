@@ -52,6 +52,8 @@ struct VideoGemmaEncoderOutput {
     let videoEncoding: MLXArray
     /// Attention mask (B, T)
     let attentionMask: MLXArray
+    /// Encoded audio features (B, T, 3840) — nil for video-only
+    let audioEncoding: MLXArray?
 }
 
 // MARK: - Feature Extractor
@@ -533,13 +535,17 @@ class Embeddings1DConnector: Module {
 class VideoGemmaTextEncoderModel: Module {
     @ModuleInfo(key: "feature_extractor") var featureExtractor: GemmaFeaturesExtractor
     @ModuleInfo(key: "embeddings_connector") var embeddingsConnector: Embeddings1DConnector
+    /// Audio connector — separate instance with independent weights (nil for video-only)
+    @ModuleInfo(key: "audio_embeddings_connector") var audioEmbeddingsConnector: Embeddings1DConnector?
 
     init(
         featureExtractor: GemmaFeaturesExtractor? = nil,
-        embeddingsConnector: Embeddings1DConnector? = nil
+        embeddingsConnector: Embeddings1DConnector? = nil,
+        audioEmbeddingsConnector: Embeddings1DConnector? = nil
     ) {
         self._featureExtractor.wrappedValue = featureExtractor ?? GemmaFeaturesExtractor()
         self._embeddingsConnector.wrappedValue = embeddingsConnector ?? Embeddings1DConnector()
+        self._audioEmbeddingsConnector.wrappedValue = audioEmbeddingsConnector
     }
 
     /// Convert binary attention mask to additive mask for softmax
@@ -619,9 +625,20 @@ class VideoGemmaTextEncoderModel: Module {
         // Apply mask to zero out padded positions
         let finalEncoded = processed * binaryMask.expandedDimensions(axis: -1).asType(processed.dtype)
 
+        // Process audio connector if available (shares same feature extractor output)
+        var audioEncoded: MLXArray? = nil
+        if let audioConnector = audioEmbeddingsConnector {
+            let (audioProcessed, audioOutputMask) = audioConnector(encoded, attentionMask: connectorMask)
+            MLX.eval(audioProcessed)
+            let audioBinaryMask = (audioOutputMask.squeezed(axes: [1, 2]) .>= -0.5).asType(.int32)
+            audioEncoded = audioProcessed * audioBinaryMask.expandedDimensions(axis: -1).asType(audioProcessed.dtype)
+            LTXDebug.log("[TextEnc] Audio connector output: \(audioProcessed.shape)")
+        }
+
         return VideoGemmaEncoderOutput(
             videoEncoding: finalEncoded,
-            attentionMask: binaryMask
+            attentionMask: binaryMask,
+            audioEncoding: audioEncoded
         )
     }
 
@@ -637,9 +654,18 @@ class VideoGemmaTextEncoderModel: Module {
         let binaryMask = (outputMask.squeezed(axes: [1, 2]) .>= -0.5).asType(.int32)
         let finalEncoded = processed * binaryMask.expandedDimensions(axis: -1).asType(processed.dtype)
 
+        // Process audio connector if available
+        var audioEncoded: MLXArray? = nil
+        if let audioConnector = audioEmbeddingsConnector {
+            let (audioProcessed, audioOutputMask) = audioConnector(projectedFeatures, attentionMask: connectorMask)
+            let audioBinaryMask = (audioOutputMask.squeezed(axes: [1, 2]) .>= -0.5).asType(.int32)
+            audioEncoded = audioProcessed * audioBinaryMask.expandedDimensions(axis: -1).asType(audioProcessed.dtype)
+        }
+
         return VideoGemmaEncoderOutput(
             videoEncoding: finalEncoded,
-            attentionMask: binaryMask
+            attentionMask: binaryMask,
+            audioEncoding: audioEncoded
         )
     }
 
@@ -660,7 +686,8 @@ class VideoGemmaTextEncoderModel: Module {
 
 /// Create a text encoder with default LTX-2 configuration
 func createTextEncoder(
-    config: TextEncoderConfig = .default
+    config: TextEncoderConfig = .default,
+    includeAudioConnector: Bool = false
 ) -> VideoGemmaTextEncoderModel {
     let featureExtractor = GemmaFeaturesExtractor(
         hiddenDim: config.hiddenDim,
@@ -675,9 +702,20 @@ func createTextEncoder(
         numLearnableRegisters: config.numRegisters
     )
 
+    // Audio connector uses the same architecture as video connector
+    // (same dims, heads, layers, registers) but independent weights
+    let audioConnector: Embeddings1DConnector? = includeAudioConnector ? Embeddings1DConnector(
+        attentionHeadDim: config.connectorHeadDim,
+        numAttentionHeads: config.connectorHeads,
+        numLayers: config.connectorLayers,
+        positionalEmbeddingMaxPos: [4096],
+        numLearnableRegisters: config.numRegisters
+    ) : nil
+
     return VideoGemmaTextEncoderModel(
         featureExtractor: featureExtractor,
-        embeddingsConnector: embeddingsConnector
+        embeddingsConnector: embeddingsConnector,
+        audioEmbeddingsConnector: audioConnector
     )
 }
 
@@ -693,9 +731,9 @@ class LTXTextEncoder: Module {
 
     @ModuleInfo(key: "encoder") var encoder: VideoGemmaTextEncoderModel
 
-    init(config: TextEncoderConfig = .default) {
+    init(config: TextEncoderConfig = .default, includeAudioConnector: Bool = false) {
         self.config = config
-        self._encoder.wrappedValue = createTextEncoder(config: config)
+        self._encoder.wrappedValue = createTextEncoder(config: config, includeAudioConnector: includeAudioConnector)
     }
 
     /// Encode from pre-extracted Gemma hidden states

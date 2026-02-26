@@ -326,6 +326,59 @@ public actor ModelDownloader {
         return destination
     }
 
+    // MARK: - Audio Model Downloads
+
+    /// Download Audio VAE decoder weights
+    ///
+    /// Downloads `audio_vae/diffusion_pytorch_model.safetensors` (~100MB)
+    public func downloadAudioVAE(
+        progress: DownloadProgressCallback? = nil
+    ) async throws -> URL {
+        let repoId = "Lightricks/LTX-2"
+        let localDir = cacheDirectory.appendingPathComponent("ltx-audio-vae")
+        let destination = localDir.appendingPathComponent("diffusion_pytorch_model.safetensors")
+
+        if FileManager.default.fileExists(atPath: destination.path) {
+            progress?(DownloadProgress(progress: 1.0, message: "Audio VAE weights already downloaded"))
+            return destination
+        }
+
+        try FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
+        progress?(DownloadProgress(progress: 0.1, message: "Downloading audio VAE weights..."))
+        try await downloadFile(
+            repoId: repoId,
+            filename: "audio_vae/diffusion_pytorch_model.safetensors",
+            to: destination
+        )
+        progress?(DownloadProgress(progress: 1.0, message: "Audio VAE download complete"))
+        return destination
+    }
+
+    /// Download Vocoder weights
+    ///
+    /// Downloads `vocoder/diffusion_pytorch_model.safetensors` (~106MB)
+    public func downloadVocoder(
+        progress: DownloadProgressCallback? = nil
+    ) async throws -> URL {
+        let repoId = "Lightricks/LTX-2"
+        let localDir = cacheDirectory.appendingPathComponent("ltx-vocoder")
+        let destination = localDir.appendingPathComponent("diffusion_pytorch_model.safetensors")
+
+        if FileManager.default.fileExists(atPath: destination.path) {
+            progress?(DownloadProgress(progress: 1.0, message: "Vocoder weights already downloaded"))
+            return destination
+        }
+
+        try FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
+        progress?(DownloadProgress(progress: 0.1, message: "Downloading vocoder weights..."))
+        try await downloadFile(
+            repoId: repoId,
+            filename: "vocoder/diffusion_pytorch_model.safetensors",
+            to: destination
+        )
+        progress?(DownloadProgress(progress: 1.0, message: "Vocoder download complete"))
+        return destination
+    }
 
     /// Download unified weights file (contains transformer + VAE + connector)
     ///
@@ -869,7 +922,6 @@ class LTXWeightLoader {
         let allKeys = Array(source.keys)
         for key in allKeys {
             guard let value = source.removeValue(forKey: key) else { continue }
-            if key.contains("audio") { continue }
 
             var newKey: String? = nil
 
@@ -880,12 +932,21 @@ class LTXWeightLoader {
                 var k = key.replacingOccurrences(of: "video_connector.", with: "embeddings_connector.")
                 k = applyConnectorInternalMapping(k)
                 newKey = k
+            } else if key.hasPrefix("audio_connector.") {
+                var k = key.replacingOccurrences(of: "audio_connector.", with: "audio_embeddings_connector.")
+                k = applyConnectorInternalMapping(k)
+                newKey = k
             }
             // Format 2: Unified file
             else if key.hasPrefix("text_embedding_projection.") {
                 newKey = key.replacingOccurrences(of: "text_embedding_projection.", with: "feature_extractor.")
             } else if key.hasPrefix("video_embeddings_connector.") {
                 var k = key.replacingOccurrences(of: "video_embeddings_connector.", with: "embeddings_connector.")
+                k = applyConnectorInternalMapping(k)
+                newKey = k
+            } else if key.hasPrefix("audio_embeddings_connector.") {
+                // Audio connector keys already match the Swift model key
+                var k = key
                 k = applyConnectorInternalMapping(k)
                 newKey = k
             }
@@ -913,10 +974,10 @@ class LTXWeightLoader {
 
     // MARK: - Weight Application
 
-    /// Apply weights to a transformer model
+    /// Apply weights to a transformer model (video-only or dual video/audio)
     static func applyTransformerWeights(
         _ weights: [String: MLXArray],
-        to model: LTXTransformer
+        to model: Module
     ) throws {
         let mapped: [String: MLXArray]
         // If keys already look mapped (contain patchify_proj or adaln_single), skip re-mapping
@@ -1015,10 +1076,18 @@ class LTXWeightLoader {
 
         let flatParameters = Dictionary(uniqueKeysWithValues: model.parameters().flattened())
 
+        let hasAudioConnector = model.audioEmbeddingsConnector != nil
+
         var updates: [String: MLXArray] = [:]
         var notFound = 0
+        var skippedAudio = 0
 
         for (key, value) in mapped {
+            // Skip audio connector keys when audio connector is not present
+            if !hasAudioConnector && key.hasPrefix("audio_embeddings_connector.") {
+                skippedAudio += 1
+                continue
+            }
             if flatParameters.keys.contains(key) {
                 updates[key] = value
             } else {
@@ -1030,7 +1099,232 @@ class LTXWeightLoader {
         }
 
         _ = model.update(parameters: ModuleParameters.unflattened(updates))
-        LTXDebug.log("Applied \(updates.count) weights to TextEncoder (\(notFound) unmatched)")
+        if skippedAudio > 0 {
+            LTXDebug.log("Applied \(updates.count) weights to TextEncoder (skipped \(skippedAudio) audio connector keys)")
+        } else {
+            LTXDebug.log("Applied \(updates.count) weights to TextEncoder (\(notFound) unmatched)")
+        }
+    }
+
+    // MARK: - Audio VAE + Vocoder Weight Loading
+
+    /// Load Audio VAE weights from safetensors file
+    ///
+    /// Extracts decoder and latent stat keys, applying Conv2d weight transposition.
+    static func loadAudioVAEWeights(from path: String) throws -> [String: MLXArray] {
+        LTXDebug.log("Loading Audio VAE weights from: \(path)")
+        let raw = try loadArrays(url: URL(fileURLWithPath: path))
+
+        // Filter to decoder + latent stat keys only (skip encoder)
+        var decoderWeights: [String: MLXArray] = [:]
+        for (key, value) in raw {
+            if key.hasPrefix("decoder.") || key == "latents_mean" || key == "latents_std" {
+                decoderWeights[key] = value
+            }
+        }
+
+        LTXDebug.log("Audio VAE: \(decoderWeights.count) decoder weights")
+        return decoderWeights
+    }
+
+    /// Apply weights to an AudioVAE model
+    static func applyAudioVAEWeights(
+        _ weights: [String: MLXArray],
+        to model: AudioVAE
+    ) throws {
+        // Sanitize: transpose Conv2d weights from PyTorch to MLX format
+        let sanitized = model.sanitize(weights: weights)
+
+        let flatParameters = Dictionary(uniqueKeysWithValues: model.parameters().flattened())
+        var updates: [String: MLXArray] = [:]
+        var notFound = 0
+
+        for (key, value) in sanitized {
+            if flatParameters.keys.contains(key) {
+                updates[key] = value
+            } else {
+                notFound += 1
+                if notFound <= 5 {
+                    LTXDebug.log("AudioVAE: No parameter for key: \(key)")
+                }
+            }
+        }
+
+        _ = model.update(parameters: ModuleParameters.unflattened(updates))
+        eval(model.parameters())
+        LTXDebug.log("Applied \(updates.count) weights to AudioVAE (\(notFound) unmatched)")
+    }
+
+    /// Load Vocoder weights from safetensors file
+    static func loadVocoderWeights(from path: String) throws -> [String: MLXArray] {
+        LTXDebug.log("Loading Vocoder weights from: \(path)")
+        let raw = try loadArrays(url: URL(fileURLWithPath: path))
+        LTXDebug.log("Vocoder: \(raw.count) weights loaded")
+        return raw
+    }
+
+    /// Apply weights to an LTX2Vocoder model
+    static func applyVocoderWeights(
+        _ weights: [String: MLXArray],
+        to model: LTX2Vocoder
+    ) throws {
+        // Sanitize: transpose Conv1d and ConvTranspose1d weights
+        let sanitized = model.sanitize(weights: weights)
+
+        let flatParameters = Dictionary(uniqueKeysWithValues: model.parameters().flattened())
+        var updates: [String: MLXArray] = [:]
+        var notFound = 0
+
+        for (key, value) in sanitized {
+            if flatParameters.keys.contains(key) {
+                updates[key] = value
+            } else {
+                notFound += 1
+                if notFound <= 5 {
+                    LTXDebug.log("Vocoder: No parameter for key: \(key)")
+                }
+            }
+        }
+
+        _ = model.update(parameters: ModuleParameters.unflattened(updates))
+        eval(model.parameters())
+        LTXDebug.log("Applied \(updates.count) weights to Vocoder (\(notFound) unmatched)")
+    }
+
+    // MARK: - VAE Encoder Weight Loading
+
+    /// Load VAE encoder weights from the standalone VAE safetensors file
+    ///
+    /// Extracts keys with `encoder.` prefix (which are skipped by loadVAEWeights).
+    ///
+    /// - Parameter path: Path to the VAE safetensors file
+    /// - Returns: Mapped encoder weights ready to apply
+    static func loadVAEEncoderWeights(from path: String) throws -> [String: MLXArray] {
+        LTXDebug.log("Loading VAE encoder weights from: \(path)")
+
+        let raw = try loadArrays(url: URL(fileURLWithPath: path))
+        LTXDebug.log("Loaded \(raw.count) total VAE tensors")
+
+        let mapped = mapVAEEncoderWeights(raw)
+        return mapped
+    }
+
+    /// Map VAE encoder weight keys from Diffusers safetensors to Swift module paths
+    ///
+    /// Diffusers encoder structure:
+    ///   encoder.conv_in.* -> conv_in.*
+    ///   encoder.down_blocks.{i}.resnets.{j}.* -> down_blocks_{i}.resnets.resnets.{j}.*  (WRONG)
+    ///   encoder.down_blocks.{i}.downsamplers.0.* -> down_blocks_{i}.downsamplers.*
+    ///   encoder.mid_block.resnets.{j}.* -> mid_block.resnets.{j}.*
+    ///   encoder.conv_out.* -> conv_out.*
+    static func mapVAEEncoderWeights(_ weights: [String: MLXArray]) -> [String: MLXArray] {
+        var source = weights
+        var mapped: [String: MLXArray] = [:]
+
+        let allKeys = Array(source.keys)
+        for key in allKeys {
+            guard let value = source.removeValue(forKey: key) else { continue }
+
+            // Only process encoder.* keys
+            guard key.hasPrefix("encoder.") else { continue }
+
+            var newKey = String(key.dropFirst("encoder.".count))
+
+            // Map down_blocks.{i}.* -> down_blocks_{i}.*
+            for i in 0...3 {
+                let prefix = "down_blocks.\(i)."
+                if newKey.hasPrefix(prefix) {
+                    newKey = "down_blocks_\(i)." + String(newKey.dropFirst(prefix.count))
+                    break
+                }
+            }
+
+            // Diffusers uses "resnets" — Swift EncoderResBlockGroup uses @ModuleInfo(key: "resnets")
+            // for down_blocks: resnets are inside EncoderResBlockGroup which exposes "resnets"
+            // Path: down_blocks_{i}.resnets.{j}.conv1.* -> down_blocks_{i}.resnets.resnets.{j}.conv1.*
+            // Because EncoderDownBlock has @ModuleInfo(key: "resnets") -> EncoderResBlockGroup
+            // and EncoderResBlockGroup has @ModuleInfo(key: "resnets") -> [EncoderResBlock3d]
+            // So the path nesting is: down_blocks_{i}.resnets.resnets.{j}.*
+            for i in 0...3 {
+                let resPrefix = "down_blocks_\(i).resnets."
+                if newKey.hasPrefix(resPrefix) {
+                    let suffix = String(newKey.dropFirst(resPrefix.count))
+                    // Check if it's already double-nested
+                    if !suffix.hasPrefix("resnets.") {
+                        newKey = "\(resPrefix)resnets.\(suffix)"
+                    }
+                    break
+                }
+            }
+
+            // Downsamplers: down_blocks_{i}.downsamplers.0.* -> down_blocks_{i}.downsamplers.*
+            for i in 0...3 {
+                let dsPrefix = "down_blocks_\(i).downsamplers.0."
+                if newKey.hasPrefix(dsPrefix) {
+                    let suffix = String(newKey.dropFirst(dsPrefix.count))
+                    newKey = "down_blocks_\(i).downsamplers.\(suffix)"
+                    break
+                }
+            }
+
+            // Mid block resnets: mid_block.resnets.{j}.* -> mid_block.resnets.{j}.*
+            // EncoderResBlockGroup has @ModuleInfo(key: "resnets") -> [EncoderResBlock3d]
+            // So mid_block.resnets.{j} matches directly
+
+            mapped[newKey] = value
+        }
+
+        LTXDebug.log("Mapped \(mapped.count) VAE encoder weights")
+        if LTXDebug.isEnabled {
+            let sortedKeys = mapped.keys.sorted()
+            LTXDebug.log("VAE encoder mapped keys: \(sortedKeys.prefix(10))...")
+        }
+        return mapped
+    }
+
+    /// Apply weights to a VAE encoder model
+    static func applyVAEEncoderWeights(
+        _ weights: [String: MLXArray],
+        to model: VideoEncoder
+    ) throws {
+        let mapped: [String: MLXArray]
+        // If keys already look mapped (contain down_blocks_), skip re-mapping
+        if weights.keys.contains(where: { $0.hasPrefix("down_blocks_") || $0.hasPrefix("conv_in.") }) {
+            mapped = weights
+        } else {
+            mapped = mapVAEEncoderWeights(weights)
+        }
+
+        let flatParameters = Dictionary(uniqueKeysWithValues: model.parameters().flattened())
+
+        var updates: [String: MLXArray] = [:]
+        var notFound = 0
+        var unmatchedKeys: [String] = []
+
+        for (key, value) in mapped {
+            if flatParameters.keys.contains(key) {
+                updates[key] = value
+            } else {
+                notFound += 1
+                unmatchedKeys.append(key)
+                if notFound <= 10 {
+                    LTXDebug.log("VAE Encoder: No parameter for mapped key: \(key)")
+                }
+            }
+        }
+
+        // Check for model parameters that were NOT loaded
+        let loadedKeys = Set(updates.keys)
+        let missingFromModel = flatParameters.keys.filter { !loadedKeys.contains($0) }.sorted()
+        if !missingFromModel.isEmpty && LTXDebug.isEnabled {
+            LTXDebug.log("VAE Encoder: \(missingFromModel.count) model params NOT loaded:")
+            for k in missingFromModel.prefix(10) {
+                LTXDebug.log("  missing: \(k)")
+            }
+        }
+
+        _ = model.update(parameters: ModuleParameters.unflattened(updates))
+        LTXDebug.log("Applied \(updates.count) weights to VAE Encoder (\(notFound) unmatched)")
     }
 
     // MARK: - Unified File Splitting

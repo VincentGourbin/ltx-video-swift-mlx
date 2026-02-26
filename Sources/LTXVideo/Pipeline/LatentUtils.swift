@@ -1,7 +1,9 @@
 // LatentUtils.swift - Latent Space Utilities for LTX-2
 // Copyright 2025
 
+import CoreGraphics
 import Foundation
+import ImageIO
 @preconcurrency import MLX
 import MLXRandom
 
@@ -324,4 +326,67 @@ func formatBytes(_ bytes: Int64) -> String {
     }
     let mb = Double(bytes) / (1024 * 1024)
     return String(format: "%.1f MB", mb)
+}
+
+// MARK: - Image Loading
+
+/// Load an image from disk, resize to target dimensions, and normalize to [-1, 1]
+///
+/// Returns shape (1, 3, 1, H, W) — batch, channels, temporal, height, width
+///
+/// - Parameters:
+///   - path: Path to the image file (PNG, JPEG, etc.)
+///   - width: Target width in pixels
+///   - height: Target height in pixels
+/// - Returns: Normalized image tensor ready for VAE encoding
+/// - Throws: LTXError.fileNotFound if image cannot be loaded
+func loadImage(from path: String, width: Int, height: Int) throws -> MLXArray {
+    let url = URL(fileURLWithPath: path)
+
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+          let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else {
+        throw LTXError.fileNotFound("Cannot load image from: \(path)")
+    }
+
+    LTXDebug.log("Loaded image: \(cgImage.width)x\(cgImage.height) -> resizing to \(width)x\(height)")
+
+    // Resize to target dimensions using CoreGraphics
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    guard let context = CGContext(
+        data: nil,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: width * 4,
+        space: colorSpace,
+        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+    ) else {
+        throw LTXError.videoProcessingFailed("Failed to create graphics context for image resize")
+    }
+
+    context.interpolationQuality = .high
+    context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+    guard let data = context.data else {
+        throw LTXError.videoProcessingFailed("Failed to get pixel data from resized image")
+    }
+
+    // Convert RGBA pixels to float RGB normalized to [-1, 1]
+    let ptr = data.bindMemory(to: UInt8.self, capacity: height * width * 4)
+    var pixels = [Float](repeating: 0, count: height * width * 3)
+    for i in 0..<(height * width) {
+        pixels[i * 3 + 0] = Float(ptr[i * 4 + 0]) / 127.5 - 1.0  // R
+        pixels[i * 3 + 1] = Float(ptr[i * 4 + 1]) / 127.5 - 1.0  // G
+        pixels[i * 3 + 2] = Float(ptr[i * 4 + 2]) / 127.5 - 1.0  // B
+    }
+
+    // Build tensor: (H, W, 3) -> (3, H, W) -> (1, 3, 1, H, W)
+    let hwc = MLXArray(pixels, [height, width, 3])
+    let chw = hwc.transposed(2, 0, 1)  // (3, H, W)
+    let result = chw.reshaped([1, 3, 1, height, width])
+
+    LTXDebug.log("Image tensor: \(result.shape), mean=\(result.mean().item(Float.self)), range=[\(result.min().item(Float.self)), \(result.max().item(Float.self))]")
+
+    return result
 }

@@ -214,23 +214,28 @@ struct LoRAKeyMapper {
             key = String(key.dropFirst("diffusion_model.".count))
         }
 
-        // 2. to_out.0 -> to_out
+        // 2. emb.timestep_embedder.linear_ -> emb.linear_
+        //    Python: CombinedTimestepTextProjEmbeddings wraps TimestepEmbedding as .timestep_embedder
+        //    Swift: AdaLayerNormSingle.emb is TimestepMLP directly (no wrapper level)
+        key = key.replacingOccurrences(of: ".emb.timestep_embedder.", with: ".emb.")
+
+        // 3. to_out.0 -> to_out
         //    The Python Sequential wrapper adds the ".0" list index; the Swift module
         //    LTXAttention declares @ModuleInfo(key: "to_out") with no index.
         key = key.replacingOccurrences(of: ".to_out.0", with: ".to_out")
 
-        // 3. ff.net.0.proj -> ff.project_in.proj
+        // 4. ff.net.0.proj -> ff.project_in.proj
         //    Python: FeedForward contains nn.Sequential("net") with [GEGLU(.proj), ..., Linear]
         //    Swift: LTXFeedForward uses @ModuleInfo(key: "project_in") var projectIn: GELUApprox
         //           and GELUApprox uses @ModuleInfo var proj: Linear  (default key "proj")
         key = key.replacingOccurrences(of: ".ff.net.0.proj", with: ".ff.project_in.proj")
 
-        // 4. ff.net.2 -> ff.project_out
+        // 5. ff.net.2 -> ff.project_out
         //    Python: FeedForward's net[2] is the output Linear
         //    Swift: LTXFeedForward uses @ModuleInfo(key: "project_out") var projectOut: Linear
         key = key.replacingOccurrences(of: ".ff.net.2", with: ".ff.project_out")
 
-        // 5. Append .weight — all targeted layers are Linear modules whose weight
+        // 6. Append .weight — all targeted layers are Linear modules whose weight
         //    parameter is named "weight"
         key = key + ".weight"
 

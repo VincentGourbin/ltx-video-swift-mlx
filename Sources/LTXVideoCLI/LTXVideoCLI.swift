@@ -65,6 +65,12 @@ struct Generate: AsyncParsableCommand {
     @Option(name: .long, help: "Path to unified LTX-2 weights file (.safetensors)")
     var ltxWeights: String?
 
+    @Option(name: .long, help: "Input image path for image-to-video generation")
+    var image: String?
+
+    @Option(name: .long, help: "Image conditioning noise scale (0.0=rigid freeze, 0.15=default, 0.3=more motion)")
+    var imageCondNoise: Float = 0.15
+
     @Option(name: .long, help: "Negative prompt for CFG (default: detailed quality-negative prompt)")
     var negativePrompt: String?
 
@@ -95,6 +101,9 @@ struct Generate: AsyncParsableCommand {
     @Flag(name: .long, help: "Enhance prompt using Gemma before generation")
     var enhancePrompt: Bool = false
 
+    @Flag(name: .long, help: "Generate audio alongside video (dual video/audio denoising)")
+    var audio: Bool = false
+
     @Flag(name: .long, help: "Enable debug output")
     var debug: Bool = false
 
@@ -113,8 +122,14 @@ struct Generate: AsyncParsableCommand {
         // Parse STG blocks
         let parsedStgBlocks = stgBlocks.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
 
+        let isI2V = image != nil
+
         print("LTX-2 Video Generation")
         print("======================")
+        print("Mode: \(isI2V ? "image-to-video" : "text-to-video")")
+        if let imagePath = image {
+            print("Input image: \(imagePath)")
+        }
         print("Prompt: \(prompt)")
         print("Output: \(output)")
         print("Resolution: \(width)x\(height)")
@@ -130,6 +145,7 @@ struct Generate: AsyncParsableCommand {
         if stgScale > 0 { print("STG scale: \(stgScale), blocks: \(parsedStgBlocks)") }
         if twoStage { print("Two-stage: enabled") }
         if enhancePrompt { print("Prompt enhancement: enabled") }
+        if audio { print("Audio: enabled (dual video/audio generation)") }
         if transformerQuant != "bf16" { print("Transformer quantization: \(transformerQuant)") }
         print()
 
@@ -200,6 +216,16 @@ struct Generate: AsyncParsableCommand {
         let loadTime = Date().timeIntervalSince(startLoad)
         print("Models loaded in \(String(format: "%.1f", loadTime))s")
 
+        // Load audio models if requested
+        if audio {
+            print("Loading audio models...")
+            fflush(stdout)
+            try await pipeline.loadAudioModels { progress in
+                print("  \(progress.message) (\(Int(progress.progress * 100))%)")
+            }
+            print("Audio models loaded")
+        }
+
         // Apply LoRA
         // --distilled-lora: always download and fuse distilled LoRA
         // --two-stage without --distilled-lora: no auto LoRA (user controls model/steps/CFG)
@@ -250,8 +276,53 @@ struct Generate: AsyncParsableCommand {
             stgScale: stgScale,
             stgBlocks: parsedStgBlocks,
             twoStage: twoStage,
-            enhancePrompt: enhancePrompt
+            enhancePrompt: enhancePrompt,
+            imagePath: image,
+            imageCondNoiseScale: imageCondNoise
         )
+
+        // Audio generation uses separate path
+        if audio {
+            let audioResult = try await pipeline.generateVideoWithAudio(
+                prompt: prompt,
+                config: config,
+                onProgress: { progress in
+                    print("  \(progress.status)")
+                }
+            )
+
+            let genTime = Date().timeIntervalSince(startGen)
+            print("Generation completed in \(String(format: "%.1f", genTime))s")
+
+            // Export video
+            print("\nExporting video to \(output)...")
+            let outputURL = URL(fileURLWithPath: output)
+            let videoURL = try await VideoExporter.exportVideo(
+                frames: audioResult.frames,
+                width: width,
+                height: height,
+                fps: 24.0,
+                to: outputURL
+            )
+            print("Video saved to: \(videoURL.path)")
+
+            // Export audio WAV
+            let audioPath = output.replacingOccurrences(of: ".mp4", with: ".wav")
+            print("Exporting audio to \(audioPath)...")
+            try AudioExporter.exportToWAV(
+                waveform: audioResult.audioWaveform,
+                sampleRate: audioResult.audioSampleRate,
+                path: audioPath
+            )
+            print("Audio saved to: \(audioPath)")
+
+            // Print summary
+            print("\n--- Summary ---")
+            print("Seed: \(audioResult.seed)")
+            print("Generation time: \(String(format: "%.1f", audioResult.generationTime))s")
+            print("Audio sample rate: \(audioResult.audioSampleRate) Hz")
+            return
+        }
 
         let result: VideoGenerationResult
         if twoStage {
@@ -265,6 +336,17 @@ struct Generate: AsyncParsableCommand {
                 prompt: prompt,
                 config: config,
                 upscalerWeightsPath: upscalerPath,
+                onProgress: { progress in
+                    print("  \(progress.status)")
+                },
+                profile: profile
+            )
+        } else if isI2V {
+            // Image-to-video: encode image + denoise + decode
+            result = try await pipeline.generateVideoFromImage(
+                prompt: prompt,
+                negativePrompt: negativePrompt,
+                config: config,
                 onProgress: { progress in
                     print("  \(progress.status)")
                 },

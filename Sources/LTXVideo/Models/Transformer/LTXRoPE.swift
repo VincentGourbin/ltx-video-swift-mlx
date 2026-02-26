@@ -608,3 +608,36 @@ func createPositionGrid(
 
     return expanded.asType(DType.float32)
 }
+
+// MARK: - Audio Position Grid (1D Temporal)
+
+/// Create a 1D position grid for audio tokens
+///
+/// Audio positions are purely temporal — each audio latent frame maps
+/// to a position index. Unlike video which has 3D (time, height, width)
+/// positions, audio has 1D (time) positions.
+///
+/// - Parameters:
+///   - batchSize: Batch size
+///   - audioFrames: Number of audio latent frames
+///   - hopLength: Audio hop length in samples (default: 160)
+///   - sampleRate: Audio sample rate (default: 16000)
+///   - temporalScale: VAE temporal compression (default: 4)
+/// - Returns: Position grid of shape (B, 1, T_audio) with temporal positions
+func createAudioPositionGrid(
+    batchSize: Int,
+    audioFrames: Int,
+    hopLength: Int = 160,
+    sampleRate: Int = 16000,
+    temporalScale: Int = 4
+) -> MLXArray {
+    // Audio temporal positions: each frame represents a segment of audio
+    // Position in seconds: frame_idx * temporalScale * hopLength / sampleRate
+    let posScale = Float(temporalScale * hopLength) / Float(sampleRate)
+    let positions: [Float] = (0..<audioFrames).map { i in
+        (Float(i) + 0.5) * posScale  // midpoint of each frame
+    }
+    let posArray = MLXArray(positions).reshaped([1, 1, audioFrames])
+    let expanded = MLX.broadcast(posArray, to: [batchSize, 1, audioFrames])
+    return expanded.asType(DType.float32)
+}
