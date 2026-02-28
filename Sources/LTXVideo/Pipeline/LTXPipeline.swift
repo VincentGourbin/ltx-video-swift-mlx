@@ -2,10 +2,13 @@
 // Copyright 2025
 
 import CoreGraphics
+import CoreImage
 import Foundation
 @preconcurrency import MLX
+import MLXLMCommon
 import MLXRandom
 import MLXNN
+import MLXVLM
 import Tokenizers
 import Hub
 
@@ -465,8 +468,11 @@ public actor LTXPipeline {
             progressCallback?(progress)
         }
 
-        // Load and split unified weights
-        let (transformerWeights, _, _) = try LTXWeightLoader.splitUnifiedWeightsFile(path: unifiedPath.path)
+        // Load and split unified weights (includeAudio: true to keep audio transformer keys)
+        let (transformerWeights, _, connectorWeightsFromUnified) = try LTXWeightLoader.splitUnifiedWeightsFile(
+            path: unifiedPath.path,
+            includeAudio: true
+        )
 
         // Create LTX2 dual transformer
         let ltx2 = LTX2Transformer(
@@ -475,8 +481,8 @@ public actor LTXPipeline {
             memoryOptimization: memoryOptimization
         )
 
-        // Apply weights (the key mapping should handle both video and audio keys)
-        try LTXWeightLoader.applyTransformerWeights(transformerWeights, to: ltx2)
+        // Apply weights with audio key mapping enabled
+        try LTXWeightLoader.applyTransformerWeights(transformerWeights, to: ltx2, includeAudio: true)
 
         // Apply quantization if configured
         if quantization.transformer == .qint8 || quantization.transformer == .int4 {
@@ -493,25 +499,27 @@ public actor LTXPipeline {
         transformer = nil
         Memory.clearCache()
 
-        // Step 4: Update text encoder to include audio connector
+        // Step 4: Recreate text encoder with audio connector and reload all connector weights
         progressCallback?(DownloadProgress(progress: 0.9, message: "Loading audio text connector..."))
-        let connectorPath = try await downloader.downloadConnector(model: model)
-        let connectorWeights = try LTXWeightLoader.loadConnectorWeights(from: connectorPath.path)
 
-        // Check if audio connector keys exist in the weights
-        let hasAudioKeys = connectorWeights.keys.contains { $0.contains("audio") }
-        if hasAudioKeys {
-            // Recreate text encoder with audio connector
-            let newTextEncoder = VideoGemmaTextEncoderModel(
-                audioEmbeddingsConnector: Embeddings1DConnector()
-            )
-            let mapped = LTXWeightLoader.mapTextEncoderWeights(connectorWeights)
-            try LTXWeightLoader.applyTextEncoderWeights(mapped, to: newTextEncoder)
-            textEncoder = newTextEncoder
-            LTXDebug.log("Text encoder updated with audio connector")
+        // Create new text encoder with audio connector enabled
+        let newTextEncoder = createTextEncoder(includeAudioConnector: true)
+
+        // Try connector weights from unified file first, fall back to standalone file
+        var connectorWeights: [String: MLXArray]
+        if !connectorWeightsFromUnified.isEmpty {
+            connectorWeights = connectorWeightsFromUnified
+            LTXDebug.log("Using connector weights from unified file (\(connectorWeights.count) keys)")
         } else {
-            LTXDebug.log("No audio connector keys found - audio text encoding will share video embeddings")
+            let connectorPath = try await downloader.downloadConnector(model: model)
+            connectorWeights = try LTXWeightLoader.loadConnectorWeights(from: connectorPath.path)
+            LTXDebug.log("Using connector weights from standalone file (\(connectorWeights.count) keys)")
         }
+
+        // Apply all connector weights (video + audio + feature extractor)
+        try LTXWeightLoader.applyTextEncoderWeights(connectorWeights, to: newTextEncoder)
+        textEncoder = newTextEncoder
+        LTXDebug.log("Text encoder updated with audio connector")
 
         progressCallback?(DownloadProgress(progress: 1.0, message: "Audio models loaded successfully"))
         LTXDebug.log("All audio models loaded successfully")
@@ -667,8 +675,13 @@ public actor LTXPipeline {
             // 0b. Optionally enhance prompt using Gemma generation
             let effectivePrompt: String
             if config.enhancePrompt {
-                LTXDebug.log("Enhancing prompt with Gemma...")
-                effectivePrompt = enhancePrompt(prompt)
+                if let imagePath = config.imagePath {
+                    LTXDebug.log("Enhancing I2V prompt with multimodal VLM...")
+                    effectivePrompt = try await enhanceI2VPrompt(prompt, imagePath: imagePath)
+                } else {
+                    LTXDebug.log("Enhancing prompt with Gemma...")
+                    effectivePrompt = enhancePrompt(prompt)
+                }
                 LTXDebug.log("Using enhanced prompt for generation")
             } else {
                 effectivePrompt = prompt
@@ -1120,7 +1133,16 @@ public actor LTXPipeline {
         }
 
         let generationStart = Date()
-        LTXDebug.log("Generating video+audio: \(config.width)x\(config.height), \(config.numFrames) frames")
+        let isI2V = config.imagePath != nil
+        LTXDebug.log("Generating video+audio\(isI2V ? " (I2V)" : ""): \(config.width)x\(config.height), \(config.numFrames) frames")
+
+        // 0. Encode image if I2V
+        var imageLatent: MLXArray? = nil
+        if let imagePath = config.imagePath {
+            LTXDebug.log("Encoding input image for I2V...")
+            imageLatent = try await encodeImage(path: imagePath, width: config.width, height: config.height)
+            unloadVAEEncoder()
+        }
 
         // 1. Text encoding (with audio connector)
         LTXMemoryManager.setPhase(.textEncoding)
@@ -1134,7 +1156,13 @@ public actor LTXPipeline {
 
         let effectivePrompt: String
         if config.enhancePrompt {
-            effectivePrompt = enhancePrompt(prompt)
+            if let imagePath = config.imagePath {
+                LTXDebug.log("Enhancing I2V prompt with multimodal VLM...")
+                effectivePrompt = try await enhanceI2VPrompt(prompt, imagePath: imagePath)
+            } else {
+                LTXDebug.log("Enhancing prompt with Gemma...")
+                effectivePrompt = enhancePrompt(prompt)
+            }
         } else {
             effectivePrompt = prompt
         }
@@ -1216,6 +1244,21 @@ public actor LTXPipeline {
         videoLatent = videoLatent * sigmas[0]
         audioLatentPacked = audioLatentPacked * sigmas[0]
 
+        // I2V: condition frame 0 with image latent
+        var conditioningMask: MLXArray? = nil
+        if let imgLatent = imageLatent {
+            videoLatent[0..., 0..., 0..<1, 0..., 0...] = imgLatent
+            MLX.eval(videoLatent)
+
+            // Per-token mask: 1 for frame 0, 0 for others
+            let tokensPerFrame = latentShape.height * latentShape.width
+            let frame0Mask = MLXArray.ones([1, tokensPerFrame])
+            let otherMask = MLXArray.zeros([1, latentShape.tokenCount - tokensPerFrame])
+            conditioningMask = MLX.concatenated([frame0Mask, otherMask], axis: 1)
+            MLX.eval(conditioningMask!)
+            LTXDebug.log("I2V: frame 0 conditioned with image latent, per-token timestep mask created")
+        }
+
         // 5. Denoising loop
         LTXMemoryManager.setPhase(.denoising)
         LTXDebug.log("Starting dual video+audio denoising (\(config.numSteps) steps)...")
@@ -1229,7 +1272,21 @@ public actor LTXPipeline {
                 currentStep: step, totalSteps: config.numSteps, sigma: sigma
             ))
 
-            let timestep = MLXArray([sigma])
+            // I2V: inject noise to conditioned frame (Diffusers pattern)
+            if let condLatent = imageLatent, config.imageCondNoiseScale > 0, sigma > 0 {
+                let injectionNoise = MLXRandom.normal(condLatent.shape)
+                let noisedFrame0 = condLatent + MLXArray(config.imageCondNoiseScale) * injectionNoise * MLXArray(sigma * sigma)
+                videoLatent[0..., 0..., 0..<1, 0..., 0...] = noisedFrame0
+            }
+
+            // Per-token timestep for I2V: frame 0 gets σ=0 (already clean), others get σ
+            let videoTimestep: MLXArray
+            if let mask = conditioningMask {
+                videoTimestep = MLXArray(sigma) * (1 - mask)  // (1, T): frame0=0, others=sigma
+            } else {
+                videoTimestep = MLXArray([sigma])
+            }
+            let audioTimestep = MLXArray([sigma])
 
             // Patchify video for transformer
             let videoPatchified = patchify(videoLatent).asType(.bfloat16)
@@ -1241,8 +1298,8 @@ public actor LTXPipeline {
                 audioLatent: audioPatchified,
                 videoContext: videoTextEmbeddings.asType(.bfloat16),
                 audioContext: audioTextEmbeddings.asType(.bfloat16),
-                videoTimesteps: timestep,
-                audioTimesteps: timestep,
+                videoTimesteps: videoTimestep,
+                audioTimesteps: audioTimestep,
                 videoContextMask: textMask,
                 audioContextMask: textMask,
                 videoLatentShape: (frames: latentShape.frames, height: latentShape.height, width: latentShape.width),
@@ -1255,10 +1312,22 @@ public actor LTXPipeline {
             let audioVelocity = audioVelPred.asType(.float32)
 
             // Euler step for video
-            videoLatent = scheduler.step(
-                latent: videoLatent, velocity: videoVelocity,
-                sigma: sigma, sigmaNext: sigmaNext
-            )
+            if imageLatent != nil {
+                // I2V: only step frames 1+ (frame 0 stays clean)
+                let velocitySlice = videoVelocity[0..., 0..., 1..., 0..., 0...]
+                let latentSlice = videoLatent[0..., 0..., 1..., 0..., 0...]
+                let steppedSlice = scheduler.step(
+                    latent: latentSlice, velocity: velocitySlice,
+                    sigma: sigma, sigmaNext: sigmaNext
+                )
+                let frame0 = videoLatent[0..., 0..., 0..<1, 0..., 0...]
+                videoLatent = MLX.concatenated([frame0, steppedSlice], axis: 2)
+            } else {
+                videoLatent = scheduler.step(
+                    latent: videoLatent, velocity: videoVelocity,
+                    sigma: sigma, sigmaNext: sigmaNext
+                )
+            }
 
             // Euler step for audio (same formula)
             audioLatentPacked = audioLatentPacked + (sigmaNext - sigma) * audioVelocity
@@ -1313,6 +1382,407 @@ public actor LTXPipeline {
             audioWaveform: audioWaveform,
             audioSampleRate: vocoder.outputSampleRate,
             seed: usedSeed,
+            generationTime: generationTime
+        )
+    }
+
+    // MARK: - Two-Stage Audio+Video Generation
+
+    /// Generate video with audio using two-stage pipeline (half-res → upscale → refine)
+    ///
+    /// Combines two-stage spatial upscaling with dual video/audio transformer.
+    /// Audio is denoised alongside video in both stages — no spatial upscaling for audio.
+    /// Stage 1: half-res video + audio denoised together
+    /// Upscale: video latent 2x (audio unchanged)
+    /// Stage 2: full-res video + audio re-noised and refined together
+    ///
+    /// - Parameters:
+    ///   - prompt: Text description of the video and audio
+    ///   - config: Video generation configuration (width/height = FINAL resolution)
+    ///   - upscalerWeightsPath: Path to spatial upscaler safetensors
+    ///   - onProgress: Optional progress callback
+    /// - Returns: AudioVideoGenerationResult with video frames and audio waveform
+    public func generateVideoWithAudioTwoStage(
+        prompt: String,
+        config: LTXVideoGenerationConfig,
+        upscalerWeightsPath: String,
+        onProgress: GenerationProgressCallback? = nil
+    ) async throws -> AudioVideoGenerationResult {
+        try config.validate()
+
+        guard let textEncoder = textEncoder,
+              let ltx2 = ltx2Transformer,
+              let vaeDecoder = vaeDecoder,
+              let audioVAE = audioVAE,
+              let vocoder = vocoder
+        else {
+            throw LTXError.modelNotLoaded("Audio+two-stage models not loaded. Call loadModels() + loadAudioModels() first.")
+        }
+
+        let generationStart = Date()
+
+        // Two-stage requires width/height divisible by 64
+        guard config.width % 64 == 0 && config.height % 64 == 0 else {
+            throw LTXError.invalidConfiguration("Two-stage requires width and height divisible by 64. Got \(config.width)x\(config.height)")
+        }
+
+        let halfWidth = config.width / 2
+        let halfHeight = config.height / 2
+        let isI2V = config.imagePath != nil
+
+        LTXDebug.log("Two-stage audio+video: \(halfWidth)x\(halfHeight) → \(config.width)x\(config.height)")
+
+        // 0. Encode image at half-res if i2v
+        var halfResImageLatent: MLXArray? = nil
+        if let imagePath = config.imagePath {
+            LTXDebug.log("Two-stage I2V: encoding image at \(halfWidth)x\(halfHeight)")
+            halfResImageLatent = try await encodeImage(path: imagePath, width: halfWidth, height: halfHeight)
+            unloadVAEEncoder()
+        }
+
+        // 0b. Optionally enhance prompt
+        let effectivePrompt: String
+        if config.enhancePrompt {
+            if let imagePath = config.imagePath {
+                LTXDebug.log("Enhancing I2V prompt with multimodal VLM...")
+                effectivePrompt = try await enhanceI2VPrompt(prompt, imagePath: imagePath)
+            } else {
+                LTXDebug.log("Enhancing prompt with Gemma...")
+                effectivePrompt = enhancePrompt(prompt)
+            }
+        } else {
+            effectivePrompt = prompt
+        }
+
+        // 1. Text encoding (with audio connector)
+        let (inputIds, attentionMask) = tokenizePrompt(effectivePrompt, maxLength: textMaxLength)
+
+        guard let gemma = gemmaModel else {
+            throw LTXError.modelNotLoaded("Gemma model not loaded")
+        }
+
+        let (_, allHiddenStates) = gemma(inputIds, attentionMask: attentionMask, outputHiddenStates: true)
+        guard let states = allHiddenStates, states.count == gemma.config.hiddenLayers + 1 else {
+            throw LTXError.generationFailed("Failed to extract Gemma hidden states")
+        }
+
+        let encoderOutput = textEncoder.encodeFromHiddenStates(
+            hiddenStates: states,
+            attentionMask: attentionMask,
+            paddingSide: "left"
+        )
+        let videoTextEmbeddings = encoderOutput.videoEncoding
+        let audioTextEmbeddings = encoderOutput.audioEncoding ?? videoTextEmbeddings
+        let textMask = encoderOutput.attentionMask
+        MLX.eval(videoTextEmbeddings, audioTextEmbeddings, textMask)
+
+        LTXDebug.log("Video text: \(videoTextEmbeddings.shape), Audio text: \(audioTextEmbeddings.shape)")
+
+        // Unload Gemma
+        self.gemmaModel = nil
+        self.tokenizer = nil
+        Memory.clearCache()
+
+        // 2. Create latent shapes
+        let stage1Shape = VideoLatentShape.fromPixelDimensions(
+            batch: 1, channels: 128,
+            frames: config.numFrames, height: halfHeight, width: halfWidth
+        )
+
+        let audioNumFrames = computeAudioLatentFrames(videoFrames: config.numFrames)
+        LTXDebug.log("Stage 1 latent: \(stage1Shape.frames)x\(stage1Shape.height)x\(stage1Shape.width), audio frames: \(audioNumFrames)")
+
+        // 3. Generate noise
+        if let seed = config.seed {
+            MLXRandom.seed(seed)
+        }
+
+        // Video noise (float32) at half resolution
+        var videoLatent = generateNoise(shape: stage1Shape, seed: config.seed)
+        MLX.eval(videoLatent)
+
+        // Audio noise (float32, drawn after video noise from same RNG)
+        let audioLatent = MLXRandom.normal(
+            [1, Self.audioLatentChannels, audioNumFrames, Self.audioLatentMelBins]
+        ).asType(.float32)
+        MLX.eval(audioLatent)
+        var audioLatentPacked = packAudioLatents(audioLatent)
+
+        // 4. Stage 1 sigma schedule (distilled)
+        let stage1Scheduler = LTXScheduler(isDistilled: true)
+        stage1Scheduler.setTimesteps(
+            numSteps: config.numSteps,
+            distilled: true,
+            latentTokenCount: stage1Shape.tokenCount
+        )
+        let stage1Sigmas = stage1Scheduler.sigmas
+        LTXDebug.log("Stage 1: \(stage1Sigmas.count - 1) steps, sigmas: \(stage1Sigmas)")
+
+        // Scale initial noise
+        videoLatent = videoLatent * stage1Sigmas[0]
+        audioLatentPacked = audioLatentPacked * stage1Sigmas[0]
+
+        // I2V: condition frame 0 with per-token timestep masking
+        var stage1CondMask: MLXArray? = nil
+        if let imgLatent = halfResImageLatent {
+            videoLatent[0..., 0..., 0..<1, 0..., 0...] = imgLatent
+
+            let tokensPerFrame = stage1Shape.height * stage1Shape.width
+            let frame0Mask = MLXArray.ones([1, tokensPerFrame])
+            let otherMask = MLXArray.zeros([1, stage1Shape.tokenCount - tokensPerFrame])
+            stage1CondMask = MLX.concatenated([frame0Mask, otherMask], axis: 1)
+            MLX.eval(stage1CondMask!)
+        }
+        MLX.eval(videoLatent)
+
+        // === STAGE 1: Denoise at half resolution ===
+        let stage1NumSteps = stage1Sigmas.count - 1
+        LTXDebug.log("=== Stage 1: Half-resolution dual denoising (\(stage1NumSteps) steps) ===")
+        let stage1Start = Date()
+
+        for step in 0..<stage1NumSteps {
+            let stepStart = Date()
+            let sigma = stage1Sigmas[step]
+            let sigmaNext = stage1Sigmas[step + 1]
+
+            onProgress?(GenerationProgress(
+                currentStep: step, totalSteps: stage1NumSteps, sigma: sigma
+            ))
+
+            // I2V: inject noise to conditioned frame
+            if let condLatent = halfResImageLatent, config.imageCondNoiseScale > 0, sigma > 0 {
+                let injectionNoise = MLXRandom.normal(condLatent.shape)
+                let noisedFrame0 = condLatent + MLXArray(config.imageCondNoiseScale) * injectionNoise * MLXArray(sigma * sigma)
+                videoLatent[0..., 0..., 0..<1, 0..., 0...] = noisedFrame0
+            }
+
+            // Per-token timestep for I2V: frame 0 gets σ=0, others get σ
+            let videoTimestep: MLXArray
+            if let mask = stage1CondMask {
+                videoTimestep = MLXArray(sigma) * (1 - mask)
+            } else {
+                videoTimestep = MLXArray([sigma])
+            }
+            let audioTimestep = MLXArray([sigma])
+
+            let videoPatchified = patchify(videoLatent).asType(.bfloat16)
+            let audioPatchified = audioLatentPacked.asType(.bfloat16)
+
+            let (videoVelPred, audioVelPred) = ltx2(
+                videoLatent: videoPatchified,
+                audioLatent: audioPatchified,
+                videoContext: videoTextEmbeddings.asType(.bfloat16),
+                audioContext: audioTextEmbeddings.asType(.bfloat16),
+                videoTimesteps: videoTimestep,
+                audioTimesteps: audioTimestep,
+                videoContextMask: textMask,
+                audioContextMask: textMask,
+                videoLatentShape: (frames: stage1Shape.frames, height: stage1Shape.height, width: stage1Shape.width),
+                audioNumFrames: audioNumFrames
+            )
+
+            let videoVelocity = unpatchify(videoVelPred, shape: stage1Shape).asType(.float32)
+            let audioVelocity = audioVelPred.asType(.float32)
+
+            if halfResImageLatent != nil {
+                // I2V: only step frames 1+ (frame 0 stays clean)
+                let velocitySlice = videoVelocity[0..., 0..., 1..., 0..., 0...]
+                let latentSlice = videoLatent[0..., 0..., 1..., 0..., 0...]
+                let steppedSlice = stage1Scheduler.step(
+                    latent: latentSlice, velocity: velocitySlice,
+                    sigma: sigma, sigmaNext: sigmaNext
+                )
+                let frame0 = videoLatent[0..., 0..., 0..<1, 0..., 0...]
+                videoLatent = MLX.concatenated([frame0, steppedSlice], axis: 2)
+            } else {
+                videoLatent = stage1Scheduler.step(
+                    latent: videoLatent, velocity: videoVelocity,
+                    sigma: sigma, sigmaNext: sigmaNext
+                )
+            }
+            audioLatentPacked = audioLatentPacked + (sigmaNext - sigma) * audioVelocity
+
+            MLX.eval(videoLatent, audioLatentPacked)
+            if (step + 1) % 5 == 0 { Memory.clearCache() }
+
+            LTXDebug.log("Stage 1 step \(step)/\(stage1NumSteps): σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext)), time=\(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
+        }
+        LTXDebug.log("Stage 1 complete: \(String(format: "%.1f", Date().timeIntervalSince(stage1Start)))s")
+
+        // Save stage 1 video output for AdaIN reference
+        let stage1Output = videoLatent
+
+        // === UPSCALE VIDEO 2x (audio unchanged) ===
+        LTXDebug.log("=== Upscaling video latent 2x ===")
+        let upscaleStart = Date()
+
+        let upscaler = try loadSpatialUpscaler(from: upscalerWeightsPath)
+
+        let latentMean = vaeDecoder.meanOfMeans
+        let latentStd = vaeDecoder.stdOfMeans
+        MLX.eval(latentMean, latentStd)
+
+        let mean5d = latentMean.reshaped([1, -1, 1, 1, 1])
+        let std5d = latentStd.reshaped([1, -1, 1, 1, 1])
+
+        let denormedLatent = videoLatent * std5d + mean5d
+        MLX.eval(denormedLatent)
+
+        let upscaledLatent = upscaler(denormedLatent)
+        MLX.eval(upscaledLatent)
+
+        videoLatent = (upscaledLatent - mean5d) / std5d
+        MLX.eval(videoLatent)
+
+        videoLatent = adainFilterLatent(videoLatent, reference: stage1Output)
+        MLX.eval(videoLatent)
+
+        LTXDebug.log("Upscale time: \(String(format: "%.1f", Date().timeIntervalSince(upscaleStart)))s, shape: \(videoLatent.shape)")
+
+        // === STAGE 2: Refine at full resolution ===
+        LTXDebug.log("=== Stage 2: Full-resolution dual refinement (3 steps) ===")
+        let stage2Start = Date()
+
+        let stage2Shape = VideoLatentShape.fromPixelDimensions(
+            batch: 1, channels: 128,
+            frames: config.numFrames, height: config.height, width: config.width
+        )
+
+        // Re-noise video and audio for refinement
+        let stage2Sigmas = STAGE_2_DISTILLED_SIGMA_VALUES
+        let noiseScale = stage2Sigmas[0]  // 0.909375
+
+        let videoNoise = generateNoise(shape: stage2Shape)
+        videoLatent = MLXArray(noiseScale) * videoNoise + MLXArray(1.0 - noiseScale) * videoLatent
+
+        // Re-noise audio similarly
+        let audioReNoise = MLXRandom.normal(audioLatentPacked.shape).asType(.float32)
+        audioLatentPacked = MLXArray(noiseScale) * audioReNoise + MLXArray(1.0 - noiseScale) * audioLatentPacked
+
+        // I2V stage 2: encode image at full resolution and condition frame 0
+        var fullResImageLatent: MLXArray? = nil
+        var stage2CondMask: MLXArray? = nil
+        if isI2V, let imagePath = config.imagePath {
+            LTXDebug.log("Stage 2 I2V: encoding image at \(config.width)x\(config.height)")
+            fullResImageLatent = try await encodeImage(path: imagePath, width: config.width, height: config.height)
+            unloadVAEEncoder()
+            videoLatent[0..., 0..., 0..<1, 0..., 0...] = fullResImageLatent!
+
+            let tokensPerFrame = stage2Shape.height * stage2Shape.width
+            let frame0Mask = MLXArray.ones([1, tokensPerFrame])
+            let otherMask = MLXArray.zeros([1, stage2Shape.tokenCount - tokensPerFrame])
+            stage2CondMask = MLX.concatenated([frame0Mask, otherMask], axis: 1)
+            MLX.eval(stage2CondMask!)
+        }
+        MLX.eval(videoLatent, audioLatentPacked)
+
+        let stage2NumSteps = stage2Sigmas.count - 1
+        for step in 0..<stage2NumSteps {
+            let stepStart = Date()
+            let sigma = stage2Sigmas[step]
+            let sigmaNext = stage2Sigmas[step + 1]
+
+            onProgress?(GenerationProgress(
+                currentStep: stage1NumSteps + step, totalSteps: stage1NumSteps + stage2NumSteps, sigma: sigma
+            ))
+
+            // I2V: inject noise to conditioned frame
+            if let condLatent = fullResImageLatent, config.imageCondNoiseScale > 0, sigma > 0 {
+                let injectionNoise = MLXRandom.normal(condLatent.shape)
+                let noisedFrame0 = condLatent + MLXArray(config.imageCondNoiseScale) * injectionNoise * MLXArray(sigma * sigma)
+                videoLatent[0..., 0..., 0..<1, 0..., 0...] = noisedFrame0
+            }
+
+            // Per-token timestep for I2V: frame 0 gets σ=0, others get σ
+            let videoTimestep: MLXArray
+            if let mask = stage2CondMask {
+                videoTimestep = MLXArray(sigma) * (1 - mask)
+            } else {
+                videoTimestep = MLXArray([sigma])
+            }
+            let audioTimestep = MLXArray([sigma])
+
+            let videoPatchified = patchify(videoLatent).asType(.bfloat16)
+            let audioPatchified = audioLatentPacked.asType(.bfloat16)
+
+            let (videoVelPred, audioVelPred) = ltx2(
+                videoLatent: videoPatchified,
+                audioLatent: audioPatchified,
+                videoContext: videoTextEmbeddings.asType(.bfloat16),
+                audioContext: audioTextEmbeddings.asType(.bfloat16),
+                videoTimesteps: videoTimestep,
+                audioTimesteps: audioTimestep,
+                videoContextMask: textMask,
+                audioContextMask: textMask,
+                videoLatentShape: (frames: stage2Shape.frames, height: stage2Shape.height, width: stage2Shape.width),
+                audioNumFrames: audioNumFrames
+            )
+
+            let videoVelocity = unpatchify(videoVelPred, shape: stage2Shape).asType(.float32)
+            let audioVelocity = audioVelPred.asType(.float32)
+
+            // Euler step
+            let dt = sigmaNext - sigma
+            if fullResImageLatent != nil {
+                // I2V: only step frames 1+ (frame 0 stays clean)
+                let velocitySlice = videoVelocity[0..., 0..., 1..., 0..., 0...]
+                let latentSlice = videoLatent[0..., 0..., 1..., 0..., 0...]
+                let steppedSlice = latentSlice + MLXArray(dt) * velocitySlice
+                let frame0 = videoLatent[0..., 0..., 0..<1, 0..., 0...]
+                videoLatent = MLX.concatenated([frame0, steppedSlice], axis: 2)
+            } else {
+                videoLatent = videoLatent + MLXArray(dt) * videoVelocity
+            }
+            audioLatentPacked = audioLatentPacked + MLXArray(dt) * audioVelocity
+
+            MLX.eval(videoLatent, audioLatentPacked)
+
+            LTXDebug.log("Stage 2 step \(step)/\(stage2NumSteps): σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext)), time=\(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
+        }
+        LTXDebug.log("Stage 2 complete: \(String(format: "%.1f", Date().timeIntervalSince(stage2Start)))s")
+
+        // Unload transformer
+        if memoryOptimization.unloadAfterUse {
+            self.ltx2Transformer = nil
+            Memory.clearCache()
+            LTXDebug.log("LTX2 Transformer unloaded")
+        }
+
+        // Decode video
+        let vaeTimestep: Float? = vaeDecoder.timestepConditioning ? 0.05 : nil
+        let videoTensor = decodeVideo(
+            latent: videoLatent, decoder: vaeDecoder, timestep: vaeTimestep,
+            temporalTileSize: memoryOptimization.vaeTemporalTileSize,
+            temporalTileOverlap: memoryOptimization.vaeTemporalTileOverlap
+        )
+        MLX.eval(videoTensor)
+
+        let trimmedVideo: MLXArray
+        if videoTensor.dim(0) > config.numFrames {
+            trimmedVideo = videoTensor[0..<config.numFrames]
+        } else {
+            trimmedVideo = videoTensor
+        }
+
+        // Decode audio
+        LTXDebug.log("Decoding audio latents...")
+        let audioLatentUnpacked = unpackAudioLatents(audioLatentPacked, numFrames: audioNumFrames)
+        let audioWaveform = decodeAudio(
+            latents: audioLatentUnpacked,
+            audioVAE: audioVAE,
+            vocoder: vocoder
+        )
+        MLX.eval(audioWaveform)
+        LTXDebug.log("Audio waveform: \(audioWaveform.shape)")
+
+        let generationTime = Date().timeIntervalSince(generationStart)
+        LTXDebug.log("Total two-stage audio+video time: \(String(format: "%.1f", generationTime))s")
+
+        return AudioVideoGenerationResult(
+            frames: trimmedVideo,
+            audioWaveform: audioWaveform,
+            audioSampleRate: vocoder.outputSampleRate,
+            seed: config.seed ?? 0,
             generationTime: generationTime
         )
     }
@@ -1463,10 +1933,16 @@ public actor LTXPipeline {
             }
         }
 
-        // Optionally enhance prompt
+        // Optionally enhance prompt (I2V always has imagePath here)
         let effectivePrompt: String
         if config.enhancePrompt {
-            effectivePrompt = enhancePrompt(prompt)
+            if let imagePath = config.imagePath {
+                LTXDebug.log("Enhancing I2V prompt with multimodal VLM...")
+                effectivePrompt = try await enhanceI2VPrompt(prompt, imagePath: imagePath)
+            } else {
+                LTXDebug.log("Enhancing prompt with Gemma...")
+                effectivePrompt = enhancePrompt(prompt)
+            }
         } else {
             effectivePrompt = prompt
         }
@@ -1924,8 +2400,13 @@ public actor LTXPipeline {
         // 0b. Optionally enhance prompt
         let effectivePrompt: String
         if config.enhancePrompt {
-            LTXDebug.log("Enhancing prompt with Gemma...")
-            effectivePrompt = enhancePrompt(prompt)
+            if let imagePath = config.imagePath {
+                LTXDebug.log("Enhancing I2V prompt with multimodal VLM...")
+                effectivePrompt = try await enhanceI2VPrompt(prompt, imagePath: imagePath)
+            } else {
+                LTXDebug.log("Enhancing prompt with Gemma...")
+                effectivePrompt = enhancePrompt(prompt)
+            }
         } else {
             effectivePrompt = prompt
         }
@@ -2267,6 +2748,42 @@ public actor LTXPipeline {
     Style: realistic with cinematic lighting. In a medium close-up, a woman in her early 30s with shoulder-length brown hair sits at a small wooden table by the window. She wears a cream-colored turtleneck sweater, holding a white ceramic coffee cup in one hand and a smartphone to her ear with the other. Ambient cafe sounds fill the space—espresso machine hiss, quiet conversations, gentle clinking of cups. The woman listens intently, nodding slightly, then takes a sip of her coffee and sets it down with a soft clink. Her face brightens into a warm smile as she speaks in a clear, friendly voice, 'That sounds perfect! I'd love to meet up this weekend. How about Saturday afternoon?' She laughs softly—a genuine chuckle—and shifts in her chair. Behind her, other patrons move subtly in and out of focus. 'Great, I'll see you then,' she concludes cheerfully, lowering the phone.
     """
 
+    /// Official Lightricks I2V system prompt for multimodal Gemma VLM-based prompt enhancement.
+    /// The VLM can see the input image and generates a description of changes/animation to apply.
+    private static let promptEnhancementI2VSystemPrompt = """
+    You are a Creative Assistant specializing in video generation prompts. You will receive an image and a user prompt. Your task is to create a detailed video generation prompt that accurately describes the provided image AND incorporates the user's requested changes or animations.
+
+    #### Guidelines
+    - FIRST, carefully analyze the provided image: identify all visual elements, subjects, setting, lighting, colors, composition, and style.
+    - THEN, integrate the user's requested action/change into your description, ensuring continuity with what's actually shown in the image.
+    - Use active language: present-progressive verbs ("is walking," "begins to rise"). Describe the transition from the static image to the animated result.
+    - Maintain the visual identity of all elements from the image — do NOT replace, alter, or reimagine subjects unless the user explicitly requests it.
+    - Audio layer: If relevant, describe sounds that would accompany the action.
+    - Style: Preserve the visual style of the input image. Describe it at the beginning: "Style: <style>, <rest of prompt>."
+    - Visual and audio only: NO non-visual/auditory senses (smell, taste, touch).
+    - Restrained language: Avoid dramatic/exaggerated terms. Use mild, natural phrasing.
+        - Colors: Use plain terms ("red dress"), not intensified ("vibrant blue," "bright red").
+        - Lighting: Use neutral descriptions ("soft overhead light"), not harsh ("blinding light").
+
+    #### Important notes:
+    - The image is the ground truth — your description must match what is actually shown, not what you imagine.
+    - Camera motion: DO NOT invent camera motion unless requested by the user.
+    - No timestamps or cuts: DO NOT use timestamps or describe scene cuts.
+    - Format: DO NOT use phrases like "The scene opens with..." or "The video begins...". Start directly with Style (optional) and scene description.
+    - Format: DO NOT start your response with special characters.
+    - If the user's prompt is already highly detailed, preserve it and add visual details from the image.
+
+    #### Output Format (Strict):
+    - Single continuous paragraph in natural language (English).
+    - NO titles, headings, prefaces, code fences, or Markdown.
+    - If unsafe/invalid, return original user prompt. Never ask questions or clarifications.
+
+    Your output quality is CRITICAL. Generate visually accurate prompts that faithfully represent the input image while incorporating the requested animation or changes.
+    """
+
+    /// Default VLM model ID for I2V multimodal prompt enhancement
+    private static let defaultVLMModelID = "mlx-community/gemma-3-12b-it-qat-4bit"
+
     /// Enhance a short prompt into a detailed video description using Gemma generation.
     ///
     /// Uses Gemma in autoregressive mode (with KV cache for efficiency) to expand
@@ -2372,6 +2889,114 @@ public actor LTXPipeline {
         return text
     }
 
+    // MARK: - I2V Multimodal Prompt Enhancement
+
+    /// Enhance a prompt for image-to-video generation using a multimodal VLM.
+    ///
+    /// Loads a 4-bit quantized Gemma 3 VLM that can see the input image and generate
+    /// a contextually accurate description. The VLM is unloaded after use to free memory
+    /// for the main generation pipeline.
+    ///
+    /// - Parameters:
+    ///   - prompt: Short text prompt describing desired changes/animation
+    ///   - imagePath: Path to the input image
+    ///   - vlmModelID: HuggingFace model ID for the VLM (default: gemma-3-12b-it-qat-4bit)
+    ///   - maxTokens: Maximum tokens to generate (default: 512)
+    ///   - temperature: Sampling temperature (default: 0.7)
+    /// - Returns: Enhanced prompt string describing the image with requested changes
+    public func enhanceI2VPrompt(
+        _ prompt: String,
+        imagePath: String,
+        vlmModelID: String? = nil,
+        maxTokens: Int = 512,
+        temperature: Float = 0.7
+    ) async throws -> String {
+        let modelID = vlmModelID ?? Self.defaultVLMModelID
+        LTXDebug.log("I2V multimodal prompt enhancement using \(modelID)")
+        LTXDebug.log("Input prompt: \"\(prompt)\"")
+        LTXDebug.log("Input image: \(imagePath)")
+        let startTime = Date()
+
+        // Load the image
+        let imageURL = URL(fileURLWithPath: imagePath)
+        guard let ciImage = CIImage(contentsOf: imageURL) else {
+            LTXDebug.log("Warning: Failed to load image at \(imagePath), falling back to text-only enhancement")
+            return enhancePrompt(prompt)
+        }
+
+        // Load the VLM model
+        LTXDebug.log("Loading VLM model...")
+        let vlmLoadStart = Date()
+        let config = ModelConfiguration(
+            id: modelID,
+            extraEOSTokens: ["<end_of_turn>"]
+        )
+        let modelContainer = try await VLMModelFactory.shared.loadContainer(
+            configuration: config,
+            progressHandler: { progress in
+                if progress.fractionCompleted < 1.0 {
+                    LTXDebug.log("VLM download: \(Int(progress.fractionCompleted * 100))%")
+                }
+            }
+        )
+        LTXDebug.log("VLM loaded in \(String(format: "%.1f", Date().timeIntervalSince(vlmLoadStart)))s")
+
+        // Build multimodal chat input matching Lightricks format
+        let userInput = UserInput(
+            chat: [
+                .system(Self.promptEnhancementI2VSystemPrompt),
+                .user("User Raw Input Prompt: \(prompt).", images: [.ciImage(ciImage)])
+            ]
+        )
+
+        // Prepare and generate
+        let lmInput = try await modelContainer.prepare(input: userInput)
+        let generateParams = GenerateParameters(
+            maxTokens: maxTokens,
+            temperature: temperature,
+            topP: 0.95,
+            repetitionPenalty: 1.1,
+            repetitionContextSize: 64
+        )
+
+        var generatedText = ""
+        var tokenCount = 0
+        let stream = try await modelContainer.generate(input: lmInput, parameters: generateParams)
+        for await generation in stream {
+            switch generation {
+            case .chunk(let text):
+                generatedText += text
+                tokenCount += 1
+            case .info:
+                break
+            default:
+                break
+            }
+        }
+
+        let elapsed = Date().timeIntervalSince(startTime)
+        LTXDebug.log("VLM generated \(tokenCount) chunks in \(String(format: "%.1f", elapsed))s")
+
+        // Clean the response
+        let cleaned = cleanEnhancedPrompt(generatedText)
+
+        if cleaned.isEmpty {
+            LTXDebug.log("I2V enhancement produced empty result, falling back to text-only enhancement")
+            return enhancePrompt(prompt)
+        }
+
+        LTXDebug.log("I2V enhanced prompt: \"\(cleaned)\"")
+
+        // Unload VLM to free memory for the main pipeline
+        // ModelContainer is released when it goes out of scope (ARC)
+        // Explicitly clear GPU cache to reclaim memory
+        LTXDebug.log("Unloading VLM...")
+        Memory.clearCache()
+        LTXMemoryManager.logMemoryState("after VLM unload")
+
+        return cleaned
+    }
+
     // MARK: - Standalone Text Encoding
 
     /// Encode text prompt result
@@ -2462,10 +3087,16 @@ public actor LTXPipeline {
         from loraPath: String,
         scale: Float = 1.0
     ) throws -> Int {
-        guard let transformer = transformer else {
+        // Use whichever transformer is loaded (video-only or dual audio/video)
+        let target: Module
+        if let t = transformer {
+            target = t
+        } else if let t = ltx2Transformer {
+            target = t
+        } else {
             throw LTXError.modelNotLoaded("Transformer not loaded")
         }
-        let (originals, _) = try transformer.fuseLoRA(from: loraPath, scale: scale)
+        let (originals, _) = try target.fuseLoRA(from: loraPath, scale: scale)
         // LoRA weights (LoRAWeights struct) go out of scope here — freed by ARC.
         // GPU cache cleared inside fuseWeights() after all batches.
         // Final cleanup to release any remaining intermediate tensors.

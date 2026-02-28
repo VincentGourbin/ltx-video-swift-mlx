@@ -105,10 +105,15 @@ private func attentionCore(
 
 /// Multi-head attention with RMSNorm on Q/K and optional RoPE
 ///
-/// This attention module follows the LTX-2 architecture:
-/// - RMSNorm applied to Q and K before attention
-/// - RoPE applied to Q and K (if position embeddings provided)
-/// - Standard scaled dot-product attention
+/// This attention module follows the LTX-2 / Diffusers architecture:
+/// - Q/K projected to (B, T, innerDim)
+/// - RMSNorm applied across all heads on 3D tensor (weight shape: innerDim)
+/// - RoPE applied on 3D tensor (applySplitRotaryEmb handles 3D→4D→3D internally)
+/// - Then reshape to multi-head format for attention
+///
+/// Matches Python LTX2Attention with qk_norm="rms_norm_across_heads":
+///   self.norm_q = RMSNorm(dim_head * heads, eps=eps)
+///   Applied BEFORE head reshape in LTX2AudioVideoAttnProcessor
 class LTXAttention: Module {
     let ropeType: LTXRopeType
     let heads: Int
@@ -137,7 +142,9 @@ class LTXAttention: Module {
 
         let ctxDim = contextDim ?? queryDim
 
-        // RMSNorm for Q and K
+        // RMSNorm across all heads (matching Python qk_norm="rms_norm_across_heads")
+        // Python: self.norm_q = torch.nn.RMSNorm(dim_head * heads, eps=norm_eps)
+        // Applied on 3D (B, T, innerDim) BEFORE head reshape
         self._qNorm.wrappedValue = RMSNorm(dims: innerDim, eps: normEps)
         self._kNorm.wrappedValue = RMSNorm(dims: innerDim, eps: normEps)
 
@@ -157,28 +164,57 @@ class LTXAttention: Module {
         pe: (cos: MLXArray, sin: MLXArray)? = nil,
         kPe: (cos: MLXArray, sin: MLXArray)? = nil
     ) -> MLXArray {
-        // Project to Q, K, V
+        let b = x.dim(0)
+        let tQ = x.dim(1)
+
+        // Project to Q, K, V → (B, T, innerDim)
         var q = toQ(x)
         let ctx = context ?? x
+        let tK = ctx.dim(1)
         var k = toK(ctx)
         let v = toV(ctx)
 
-        // Apply RMSNorm to Q and K
+        // Apply RMSNorm across all heads on 3D tensor BEFORE reshape
+        // (matching Python LTX2AudioVideoAttnProcessor order)
         q = qNorm(q)
         k = kNorm(k)
 
-        // Apply RoPE if position embeddings provided
+        // Apply RoPE on 3D tensor BEFORE head reshape
+        // applySplitRotaryEmb handles 3D input when cos is 4D:
+        // internally reshapes (B,T,H*D) → (B,H,T,D), applies RoPE, reshapes back
         if let posEmb = pe {
             q = applyRotaryEmb(q, freqsCis: posEmb, ropeType: ropeType)
             let keyPosEmb = kPe ?? posEmb
             k = applyRotaryEmb(k, freqsCis: keyPosEmb, ropeType: ropeType)
         }
 
-        // Compute attention
-        let out = attentionCore(q: q, k: k, v: v, heads: heads, dimHead: dimHead, mask: mask)
+        // NOW reshape into multi-head: (B, T, H*D) → (B, H, T, D)
+        let qR = q.reshaped([b, tQ, heads, dimHead]).transposed(0, 2, 1, 3)
+        let kR = k.reshaped([b, tK, heads, dimHead]).transposed(0, 2, 1, 3)
+        let vR = v.reshaped([b, tK, heads, dimHead]).transposed(0, 2, 1, 3)
+
+        // Handle mask dimensions
+        var attnMask = mask
+        if let m = mask {
+            if m.ndim == 2 {
+                attnMask = m.reshaped([1, 1, m.dim(0), m.dim(1)])
+            } else if m.ndim == 3 {
+                attnMask = MLX.expandedDimensions(m, axis: 1)
+            }
+            attnMask = attnMask?.asType(qR.dtype)
+        }
+
+        // Scaled dot-product attention (Flash Attention)
+        let scale = 1.0 / sqrt(Float(dimHead))
+        let out = MLXFast.scaledDotProductAttention(
+            queries: qR, keys: kR, values: vR, scale: scale, mask: attnMask
+        )
+
+        // Reshape back: (B, H, T, D) → (B, T, H*D)
+        let combined = out.transposed(0, 2, 1, 3).reshaped([b, tQ, heads * dimHead])
 
         // Output projection
-        return toOut(out)
+        return toOut(combined)
     }
 }
 

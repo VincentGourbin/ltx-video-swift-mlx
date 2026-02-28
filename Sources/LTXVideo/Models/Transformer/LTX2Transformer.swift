@@ -34,18 +34,18 @@ class LTX2Transformer: Module {
     @ParameterInfo(key: "scale_shift_table") var scaleShiftTable: MLXArray
 
     // --- Audio modules ---
-    @ModuleInfo(key: "audio_proj_in") var audioProjIn: Linear
+    @ModuleInfo(key: "audio_patchify_proj") var audioProjIn: Linear
     @ModuleInfo(key: "audio_proj_out") var audioProjOut: Linear
     @ModuleInfo(key: "audio_norm_out") var audioNormOut: LayerNorm
-    @ModuleInfo(key: "audio_time_embed") var audioTimeEmbed: AdaLayerNormSingle
+    @ModuleInfo(key: "audio_adaln_single") var audioTimeEmbed: AdaLayerNormSingle
     @ModuleInfo(key: "audio_caption_projection") var audioCaptionProjection: PixArtAlphaTextProjection
     @ParameterInfo(key: "audio_scale_shift_table") var audioScaleShiftTable: MLXArray
 
     // --- Cross-modal timestep embeddings ---
-    @ModuleInfo(key: "av_cross_attn_video_scale_shift") var avCrossAttnVideoScaleShift: AdaLayerNormSingle
-    @ModuleInfo(key: "av_cross_attn_video_a2v_gate") var avCrossAttnVideoA2VGate: AdaLayerNormSingle
-    @ModuleInfo(key: "av_cross_attn_audio_scale_shift") var avCrossAttnAudioScaleShift: AdaLayerNormSingle
-    @ModuleInfo(key: "av_cross_attn_audio_v2a_gate") var avCrossAttnAudioV2AGate: AdaLayerNormSingle
+    @ModuleInfo(key: "av_ca_video_scale_shift_adaln_single") var avCrossAttnVideoScaleShift: AdaLayerNormSingle
+    @ModuleInfo(key: "av_ca_a2v_gate_adaln_single") var avCrossAttnVideoA2VGate: AdaLayerNormSingle
+    @ModuleInfo(key: "av_ca_audio_scale_shift_adaln_single") var avCrossAttnAudioScaleShift: AdaLayerNormSingle
+    @ModuleInfo(key: "av_ca_v2a_gate_adaln_single") var avCrossAttnAudioV2AGate: AdaLayerNormSingle
 
     // --- Dual video/audio transformer blocks ---
     @ModuleInfo(key: "transformer_blocks") var transformerBlocks: [LTX2TransformerBlock]
@@ -188,7 +188,11 @@ class LTX2Transformer: Module {
     }
 
     /// Prepare cross-modal RoPE for cross-attention
-    /// Video RoPE is reused; audio cross-attn RoPE uses audio cross-attention dim
+    ///
+    /// Python uses temporal-only coordinates for cross-modal attention:
+    ///   `video_coords[:, 0:1, :]` and `audio_coords[:, 0:1, :]`
+    /// This makes physical sense: cross-modal attention aligns video and audio
+    /// on time, not spatial position.
     private func prepareCrossModalRoPE(
         batchSize: Int,
         videoFrames: Int,
@@ -196,21 +200,25 @@ class LTX2Transformer: Module {
         videoWidth: Int,
         audioFrames: Int
     ) -> (video: (cos: MLXArray, sin: MLXArray), audio: (cos: MLXArray, sin: MLXArray)) {
-        // Video side: same 3D RoPE but for the cross-attention dimension
-        let videoPositions = createPositionGrid(
+        // Video side: temporal-only (1D) RoPE for cross-attention
+        // Python: self.cross_attn_rope(video_coords[:, 0:1, :])
+        let videoPositions3D = createPositionGrid(
             batchSize: batchSize, frames: videoFrames, height: videoHeight, width: videoWidth
         )
+        // Extract temporal coordinate only: (B, 3, T) → (B, 1, T)
+        let videoTemporalOnly = videoPositions3D[0..., 0..<1, 0...]
         let videoCrossRoPE = precomputeFreqsCis(
-            indicesGrid: videoPositions,
-            dim: config.audioCrossAttentionDim,  // Cross-modal uses audio head dims
+            indicesGrid: videoTemporalOnly,
+            dim: config.audioCrossAttentionDim,
             theta: config.ropeTheta,
-            maxPos: config.maxPos,
+            maxPos: config.audioMaxPos,  // Temporal only → use audioMaxPos (frame-based)
             numAttentionHeads: config.audioNumAttentionHeads,
             ropeType: ropeType,
             doublePrecision: true
         )
 
-        // Audio side: 1D temporal RoPE for cross-attention dimension
+        // Audio side: temporal-only (1D) RoPE for cross-attention
+        // Python: self.cross_attn_audio_rope(audio_coords[:, 0:1, :])
         let audioPositions = createAudioPositionGrid(
             batchSize: batchSize, audioFrames: audioFrames
         )
@@ -274,7 +282,17 @@ class LTX2Transformer: Module {
         let projectedAudioCtx = audioCaptionProjection(audioContext).reshaped([batchSize, -1, audioDim])
 
         // --- Cross-modal timestep embeddings ---
-        let (crossVideoSSEmb, _) = avCrossAttnVideoScaleShift(scaledVideoTs.flattened())
+        // Cross-modal gates MUST use scalar timestep (one per batch).
+        // For per-token I2V timesteps (B, T), extract max = sigma for noisy tokens.
+        let scalarVideoTs: MLXArray
+        if videoTimesteps.ndim > 1 && videoTimesteps.dim(1) > 1 {
+            scalarVideoTs = (videoTimesteps.max(axis: 1, keepDims: false)
+                             * Float(config.timestepScaleMultiplier)).flattened()
+        } else {
+            scalarVideoTs = scaledVideoTs.flattened()
+        }
+
+        let (crossVideoSSEmb, _) = avCrossAttnVideoScaleShift(scalarVideoTs)
         let crossVideoSSReshaped = crossVideoSSEmb.reshaped([batchSize, -1, 4, videoDim])
         // Pad to 5 values (block SST has 5 entries, but global only provides 4 for scale/shift)
         let crossVideoSSPadded = MLX.concatenated([
@@ -282,8 +300,8 @@ class LTX2Transformer: Module {
             MLXArray.zeros([batchSize, 1, 1, videoDim])
         ], axis: 2)
 
-        let (crossVideoGateEmb, _) = avCrossAttnVideoA2VGate(scaledVideoTs.flattened())
-        let crossVideoGateReshaped = crossVideoGateEmb.reshaped([batchSize, -1, 1, videoDim])
+        let (crossVideoGateEmb, _) = avCrossAttnVideoA2VGate(scalarVideoTs)
+        let crossVideoGateReshaped = crossVideoGateEmb.reshaped([batchSize, 1, videoDim])
 
         let (crossAudioSSEmb, _) = avCrossAttnAudioScaleShift(scaledAudioTs.flattened())
         let crossAudioSSReshaped = crossAudioSSEmb.reshaped([batchSize, -1, 4, audioDim])
@@ -293,7 +311,7 @@ class LTX2Transformer: Module {
         ], axis: 2)
 
         let (crossAudioGateEmb, _) = avCrossAttnAudioV2AGate(scaledAudioTs.flattened())
-        let crossAudioGateReshaped = crossAudioGateEmb.reshaped([batchSize, -1, 1, audioDim])
+        let crossAudioGateReshaped = crossAudioGateEmb.reshaped([batchSize, 1, audioDim])
 
         // --- Prepare attention masks ---
         let preparedVideoMask = prepareAttentionMask(videoContextMask)

@@ -624,7 +624,7 @@ class LTXWeightLoader {
     ///
     /// - Parameter path: Path to the unified safetensors file
     /// - Returns: Mapped transformer weights ready to apply
-    static func loadTransformerWeights(from path: String) throws -> [String: MLXArray] {
+    static func loadTransformerWeights(from path: String, includeAudio: Bool = false) throws -> [String: MLXArray] {
         LTXDebug.log("Loading transformer weights from: \(path)")
         let startTime = Date()
 
@@ -632,17 +632,21 @@ class LTXWeightLoader {
         LTXDebug.log("Loaded \(allWeights.count) tensors via mmap")
 
         let diffusionPrefix = "model.diffusion_model."
-        let connectorPrefix = "model.diffusion_model.video_embeddings_connector."
+        let videoConnectorPrefix = "model.diffusion_model.video_embeddings_connector."
+        let audioConnectorPrefix = "model.diffusion_model.audio_embeddings_connector."
 
         var raw: [String: MLXArray] = [:]
         let allKeys = Array(allWeights.keys)
         for key in allKeys {
             // Skip non-transformer keys
             if key.hasSuffix(".weight_scale") || key.hasSuffix(".input_scale") { continue }
-            if key.contains("audio") || key.hasPrefix("vocoder") || key.contains("av_ca_") { continue }
+            if !includeAudio {
+                if key.contains("audio") || key.hasPrefix("vocoder") || key.contains("av_ca_") { continue }
+            }
             if !key.hasPrefix(diffusionPrefix) { continue }
             // Connector keys go to text encoder, not transformer
-            if key.hasPrefix(connectorPrefix) { continue }
+            if key.hasPrefix(videoConnectorPrefix) { continue }
+            if key.hasPrefix(audioConnectorPrefix) { continue }
 
             if let value = allWeights.removeValue(forKey: key) {
                 raw[String(key.dropFirst(diffusionPrefix.count))] = value
@@ -651,7 +655,7 @@ class LTXWeightLoader {
         // Free remaining keys not used
         allWeights.removeAll()
 
-        let mapped = mapTransformerWeights(raw)
+        let mapped = mapTransformerWeights(raw, includeAudio: includeAudio)
         LTXDebug.log("Extracted \(mapped.count) transformer weights in \(String(format: "%.1f", Date().timeIntervalSince(startTime)))s")
         return mapped
     }
@@ -747,14 +751,14 @@ class LTXWeightLoader {
     ///
     /// Uses `removeValue(forKey:)` to free source weights progressively,
     /// reducing peak memory during loading by ~30%.
-    static func mapTransformerWeights(_ weights: [String: MLXArray]) -> [String: MLXArray] {
+    static func mapTransformerWeights(_ weights: [String: MLXArray], includeAudio: Bool = false) -> [String: MLXArray] {
         var source = weights
         var mapped: [String: MLXArray] = [:]
 
         let allKeys = Array(source.keys)
         for (i, key) in allKeys.enumerated() {
             guard let value = source.removeValue(forKey: key) else { continue }
-            if let newKey = mapTransformerKey(key) {
+            if let newKey = mapTransformerKey(key, includeAudio: includeAudio) {
                 mapped[newKey] = value
             }
             // Periodic eval to materialize and free intermediate references
@@ -770,40 +774,52 @@ class LTXWeightLoader {
 
     /// Map a single transformer key from safetensors to Swift model format
     ///
-    /// Returns nil for keys that should be skipped (e.g., audio-related keys)
-    private static func mapTransformerKey(_ key: String) -> String? {
-        // Skip audio-related keys
-        if key.hasPrefix("audio_") ||
-           key.contains(".audio_") ||
-           key.hasPrefix("av_cross_attn_") ||
-           key.contains("video_to_audio") ||
-           key.contains("video_a2v") ||
-           key.contains("a2v_ca") ||
-           key.contains("scale_shift_table_a2v") {
-            return nil
+    /// Returns nil for keys that should be skipped (e.g., audio-related keys when includeAudio=false)
+    private static func mapTransformerKey(_ key: String, includeAudio: Bool = false) -> String? {
+        // Skip audio-related keys when not in audio mode
+        if !includeAudio {
+            if key.hasPrefix("audio_") ||
+               key.contains(".audio_") ||
+               key.hasPrefix("av_cross_attn_") ||
+               key.contains("video_to_audio") ||
+               key.contains("video_a2v") ||
+               key.contains("a2v_ca") ||
+               key.contains("scale_shift_table_a2v") {
+                return nil
+            }
         }
 
         var k = key
 
-        // Top-level structural mappings
-        k = k.replacingOccurrences(of: "proj_in.", with: "patchify_proj.")
-        k = k.replacingOccurrences(of: "proj_out.", with: "proj_out.")
+        // Top-level structural mappings (prefix-aware to avoid matching audio_proj_in)
+        if k.hasPrefix("proj_in.") {
+            k = "patchify_proj." + String(k.dropFirst("proj_in.".count))
+        }
 
-        // AdaLN
-        k = k.replacingOccurrences(of: "time_embed.emb.timestep_embedder.", with: "adaln_single.emb.")
-        k = k.replacingOccurrences(of: "time_embed.linear.", with: "adaln_single.linear.")
-        k = k.replacingOccurrences(of: "adaln_single.emb.timestep_embedder.", with: "adaln_single.emb.")
+        // AdaLN: video time_embed → adaln_single (prefix-aware to avoid matching audio_time_embed)
+        if k.hasPrefix("time_embed.emb.timestep_embedder.") {
+            k = "adaln_single.emb." + String(k.dropFirst("time_embed.emb.timestep_embedder.".count))
+        } else if k.hasPrefix("time_embed.linear.") {
+            k = "adaln_single." + String(k.dropFirst("time_embed.".count))
+        } else if k.hasPrefix("adaln_single.emb.timestep_embedder.") {
+            k = "adaln_single.emb." + String(k.dropFirst("adaln_single.emb.timestep_embedder.".count))
+        }
 
-        // Attention norms
+        // General: flatten .emb.timestep_embedder. → .emb. for ALL AdaLayerNormSingle
+        // (handles audio_time_embed, av_cross_attn_*, etc.)
+        k = k.replacingOccurrences(of: ".emb.timestep_embedder.", with: ".emb.")
+
+        // Attention norms (applies to video and audio)
         k = k.replacingOccurrences(of: ".norm_q.", with: ".q_norm.")
         k = k.replacingOccurrences(of: ".norm_k.", with: ".k_norm.")
 
-        // Remove indexed to_out
+        // Remove indexed to_out (applies to video and audio)
         k = k.replacingOccurrences(of: ".to_out.0.", with: ".to_out.")
 
-        // FFN mappings
-        k = k.replacingOccurrences(of: ".ff.net.0.proj.", with: ".ff.project_in.proj.")
-        k = k.replacingOccurrences(of: ".ff.net.2.", with: ".ff.project_out.")
+        // FFN mappings (applies to both .ff. and audio_ff.)
+        // Use pattern without leading dot so "audio_ff.net." also matches
+        k = k.replacingOccurrences(of: "ff.net.0.proj.", with: "ff.project_in.proj.")
+        k = k.replacingOccurrences(of: "ff.net.2.", with: "ff.project_out.")
 
         return k
     }
@@ -977,14 +993,15 @@ class LTXWeightLoader {
     /// Apply weights to a transformer model (video-only or dual video/audio)
     static func applyTransformerWeights(
         _ weights: [String: MLXArray],
-        to model: Module
+        to model: Module,
+        includeAudio: Bool = false
     ) throws {
         let mapped: [String: MLXArray]
         // If keys already look mapped (contain patchify_proj or adaln_single), skip re-mapping
         if weights.keys.contains(where: { $0.hasPrefix("patchify_proj.") || $0.hasPrefix("adaln_single.") }) {
             mapped = weights
         } else {
-            mapped = mapTransformerWeights(weights)
+            mapped = mapTransformerWeights(weights, includeAudio: includeAudio)
         }
 
         let flatParameters = Dictionary(uniqueKeysWithValues: model.parameters().flattened())
@@ -992,12 +1009,19 @@ class LTXWeightLoader {
         var updates: [String: MLXArray] = [:]
         var notFound = 0
 
+        var unmatchedKeys: [String] = []
         for (key, value) in mapped {
             if flatParameters.keys.contains(key) {
                 updates[key] = value
             } else {
                 notFound += 1
+                unmatchedKeys.append(key)
             }
+        }
+        if !unmatchedKeys.isEmpty {
+            let sorted = unmatchedKeys.sorted()
+            let sample = sorted.prefix(10).joined(separator: ", ")
+            LTXDebug.log("Transformer: \(unmatchedKeys.count) unmatched keys: \(sample)\(unmatchedKeys.count > 10 ? "..." : "")")
         }
 
         // Convert float32 parameters to bfloat16 (matching Python behavior)
@@ -1338,19 +1362,20 @@ class LTXWeightLoader {
     ///
     /// - Parameter path: Path to the unified safetensors file
     /// - Returns: Tuple of (transformer, vae, connector) mapped weights
-    static func splitUnifiedWeightsFile(path: String) throws -> (transformer: [String: MLXArray], vae: [String: MLXArray], connector: [String: MLXArray]) {
+    static func splitUnifiedWeightsFile(path: String, includeAudio: Bool = false) throws -> (transformer: [String: MLXArray], vae: [String: MLXArray], connector: [String: MLXArray]) {
         LTXDebug.log("Splitting unified weights from: \(path)")
         let allWeights = try loadArrays(url: URL(fileURLWithPath: path))
         LTXDebug.log("Loaded \(allWeights.count) tensors from unified file")
-        return splitUnifiedWeightsDict(allWeights)
+        return splitUnifiedWeightsDict(allWeights, includeAudio: includeAudio)
     }
 
     /// Split a pre-loaded unified weights dictionary into components
     ///
     /// Uses `removeValue(forKey:)` to free source weights progressively.
-    static func splitUnifiedWeightsDict(_ allWeights: [String: MLXArray]) -> (transformer: [String: MLXArray], vae: [String: MLXArray], connector: [String: MLXArray]) {
+    static func splitUnifiedWeightsDict(_ allWeights: [String: MLXArray], includeAudio: Bool = false) -> (transformer: [String: MLXArray], vae: [String: MLXArray], connector: [String: MLXArray]) {
         let diffusionPrefix = "model.diffusion_model."
-        let connectorPrefix = "model.diffusion_model.video_embeddings_connector."
+        let videoConnectorPrefix = "model.diffusion_model.video_embeddings_connector."
+        let audioConnectorPrefix = "model.diffusion_model.audio_embeddings_connector."
         let projPrefix = "model.diffusion_model.text_embedding_projection."
 
         var source = allWeights
@@ -1361,12 +1386,18 @@ class LTXWeightLoader {
         let allKeys = Array(source.keys)
         for key in allKeys {
             guard let value = source.removeValue(forKey: key) else { continue }
-            // Skip FP8 scale keys and audio keys
+            // Skip FP8 scale keys
             if key.hasSuffix(".weight_scale") || key.hasSuffix(".input_scale") { continue }
-            if key.contains("audio") || key.hasPrefix("vocoder") || key.contains("av_ca_") { continue }
+            // Skip audio keys when not in audio mode
+            if !includeAudio {
+                if key.contains("audio") || key.hasPrefix("vocoder") || key.contains("av_ca_") { continue }
+            }
 
-            if key.hasPrefix(connectorPrefix) {
-                connectorRaw["video_embeddings_connector." + String(key.dropFirst(connectorPrefix.count))] = value
+            if key.hasPrefix(videoConnectorPrefix) {
+                connectorRaw["video_embeddings_connector." + String(key.dropFirst(videoConnectorPrefix.count))] = value
+            } else if includeAudio && key.hasPrefix(audioConnectorPrefix) {
+                // Audio connector keys → connector bucket
+                connectorRaw["audio_embeddings_connector." + String(key.dropFirst(audioConnectorPrefix.count))] = value
             } else if key.hasPrefix(projPrefix) {
                 connectorRaw["text_embedding_projection." + String(key.dropFirst(projPrefix.count))] = value
             } else if key.hasPrefix(diffusionPrefix) {
@@ -1378,7 +1409,7 @@ class LTXWeightLoader {
             }
         }
 
-        let transformer = mapTransformerWeights(transformerRaw)
+        let transformer = mapTransformerWeights(transformerRaw, includeAudio: includeAudio)
         let vae = mapVAEWeights(vaeRaw)
         let connector = mapTextEncoderWeights(connectorRaw)
 

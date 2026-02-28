@@ -61,7 +61,7 @@ class LoRAAdapter {
     ///   - model: The transformer to fuse into
     /// - Returns: Dictionary of original weights (for unfusing later)
     @discardableResult
-    func fuseWeights(into model: LTXTransformer) -> [String: MLXArray] {
+    func fuseWeights(into model: Module) -> [String: MLXArray] {
         var originalWeights: [String: MLXArray] = [:]
         var fusedCount = 0
 
@@ -216,7 +216,7 @@ class LoRAAdapter {
     /// - Parameters:
     ///   - originalWeights: Dictionary returned by `fuseWeights(into:)`
     ///   - model: The transformer to restore
-    static func unfuseWeights(from originalWeights: [String: MLXArray], into model: LTXTransformer) {
+    static func unfuseWeights(from originalWeights: [String: MLXArray], into model: Module) {
         var restoredCount = 0
         for (keyPath, originalWeight) in originalWeights {
             setParameterByPath(model: model, keyPath: keyPath, value: originalWeight)
@@ -380,8 +380,12 @@ extension LTXTransformer {
             schedulerOverrides: adapter.schedulerOverrides
         )
     }
+}
 
-    /// Apply a LoRA to this transformer with real weight fusion
+extension Module {
+    /// Apply a LoRA with real weight fusion
+    ///
+    /// Works with both LTXTransformer (video-only) and LTX2Transformer (video+audio).
     ///
     /// - Parameters:
     ///   - loraPath: Path to the LoRA .safetensors file

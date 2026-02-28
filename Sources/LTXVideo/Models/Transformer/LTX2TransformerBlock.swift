@@ -35,13 +35,13 @@ struct AudioTransformerArgs {
     /// Video cross-modal scale/shift: (B, 1, 4, D_video) for a2v/v2a modulation
     var crossVideoScaleShift: MLXArray
 
-    /// Video a2v gate: (B, 1, 1, D_video)
+    /// Video a2v gate: (B, 1, D_video)
     var crossVideoGate: MLXArray
 
     /// Audio cross-modal scale/shift: (B, 1, 4, D_audio)
     var crossAudioScaleShift: MLXArray
 
-    /// Audio v2a gate: (B, 1, 1, D_audio)
+    /// Audio v2a gate: (B, 1, D_audio)
     var crossAudioGate: MLXArray
 
     /// Cross-modal video RoPE (for KV in v2a, Q in a2v cross-attention)
@@ -96,8 +96,8 @@ class LTX2TransformerBlock: Module {
     @ModuleInfo(key: "video_to_audio_attn") var videoToAudioAttn: LTXAttention
 
     // --- Cross-modal scale-shift tables ---
-    @ParameterInfo(key: "video_a2v_cross_attn_scale_shift_table") var videoA2VCrossAttnSST: MLXArray
-    @ParameterInfo(key: "audio_a2v_cross_attn_scale_shift_table") var audioA2VCrossAttnSST: MLXArray
+    @ParameterInfo(key: "scale_shift_table_a2v_ca_video") var videoA2VCrossAttnSST: MLXArray
+    @ParameterInfo(key: "scale_shift_table_a2v_ca_audio") var audioA2VCrossAttnSST: MLXArray
 
     init(
         videoDim: Int,

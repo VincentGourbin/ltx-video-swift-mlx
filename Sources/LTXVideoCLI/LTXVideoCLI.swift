@@ -144,7 +144,13 @@ struct Generate: AsyncParsableCommand {
         if geGamma > 0 { print("GE gamma: \(geGamma)") }
         if stgScale > 0 { print("STG scale: \(stgScale), blocks: \(parsedStgBlocks)") }
         if twoStage { print("Two-stage: enabled") }
-        if enhancePrompt { print("Prompt enhancement: enabled") }
+        if enhancePrompt {
+            if image != nil {
+                print("Prompt enhancement: enabled (multimodal I2V — VLM sees input image)")
+            } else {
+                print("Prompt enhancement: enabled (text-only T2V)")
+            }
+        }
         if audio { print("Audio: enabled (dual video/audio generation)") }
         if transformerQuant != "bf16" { print("Transformer quantization: \(transformerQuant)") }
         print()
@@ -283,13 +289,31 @@ struct Generate: AsyncParsableCommand {
 
         // Audio generation uses separate path
         if audio {
-            let audioResult = try await pipeline.generateVideoWithAudio(
-                prompt: prompt,
-                config: config,
-                onProgress: { progress in
-                    print("  \(progress.status)")
-                }
-            )
+            let audioResult: LTXPipeline.AudioVideoGenerationResult
+            if twoStage {
+                // Two-stage + audio: half-res → upscale → refine, with dual video/audio
+                print("Downloading upscaler weights (if needed)...")
+                fflush(stdout)
+                let upscalerPath = try await pipeline.downloadUpscalerWeights()
+                print("Upscaler weights ready")
+
+                audioResult = try await pipeline.generateVideoWithAudioTwoStage(
+                    prompt: prompt,
+                    config: config,
+                    upscalerWeightsPath: upscalerPath,
+                    onProgress: { progress in
+                        print("  \(progress.status)")
+                    }
+                )
+            } else {
+                audioResult = try await pipeline.generateVideoWithAudio(
+                    prompt: prompt,
+                    config: config,
+                    onProgress: { progress in
+                        print("  \(progress.status)")
+                    }
+                )
+            }
 
             let genTime = Date().timeIntervalSince(startGen)
             print("Generation completed in \(String(format: "%.1f", genTime))s")
