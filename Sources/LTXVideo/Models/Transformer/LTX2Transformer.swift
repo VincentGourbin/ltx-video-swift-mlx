@@ -282,36 +282,34 @@ class LTX2Transformer: Module {
         let projectedAudioCtx = audioCaptionProjection(audioContext).reshaped([batchSize, -1, audioDim])
 
         // --- Cross-modal timestep embeddings ---
-        // Cross-modal gates MUST use scalar timestep (one per batch).
-        // For per-token I2V timesteps (B, T), extract max = sigma for noisy tokens.
-        let scalarVideoTs: MLXArray
-        if videoTimesteps.ndim > 1 && videoTimesteps.dim(1) > 1 {
-            scalarVideoTs = (videoTimesteps.max(axis: 1, keepDims: false)
-                             * Float(config.timestepScaleMultiplier)).flattened()
-        } else {
-            scalarVideoTs = scaledVideoTs.flattened()
-        }
+        // Python Diffusers uses per-token timesteps for cross-modal (not scalar).
+        // In I2V mode, videoTimesteps is (B, T) where frame 0 = 0, others = sigma.
+        // scaledVideoTs = videoTimesteps * 1000, so flattened gives (B*T,) with per-token values.
+        // Each token gets its own cross-modal modulation via AdaLN.
+        // Gate factor = cross_attn_timestep_scale_multiplier / timestep_scale_multiplier = 1000/1000 = 1.0
+        let flatVideoTs = scaledVideoTs.flattened()
 
-        let (crossVideoSSEmb, _) = avCrossAttnVideoScaleShift(scalarVideoTs)
+        let (crossVideoSSEmb, _) = avCrossAttnVideoScaleShift(flatVideoTs)
         let crossVideoSSReshaped = crossVideoSSEmb.reshaped([batchSize, -1, 4, videoDim])
-        // Pad to 5 values (block SST has 5 entries, but global only provides 4 for scale/shift)
-        let crossVideoSSPadded = MLX.concatenated([
+
+        let (crossVideoGateEmb, _) = avCrossAttnVideoA2VGate(flatVideoTs)
+
+        // Concatenate scale/shift (4) + gate (1) = 5 values to match per-block SST shape
+        let crossVideoSSFull = MLX.concatenated([
             crossVideoSSReshaped,
-            MLXArray.zeros([batchSize, 1, 1, videoDim])
+            crossVideoGateEmb.reshaped([batchSize, -1, 1, videoDim])
         ], axis: 2)
 
-        let (crossVideoGateEmb, _) = avCrossAttnVideoA2VGate(scalarVideoTs)
-        let crossVideoGateReshaped = crossVideoGateEmb.reshaped([batchSize, 1, videoDim])
-
-        let (crossAudioSSEmb, _) = avCrossAttnAudioScaleShift(scaledAudioTs.flattened())
+        let flatAudioTs = scaledAudioTs.flattened()
+        let (crossAudioSSEmb, _) = avCrossAttnAudioScaleShift(flatAudioTs)
         let crossAudioSSReshaped = crossAudioSSEmb.reshaped([batchSize, -1, 4, audioDim])
-        let crossAudioSSPadded = MLX.concatenated([
-            crossAudioSSReshaped,
-            MLXArray.zeros([batchSize, 1, 1, audioDim])
-        ], axis: 2)
 
-        let (crossAudioGateEmb, _) = avCrossAttnAudioV2AGate(scaledAudioTs.flattened())
-        let crossAudioGateReshaped = crossAudioGateEmb.reshaped([batchSize, 1, audioDim])
+        let (crossAudioGateEmb, _) = avCrossAttnAudioV2AGate(flatAudioTs)
+
+        let crossAudioSSFull = MLX.concatenated([
+            crossAudioSSReshaped,
+            crossAudioGateEmb.reshaped([batchSize, -1, 1, audioDim])
+        ], axis: 2)
 
         // --- Prepare attention masks ---
         let preparedVideoMask = prepareAttentionMask(videoContextMask)
@@ -353,10 +351,8 @@ class LTX2Transformer: Module {
             positionalEmbeddings: audioRoPE,
             contextMask: preparedAudioMask,
             embeddedTimestep: audioEmbeddedTs,
-            crossVideoScaleShift: crossVideoSSPadded,
-            crossVideoGate: crossVideoGateReshaped,
-            crossAudioScaleShift: crossAudioSSPadded,
-            crossAudioGate: crossAudioGateReshaped,
+            crossVideoScaleShift: crossVideoSSFull,
+            crossAudioScaleShift: crossAudioSSFull,
             crossVideoRoPE: crossVideoRoPE,
             crossAudioRoPE: crossAudioRoPE
         )
@@ -372,6 +368,7 @@ class LTX2Transformer: Module {
                     Memory.clearCache()
                 }
             }
+
         }
         eval(videoArgs.x, audioArgs.x)
 

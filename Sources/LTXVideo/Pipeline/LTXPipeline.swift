@@ -204,7 +204,7 @@ public actor LTXPipeline {
     /// Load all models required for generation
     ///
     /// Downloads and loads:
-    /// 1. Gemma 3 12B (text encoder backbone) — from `mlx-community/gemma-3-12b-it-4bit`
+    /// 1. Gemma 3 12B (text encoder backbone) — from VLM Gemma 4-bit QAT (shared across variants)
     /// 2. LTX-2 unified weights (transformer + VAE + connector) — from `Lightricks/LTX-2`
     ///
     /// The LTX weights are loaded from a single safetensors file matching the Python
@@ -495,7 +495,6 @@ public actor LTXPipeline {
 
         ltx2Transformer = ltx2
 
-        // Unload the video-only transformer (replaced by LTX2)
         transformer = nil
         Memory.clearCache()
 
@@ -505,16 +504,18 @@ public actor LTXPipeline {
         // Create new text encoder with audio connector enabled
         let newTextEncoder = createTextEncoder(includeAudioConnector: true)
 
-        // Try connector weights from unified file first, fall back to standalone file
-        var connectorWeights: [String: MLXArray]
-        if !connectorWeightsFromUnified.isEmpty {
-            connectorWeights = connectorWeightsFromUnified
-            LTXDebug.log("Using connector weights from unified file (\(connectorWeights.count) keys)")
-        } else {
-            let connectorPath = try await downloader.downloadConnector(model: model)
-            connectorWeights = try LTXWeightLoader.loadConnectorWeights(from: connectorPath.path)
-            LTXDebug.log("Using connector weights from standalone file (\(connectorWeights.count) keys)")
+        // Always use standalone connector file (has correct key format for video + feature extractor)
+        // then merge audio connector keys from unified file
+        let connectorPath = try await downloader.downloadConnector(model: model)
+        var connectorWeights = try LTXWeightLoader.loadConnectorWeights(from: connectorPath.path)
+        LTXDebug.log("Loaded \(connectorWeights.count) weights from standalone connector file")
+
+        // Merge audio connector keys from unified file (if available)
+        let audioKeys = connectorWeightsFromUnified.filter { $0.key.hasPrefix("audio_embeddings_connector.") }
+        for (key, value) in audioKeys {
+            connectorWeights[key] = value
         }
+        LTXDebug.log("Added \(audioKeys.count) audio connector weights from unified file")
 
         // Apply all connector weights (video + audio + feature extractor)
         try LTXWeightLoader.applyTextEncoderWeights(connectorWeights, to: newTextEncoder)
@@ -659,29 +660,17 @@ public actor LTXPipeline {
             // 0a. Reload Gemma if it was unloaded from a previous generation
             if !isGemmaLoaded {
                 LTXDebug.log("Reloading Gemma model (was unloaded after previous generation)...")
-                let gemmaDir = downloader.cacheDirectory.appendingPathComponent("ltx-\(model.rawValue)-text-encoder")
-                let tokenizerDir = downloader.cacheDirectory.appendingPathComponent("ltx-\(model.rawValue)-tokenizer")
-                if FileManager.default.fileExists(atPath: gemmaDir.path) {
-                    gemmaModel = try Gemma3WeightLoader.loadModel(from: gemmaDir)
-                    tokenizer = try await AutoTokenizer.from(modelFolder: tokenizerDir)
-                } else {
-                    let paths = try await downloader.downloadGemma(model: model, progress: nil)
-                    gemmaModel = try Gemma3WeightLoader.loadModel(from: paths.modelDir)
-                    tokenizer = try await AutoTokenizer.from(modelFolder: paths.tokenizerDir)
-                }
+                let paths = try await downloader.downloadGemma(model: model, progress: nil)
+                gemmaModel = try Gemma3WeightLoader.loadModel(from: paths.modelDir)
+                tokenizer = try await AutoTokenizer.from(modelFolder: paths.tokenizerDir)
                 LTXDebug.log("Gemma model reloaded")
             }
 
             // 0b. Optionally enhance prompt using Gemma generation
             let effectivePrompt: String
             if config.enhancePrompt {
-                if let imagePath = config.imagePath {
-                    LTXDebug.log("Enhancing I2V prompt with multimodal VLM...")
-                    effectivePrompt = try await enhanceI2VPrompt(prompt, imagePath: imagePath)
-                } else {
-                    LTXDebug.log("Enhancing prompt with Gemma...")
-                    effectivePrompt = enhancePrompt(prompt)
-                }
+                LTXDebug.log("Enhancing prompt with VLM (\(config.imagePath != nil ? "I2V" : "T2V"))...")
+                effectivePrompt = try await enhancePromptWithVLM(prompt, imagePath: config.imagePath)
                 LTXDebug.log("Using enhanced prompt for generation")
             } else {
                 effectivePrompt = prompt
@@ -1156,13 +1145,8 @@ public actor LTXPipeline {
 
         let effectivePrompt: String
         if config.enhancePrompt {
-            if let imagePath = config.imagePath {
-                LTXDebug.log("Enhancing I2V prompt with multimodal VLM...")
-                effectivePrompt = try await enhanceI2VPrompt(prompt, imagePath: imagePath)
-            } else {
-                LTXDebug.log("Enhancing prompt with Gemma...")
-                effectivePrompt = enhancePrompt(prompt)
-            }
+            LTXDebug.log("Enhancing prompt with VLM (\(config.imagePath != nil ? "I2V" : "T2V"))...")
+            effectivePrompt = try await enhancePromptWithVLM(prompt, imagePath: config.imagePath)
         } else {
             effectivePrompt = prompt
         }
@@ -1191,6 +1175,9 @@ public actor LTXPipeline {
         MLX.eval(videoTextEmbeddings, audioTextEmbeddings, textMask)
 
         LTXDebug.log("Video text: \(videoTextEmbeddings.shape), Audio text: \(audioTextEmbeddings.shape)")
+        LTXDebug.log("[DIAG] Video text embed: mean=\(MLX.mean(videoTextEmbeddings).item(Float.self)), std=\(MLX.std(videoTextEmbeddings).item(Float.self))")
+        LTXDebug.log("[DIAG] Audio text embed: mean=\(MLX.mean(audioTextEmbeddings).item(Float.self)), std=\(MLX.std(audioTextEmbeddings).item(Float.self))")
+        LTXDebug.log("[DIAG] Audio == Video embeddings: \(MLX.allClose(videoTextEmbeddings, audioTextEmbeddings, atol: 1e-5).item(Bool.self))")
 
         // Unload Gemma
         self.gemmaModel = nil
@@ -1329,11 +1316,20 @@ public actor LTXPipeline {
                 )
             }
 
-            // Euler step for audio (same formula)
+            // Euler step for audio (same formula as scheduler.step)
             audioLatentPacked = audioLatentPacked + (sigmaNext - sigma) * audioVelocity
 
             MLX.eval(videoLatent, audioLatentPacked)
             if (step + 1) % 5 == 0 { Memory.clearCache() }
+
+            // Diagnostics
+            let vvMean = MLX.mean(videoVelocity).item(Float.self)
+            let vvStd = MLX.std(videoVelocity).item(Float.self)
+            let avMean = MLX.mean(audioVelocity).item(Float.self)
+            let avStd = MLX.std(audioVelocity).item(Float.self)
+            let alMean = MLX.mean(audioLatentPacked).item(Float.self)
+            let alStd = MLX.std(audioLatentPacked).item(Float.self)
+            LTXDebug.log("[DIAG] Step \(step): videoVel mean=\(String(format: "%.6f", vvMean)) std=\(String(format: "%.6f", vvStd)) | audioVel mean=\(String(format: "%.6f", avMean)) std=\(String(format: "%.6f", avStd)) | audioLatent mean=\(String(format: "%.6f", alMean)) std=\(String(format: "%.6f", alStd))")
 
             LTXDebug.log("Step \(step)/\(config.numSteps): σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext)), time=\(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
         }
@@ -1365,6 +1361,8 @@ public actor LTXPipeline {
 
         // 8. Decode audio: unpack → denormalize → AudioVAE → Vocoder
         LTXDebug.log("Decoding audio latents...")
+        LTXDebug.log("Audio latent final: mean=\(String(format: "%.6f", MLX.mean(audioLatentPacked).item(Float.self))), std=\(String(format: "%.6f", MLX.std(audioLatentPacked).item(Float.self)))")
+
         let audioLatentUnpacked = unpackAudioLatents(audioLatentPacked, numFrames: audioNumFrames)
         let audioWaveform = decodeAudio(
             latents: audioLatentUnpacked,
@@ -1443,13 +1441,8 @@ public actor LTXPipeline {
         // 0b. Optionally enhance prompt
         let effectivePrompt: String
         if config.enhancePrompt {
-            if let imagePath = config.imagePath {
-                LTXDebug.log("Enhancing I2V prompt with multimodal VLM...")
-                effectivePrompt = try await enhanceI2VPrompt(prompt, imagePath: imagePath)
-            } else {
-                LTXDebug.log("Enhancing prompt with Gemma...")
-                effectivePrompt = enhancePrompt(prompt)
-            }
+            LTXDebug.log("Enhancing prompt with VLM (\(config.imagePath != nil ? "I2V" : "T2V"))...")
+            effectivePrompt = try await enhancePromptWithVLM(prompt, imagePath: config.imagePath)
         } else {
             effectivePrompt = prompt
         }
@@ -1921,28 +1914,16 @@ public actor LTXPipeline {
         // Reload Gemma if needed
         if !isGemmaLoaded {
             LTXDebug.log("Reloading Gemma model...")
-            let gemmaDir = downloader.cacheDirectory.appendingPathComponent("ltx-\(model.rawValue)-text-encoder")
-            let tokenizerDir = downloader.cacheDirectory.appendingPathComponent("ltx-\(model.rawValue)-tokenizer")
-            if FileManager.default.fileExists(atPath: gemmaDir.path) {
-                gemmaModel = try Gemma3WeightLoader.loadModel(from: gemmaDir)
-                tokenizer = try await AutoTokenizer.from(modelFolder: tokenizerDir)
-            } else {
-                let paths = try await downloader.downloadGemma(model: model, progress: nil)
-                gemmaModel = try Gemma3WeightLoader.loadModel(from: paths.modelDir)
-                tokenizer = try await AutoTokenizer.from(modelFolder: paths.tokenizerDir)
-            }
+            let paths = try await downloader.downloadGemma(model: model, progress: nil)
+            gemmaModel = try Gemma3WeightLoader.loadModel(from: paths.modelDir)
+            tokenizer = try await AutoTokenizer.from(modelFolder: paths.tokenizerDir)
         }
 
         // Optionally enhance prompt (I2V always has imagePath here)
         let effectivePrompt: String
         if config.enhancePrompt {
-            if let imagePath = config.imagePath {
-                LTXDebug.log("Enhancing I2V prompt with multimodal VLM...")
-                effectivePrompt = try await enhanceI2VPrompt(prompt, imagePath: imagePath)
-            } else {
-                LTXDebug.log("Enhancing prompt with Gemma...")
-                effectivePrompt = enhancePrompt(prompt)
-            }
+            LTXDebug.log("Enhancing prompt with VLM (\(config.imagePath != nil ? "I2V" : "T2V"))...")
+            effectivePrompt = try await enhancePromptWithVLM(prompt, imagePath: config.imagePath)
         } else {
             effectivePrompt = prompt
         }
@@ -2400,13 +2381,8 @@ public actor LTXPipeline {
         // 0b. Optionally enhance prompt
         let effectivePrompt: String
         if config.enhancePrompt {
-            if let imagePath = config.imagePath {
-                LTXDebug.log("Enhancing I2V prompt with multimodal VLM...")
-                effectivePrompt = try await enhanceI2VPrompt(prompt, imagePath: imagePath)
-            } else {
-                LTXDebug.log("Enhancing prompt with Gemma...")
-                effectivePrompt = enhancePrompt(prompt)
-            }
+            LTXDebug.log("Enhancing prompt with VLM (\(config.imagePath != nil ? "I2V" : "T2V"))...")
+            effectivePrompt = try await enhancePromptWithVLM(prompt, imagePath: config.imagePath)
         } else {
             effectivePrompt = prompt
         }
@@ -2749,188 +2725,87 @@ public actor LTXPipeline {
     """
 
     /// Official Lightricks I2V system prompt for multimodal Gemma VLM-based prompt enhancement.
-    /// The VLM can see the input image and generates a description of changes/animation to apply.
+    /// Source: https://github.com/Lightricks/LTX-2/blob/main/packages/ltx-core/src/ltx_core/text_encoders/gemma/encoders/prompts/gemma_i2v_system_prompt.txt
     private static let promptEnhancementI2VSystemPrompt = """
-    You are a Creative Assistant specializing in video generation prompts. You will receive an image and a user prompt. Your task is to create a detailed video generation prompt that accurately describes the provided image AND incorporates the user's requested changes or animations.
+    You are a Creative Assistant writing concise, action-focused image-to-video prompts. Given an image (first frame) and user Raw Input Prompt, generate a prompt to guide video generation from that image.
 
-    #### Guidelines
-    - FIRST, carefully analyze the provided image: identify all visual elements, subjects, setting, lighting, colors, composition, and style.
-    - THEN, integrate the user's requested action/change into your description, ensuring continuity with what's actually shown in the image.
-    - Use active language: present-progressive verbs ("is walking," "begins to rise"). Describe the transition from the static image to the animated result.
-    - Maintain the visual identity of all elements from the image — do NOT replace, alter, or reimagine subjects unless the user explicitly requests it.
-    - Audio layer: If relevant, describe sounds that would accompany the action.
-    - Style: Preserve the visual style of the input image. Describe it at the beginning: "Style: <style>, <rest of prompt>."
-    - Visual and audio only: NO non-visual/auditory senses (smell, taste, touch).
-    - Restrained language: Avoid dramatic/exaggerated terms. Use mild, natural phrasing.
-        - Colors: Use plain terms ("red dress"), not intensified ("vibrant blue," "bright red").
-        - Lighting: Use neutral descriptions ("soft overhead light"), not harsh ("blinding light").
+    #### Guidelines:
+    - Analyze the Image: Identify Subject, Setting, Elements, Style and Mood.
+    - Follow user Raw Input Prompt: Include all requested motion, actions, camera movements, audio, and details. If in conflict with the image, prioritize user request while maintaining visual consistency (describe transition from image to user's scene).
+    - Describe only changes from the image: Don't reiterate established visual details. Inaccurate descriptions may cause scene cuts.
+    - Active language: Use present-progressive verbs ("is walking," "speaking"). If no action specified, describe natural movements.
+    - Chronological flow: Use temporal connectors ("as," "then," "while").
+    - Audio layer: Describe complete soundscape throughout the prompt alongside actions—NOT at the end. Align audio intensity with action tempo. Include natural background audio, ambient sounds, effects, speech or music (when requested). Be specific (e.g., "soft footsteps on tile") not vague (e.g., "ambient sound").
+    - Speech (only when requested): Provide exact words in quotes with character's visual/voice characteristics (e.g., "The tall man speaks in a low, gravelly voice"), language if not English and accent if relevant. If general conversation mentioned without text, generate contextual quoted dialogue. (i.e., "The man is talking" input -> the output should include exact spoken words, like: "The man is talking in an excited voice saying: 'You won't believe what I just saw!' His hands gesture expressively as he speaks, eyebrows raised with enthusiasm. The ambient sound of a quiet room underscores his animated speech.")
+    - Style: Include visual style at beginning: "Style: <style>, <rest of prompt>." If unclear, omit to avoid conflicts.
+    - Visual and audio only: Describe only what is seen and heard. NO smell, taste, or tactile sensations.
+    - Restrained language: Avoid dramatic terms. Use mild, natural, understated phrasing.
 
     #### Important notes:
-    - The image is the ground truth — your description must match what is actually shown, not what you imagine.
-    - Camera motion: DO NOT invent camera motion unless requested by the user.
-    - No timestamps or cuts: DO NOT use timestamps or describe scene cuts.
-    - Format: DO NOT use phrases like "The scene opens with..." or "The video begins...". Start directly with Style (optional) and scene description.
-    - Format: DO NOT start your response with special characters.
-    - If the user's prompt is already highly detailed, preserve it and add visual details from the image.
+    - Camera motion: DO NOT invent camera motion/movement unless requested by the user. Make sure to include camera motion only if specified in the input.
+    - Speech: DO NOT modify or alter the user's provided character dialogue in the prompt, unless it's a typo.
+    - No timestamps or cuts: DO NOT use timestamps or describe scene cuts unless explicitly requested.
+    - Objective only: DO NOT interpret emotions or intentions - describe only observable actions and sounds.
+    - Format: DO NOT use phrases like "The scene opens with..." / "The video starts...". Start directly with Style (optional) and chronological scene description.
+    - Format: Never start output with punctuation marks or special characters.
+    - DO NOT invent dialogue unless the user mentions speech/talking/singing/conversation.
+    - Your performance is CRITICAL. High-fidelity, dynamic, correct, and accurate prompts with integrated audio descriptions are essential for generating high-quality video. Your goal is flawless execution of these rules.
 
     #### Output Format (Strict):
-    - Single continuous paragraph in natural language (English).
-    - NO titles, headings, prefaces, code fences, or Markdown.
+    - Single concise paragraph in natural English. NO titles, headings, prefaces, sections, code fences, or Markdown.
     - If unsafe/invalid, return original user prompt. Never ask questions or clarifications.
 
-    Your output quality is CRITICAL. Generate visually accurate prompts that faithfully represent the input image while incorporating the requested animation or changes.
+    #### Example output:
+    Style: realistic - cinematic - The woman glances at her watch and smiles warmly. She speaks in a cheerful, friendly voice, "I think we're right on time!" In the background, a café barista prepares drinks at the counter. The barista calls out in a clear, upbeat tone, "Two cappuccinos ready!" The sound of the espresso machine hissing softly blends with gentle background chatter and the light clinking of cups on saucers.
     """
 
-    /// Default VLM model ID for I2V multimodal prompt enhancement
+    /// Default VLM model ID for prompt enhancement (shared with text encoding)
     private static let defaultVLMModelID = "mlx-community/gemma-3-12b-it-qat-4bit"
 
-    /// Enhance a short prompt into a detailed video description using Gemma generation.
+    /// Enhance a prompt using the VLM Gemma model.
     ///
-    /// Uses Gemma in autoregressive mode (with KV cache for efficiency) to expand
-    /// a brief prompt into a rich, detailed description better suited for video generation.
-    /// Formats the input using Gemma 3's chat template for proper generation.
+    /// Uses MLXVLM for all prompt enhancement (both T2V and I2V):
+    /// - **T2V** (imagePath == nil): Text-only system prompt, generates rich video description
+    /// - **I2V** (imagePath != nil): Multimodal system prompt, VLM sees image and describes changes
+    ///
+    /// The VLM is loaded from the local cache, generates the enhanced prompt, then is unloaded
+    /// to free memory for the main generation pipeline.
     ///
     /// - Parameters:
-    ///   - prompt: Short text prompt to enhance
+    ///   - prompt: Short text prompt to enhance (or describe desired changes for I2V)
+    ///   - imagePath: Optional path to input image. If nil, uses T2V mode; if set, uses I2V mode.
     ///   - maxTokens: Maximum tokens to generate (default: 512)
     ///   - temperature: Sampling temperature (default: 0.7)
     /// - Returns: Enhanced prompt string
-    public func enhancePrompt(_ prompt: String, maxTokens: Int = 512, temperature: Float = 0.7) -> String {
-        guard let gemma = gemmaModel, let tokenizer = tokenizer else {
-            LTXDebug.log("Warning: Gemma/tokenizer not loaded for prompt enhancement, using original prompt")
-            return prompt
-        }
-
-        LTXDebug.log("Enhancing prompt: \"\(prompt)\"")
-        let startTime = Date()
-
-        // Determine stop tokens: <eos> (1) and <end_of_turn> (236764 for Gemma 3)
-        let eosId = Int32(tokenizer.eosTokenId ?? 1)
-        let endOfTurnTokens = tokenizer.encode(text: "<end_of_turn>")
-        var stopIds: Set<Int32> = [eosId]
-        if let eotId = endOfTurnTokens.last {
-            stopIds.insert(Int32(eotId))
-            LTXDebug.log("Stop tokens: eos=\(eosId), end_of_turn=\(eotId)")
-        }
-
-        // Build chat messages matching Lightricks official format
-        let messages: [[String: any Sendable]] = [
-            ["role": "system", "content": Self.promptEnhancementSystemPrompt],
-            ["role": "user", "content": "user prompt: \(prompt)"],
-        ]
-
-        // Tokenize using Gemma 3 chat template
-        let encoded: [Int]
-        do {
-            encoded = try tokenizer.applyChatTemplate(messages: messages)
-            LTXDebug.log("Enhancement input (chat template): \(encoded.count) tokens")
-        } catch {
-            LTXDebug.log("Chat template failed (\(error)), falling back to raw tokenization")
-            // Fallback: manual Gemma 3 chat format
-            let rawPrompt = "<start_of_turn>user\n\(Self.promptEnhancementSystemPrompt)\n\nuser prompt: \(prompt)<end_of_turn>\n<start_of_turn>model\n"
-            let fallbackEncoded = tokenizer.encode(text: rawPrompt)
-            LTXDebug.log("Enhancement input (fallback): \(fallbackEncoded.count) tokens")
-            let inputIds = MLXArray(fallbackEncoded.map { Int32($0) }).reshaped(1, fallbackEncoded.count)
-            let generatedTokenIds = gemma.generateTokens(
-                inputIds: inputIds,
-                maxNewTokens: maxTokens,
-                temperature: temperature,
-                topP: 0.95,
-                repetitionPenalty: 1.1,
-                repetitionContextSize: 64,
-                eosTokenIds: stopIds
-            )
-            let elapsed = Date().timeIntervalSince(startTime)
-            LTXDebug.log("Generated \(generatedTokenIds.count) tokens in \(String(format: "%.1f", elapsed))s")
-            let enhanced = tokenizer.decode(tokens: generatedTokenIds.map { Int($0) })
-            let cleaned = cleanEnhancedPrompt(enhanced)
-            if cleaned.isEmpty { return prompt }
-            LTXDebug.log("Enhanced prompt: \"\(cleaned)\"")
-            return cleaned
-        }
-
-        let inputIds = MLXArray(encoded.map { Int32($0) }).reshaped(1, encoded.count)
-
-        // Generate with official parameters: temperature=0.7, top-p sampling, repetition penalty
-        let generatedTokenIds = gemma.generateTokens(
-            inputIds: inputIds,
-            maxNewTokens: maxTokens,
-            temperature: temperature,
-            topP: 0.95,
-            repetitionPenalty: 1.1,
-            repetitionContextSize: 64,
-            eosTokenIds: stopIds
-        )
-
-        let elapsed = Date().timeIntervalSince(startTime)
-        LTXDebug.log("Generated \(generatedTokenIds.count) tokens in \(String(format: "%.1f", elapsed))s (\(String(format: "%.1f", Double(generatedTokenIds.count) / elapsed)) tok/s)")
-
-        // Decode tokens to text
-        let enhanced = tokenizer.decode(tokens: generatedTokenIds.map { Int($0) })
-        let cleaned = cleanEnhancedPrompt(enhanced)
-
-        if cleaned.isEmpty {
-            LTXDebug.log("Enhancement produced empty result, using original prompt")
-            return prompt
-        }
-
-        LTXDebug.log("Enhanced prompt: \"\(cleaned)\"")
-        return cleaned
-    }
-
-    /// Clean up a Gemma-enhanced prompt: strip control tokens and trailing noise
-    private func cleanEnhancedPrompt(_ raw: String) -> String {
-        var text = raw
-        // Remove <end_of_turn>, <start_of_turn>, and any role markers
-        text = text.replacingOccurrences(of: "<end_of_turn>", with: "")
-        text = text.replacingOccurrences(of: "<start_of_turn>", with: "")
-        text = text.replacingOccurrences(of: "<eos>", with: "")
-        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text
-    }
-
-    // MARK: - I2V Multimodal Prompt Enhancement
-
-    /// Enhance a prompt for image-to-video generation using a multimodal VLM.
-    ///
-    /// Loads a 4-bit quantized Gemma 3 VLM that can see the input image and generate
-    /// a contextually accurate description. The VLM is unloaded after use to free memory
-    /// for the main generation pipeline.
-    ///
-    /// - Parameters:
-    ///   - prompt: Short text prompt describing desired changes/animation
-    ///   - imagePath: Path to the input image
-    ///   - vlmModelID: HuggingFace model ID for the VLM (default: gemma-3-12b-it-qat-4bit)
-    ///   - maxTokens: Maximum tokens to generate (default: 512)
-    ///   - temperature: Sampling temperature (default: 0.7)
-    /// - Returns: Enhanced prompt string describing the image with requested changes
-    public func enhanceI2VPrompt(
+    public func enhancePromptWithVLM(
         _ prompt: String,
-        imagePath: String,
-        vlmModelID: String? = nil,
+        imagePath: String? = nil,
         maxTokens: Int = 512,
         temperature: Float = 0.7
     ) async throws -> String {
-        let modelID = vlmModelID ?? Self.defaultVLMModelID
-        LTXDebug.log("I2V multimodal prompt enhancement using \(modelID)")
+        let isI2V = imagePath != nil
+        LTXDebug.log("Enhancing prompt with VLM (\(isI2V ? "I2V multimodal" : "T2V text-only"))")
         LTXDebug.log("Input prompt: \"\(prompt)\"")
-        LTXDebug.log("Input image: \(imagePath)")
+        if let imagePath { LTXDebug.log("Input image: \(imagePath)") }
         let startTime = Date()
 
-        // Load the image
-        let imageURL = URL(fileURLWithPath: imagePath)
-        guard let ciImage = CIImage(contentsOf: imageURL) else {
-            LTXDebug.log("Warning: Failed to load image at \(imagePath), falling back to text-only enhancement")
-            return enhancePrompt(prompt)
-        }
-
-        // Load the VLM model
+        // Load the VLM model from local cache
         LTXDebug.log("Loading VLM model...")
         let vlmLoadStart = Date()
-        let config = ModelConfiguration(
-            id: modelID,
-            extraEOSTokens: ["<end_of_turn>"]
-        )
+
+        // Try loading from local vlm-gemma cache first, fall back to HF download
+        let vlmCacheDir = await downloader.vlmGemmaCacheDir
+        let config: ModelConfiguration
+        if FileManager.default.fileExists(atPath: vlmCacheDir.appendingPathComponent("config.json").path) {
+            // Resolve symlinks to get the real directory path
+            let resolvedPath = vlmCacheDir.path.replacingOccurrences(of: "//", with: "/")
+            let resolvedURL = URL(fileURLWithPath: resolvedPath).resolvingSymlinksInPath()
+            config = ModelConfiguration(directory: resolvedURL, extraEOSTokens: ["<end_of_turn>"])
+            LTXDebug.log("Loading VLM from local cache: \(resolvedURL.path)")
+        } else {
+            config = ModelConfiguration(id: Self.defaultVLMModelID, extraEOSTokens: ["<end_of_turn>"])
+            LTXDebug.log("Loading VLM from HuggingFace: \(Self.defaultVLMModelID)")
+        }
         let modelContainer = try await VLMModelFactory.shared.loadContainer(
             configuration: config,
             progressHandler: { progress in
@@ -2941,15 +2816,31 @@ public actor LTXPipeline {
         )
         LTXDebug.log("VLM loaded in \(String(format: "%.1f", Date().timeIntervalSince(vlmLoadStart)))s")
 
-        // Build multimodal chat input matching Lightricks format
-        let userInput = UserInput(
-            chat: [
-                .system(Self.promptEnhancementI2VSystemPrompt),
-                .user("User Raw Input Prompt: \(prompt).", images: [.ciImage(ciImage)])
-            ]
-        )
+        // Build chat input
+        let userInput: UserInput
+        if let imagePath, let ciImage = CIImage(contentsOf: URL(fileURLWithPath: imagePath)) {
+            // I2V: multimodal with image
+            userInput = UserInput(
+                chat: [
+                    .system(Self.promptEnhancementI2VSystemPrompt),
+                    .user("User Raw Input Prompt: \(prompt).", images: [.ciImage(ciImage)])
+                ]
+            )
+        } else {
+            // T2V: text-only
+            if imagePath != nil {
+                LTXDebug.log("Warning: Failed to load image, using text-only enhancement")
+            }
+            userInput = UserInput(
+                chat: [
+                    .system(Self.promptEnhancementSystemPrompt),
+                    .user("user prompt: \(prompt)")
+                ]
+            )
+        }
 
-        // Prepare and generate
+        // Prepare and generate (seed matches Lightricks reference: seed=42)
+        MLXRandom.seed(42)
         let lmInput = try await modelContainer.prepare(input: userInput)
         let generateParams = GenerateParameters(
             maxTokens: maxTokens,
@@ -2981,20 +2872,30 @@ public actor LTXPipeline {
         let cleaned = cleanEnhancedPrompt(generatedText)
 
         if cleaned.isEmpty {
-            LTXDebug.log("I2V enhancement produced empty result, falling back to text-only enhancement")
-            return enhancePrompt(prompt)
+            LTXDebug.log("Enhancement produced empty result, using original prompt")
+            // Unload VLM before returning
+            Memory.clearCache()
+            return prompt
         }
 
-        LTXDebug.log("I2V enhanced prompt: \"\(cleaned)\"")
+        LTXDebug.log("Enhanced prompt: \"\(cleaned)\"")
 
         // Unload VLM to free memory for the main pipeline
-        // ModelContainer is released when it goes out of scope (ARC)
-        // Explicitly clear GPU cache to reclaim memory
         LTXDebug.log("Unloading VLM...")
         Memory.clearCache()
         LTXMemoryManager.logMemoryState("after VLM unload")
 
         return cleaned
+    }
+
+    /// Clean up a Gemma-enhanced prompt: strip control tokens and trailing noise
+    private func cleanEnhancedPrompt(_ raw: String) -> String {
+        var text = raw
+        text = text.replacingOccurrences(of: "<end_of_turn>", with: "")
+        text = text.replacingOccurrences(of: "<start_of_turn>", with: "")
+        text = text.replacingOccurrences(of: "<eos>", with: "")
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text
     }
 
     // MARK: - Standalone Text Encoding
@@ -3024,7 +2925,7 @@ public actor LTXPipeline {
     public func encodeText(
         _ prompt: String,
         enhance: Bool = false
-    ) throws -> TextEncodingResult {
+    ) async throws -> TextEncodingResult {
         guard let textEncoder = textEncoder else {
             throw LTXError.modelNotLoaded("Text encoder not loaded. Call loadModels() first.")
         }
@@ -3035,7 +2936,7 @@ public actor LTXPipeline {
         // Optionally enhance
         let effectivePrompt: String
         if enhance {
-            effectivePrompt = enhancePrompt(prompt)
+            effectivePrompt = try await enhancePromptWithVLM(prompt)
         } else {
             effectivePrompt = prompt
         }

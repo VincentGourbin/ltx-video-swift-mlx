@@ -419,7 +419,15 @@ class AudioVAE: Module {
         // Denormalize per-channel
         let mean = latentsMean.reshaped([1, 1, 128])
         let std = latentsStd.reshaped([1, 1, 128])
+
+        // Debug: verify denormalization stats are loaded
+        MLX.eval(mean, std, sample)
+        LTXDebug.log("Audio VAE denorm stats: mean[0..4]=[\(latentsMean[0].item(Float.self)), \(latentsMean[1].item(Float.self)), \(latentsMean[2].item(Float.self)), \(latentsMean[3].item(Float.self))], std[0..4]=[\(latentsStd[0].item(Float.self)), \(latentsStd[1].item(Float.self)), \(latentsStd[2].item(Float.self)), \(latentsStd[3].item(Float.self))]")
+        LTXDebug.log("Audio latent before denorm: mean=\(MLX.mean(sample).item(Float.self)), std=\(MLX.std(sample).item(Float.self))")
+
         sample = sample * std + mean
+        MLX.eval(sample)
+        LTXDebug.log("Audio latent after denorm: mean=\(MLX.mean(sample).item(Float.self)), std=\(MLX.std(sample).item(Float.self))")
 
         // Unpatchify: (B, T, 128) -> (B, 8, T, 16)
         sample = sample.reshaped([b, latentT, 8, latentMel])

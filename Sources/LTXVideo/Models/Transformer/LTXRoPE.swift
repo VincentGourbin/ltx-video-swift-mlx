@@ -629,13 +629,25 @@ func createAudioPositionGrid(
     audioFrames: Int,
     hopLength: Int = 160,
     sampleRate: Int = 16000,
-    temporalScale: Int = 4
+    temporalScale: Int = 4,
+    causalOffset: Int = 1
 ) -> MLXArray {
-    // Audio temporal positions: each frame represents a segment of audio
-    // Position in seconds: frame_idx * temporalScale * hopLength / sampleRate
-    let posScale = Float(temporalScale * hopLength) / Float(sampleRate)
+    // Match Python prepare_audio_coords exactly:
+    //   grid_f = arange(0, num_frames)
+    //   start_mel = (grid_f * scale + causal_offset - scale).clip(min=0)
+    //   end_mel = ((grid_f + 1) * scale + causal_offset - scale).clip(min=0)
+    //   mid_s = (start_mel + end_mel) / 2 * hop_length / sample_rate
+    let scale = Float(temporalScale)
+    let offset = Float(causalOffset)
+    let hop = Float(hopLength)
+    let sr = Float(sampleRate)
+
     let positions: [Float] = (0..<audioFrames).map { i in
-        (Float(i) + 0.5) * posScale  // midpoint of each frame
+        let fi = Float(i)
+        let startMel = max(0, fi * scale + offset - scale)
+        let endMel = max(0, (fi + 1) * scale + offset - scale)
+        let midS = (startMel + endMel) / 2.0 * hop / sr
+        return midS
     }
     let posArray = MLXArray(positions).reshaped([1, 1, audioFrames])
     let expanded = MLX.broadcast(posArray, to: [batchSize, 1, audioFrames])

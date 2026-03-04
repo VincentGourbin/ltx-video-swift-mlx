@@ -228,6 +228,9 @@ class LTX2Vocoder: Module {
         // Transpose to MLX format: (B, 128, T) -> (B, T, 128)
         x = x.transposed(0, 2, 1)
 
+        eval(x)
+        LTXDebug.log("Vocoder input (B,T,128): mean=\(MLX.mean(x).item(Float.self)), std=\(MLX.std(x).item(Float.self)), min=\(MLX.min(x).item(Float.self)), max=\(MLX.max(x).item(Float.self))")
+
         // Pre-conv
         x = convIn(x)  // (B, T, 1024)
 
@@ -345,7 +348,14 @@ func decodeAudio(
     eval(waveform)
     Memory.clearCache()
 
-    LTXDebug.log("Waveform: \(waveform.shape), sample rate: \(vocoder.outputSampleRate)Hz")
+    // No normalization — match official Lightricks pipeline.
+    // The vocoder uses tanh so output is already in (-1, 1).
+    // Raw output may be quiet; the player or user adjusts volume.
+    let rawPeak = MLX.abs(waveform).max().item(Float.self)
+    let rawRMS = MLX.sqrt(MLX.mean(waveform * waveform)).item(Float.self)
+    let peakDB = 20 * log10(max(rawPeak, 1e-10))
+    let rmsDB = 20 * log10(max(rawRMS, 1e-10))
+    LTXDebug.log("Waveform: \(waveform.shape), sample rate: \(vocoder.outputSampleRate)Hz, peak=\(String(format: "%.1f", peakDB)) dBFS, RMS=\(String(format: "%.1f", rmsDB)) dBFS")
 
     return waveform
 }

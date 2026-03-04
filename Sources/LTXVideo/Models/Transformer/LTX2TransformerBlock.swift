@@ -32,17 +32,13 @@ struct AudioTransformerArgs {
 
     // Cross-modal modulation (from global timestep embeddings)
 
-    /// Video cross-modal scale/shift: (B, 1, 4, D_video) for a2v/v2a modulation
+    /// Video cross-modal scale/shift + gate: (B, 1, 5, D_video) for a2v/v2a modulation
+    /// Indices 0-3: scale/shift, index 4: gate (global timestep embedding)
     var crossVideoScaleShift: MLXArray
 
-    /// Video a2v gate: (B, 1, D_video)
-    var crossVideoGate: MLXArray
-
-    /// Audio cross-modal scale/shift: (B, 1, 4, D_audio)
+    /// Audio cross-modal scale/shift + gate: (B, 1, 5, D_audio)
+    /// Indices 0-3: scale/shift, index 4: gate (global timestep embedding)
     var crossAudioScaleShift: MLXArray
-
-    /// Audio v2a gate: (B, 1, D_audio)
-    var crossAudioGate: MLXArray
 
     /// Cross-modal video RoPE (for KV in v2a, Q in a2v cross-attention)
     var crossVideoRoPE: (cos: MLXArray, sin: MLXArray)
@@ -238,14 +234,14 @@ class LTX2TransformerBlock: Module {
         let vA2VShift = videoCA[0..., 0..., 1, 0...]
         let vV2AScale = videoCA[0..., 0..., 2, 0...]
         let vV2AShift = videoCA[0..., 0..., 3, 0...]
-        let vA2VGate = videoCA[0..., 0..., 4, 0...] * audioArgs.crossVideoGate
+        let vA2VGate = videoCA[0..., 0..., 4, 0...]
 
         // Audio modulation values
         let aA2VScale = audioCA[0..., 0..., 0, 0...]
         let aA2VShift = audioCA[0..., 0..., 1, 0...]
         let aV2AScale = audioCA[0..., 0..., 2, 0...]
         let aV2AShift = audioCA[0..., 0..., 3, 0...]
-        let aV2AGate = audioCA[0..., 0..., 4, 0...] * audioArgs.crossAudioGate
+        let aV2AGate = audioCA[0..., 0..., 4, 0...]
 
         // Norm video and audio for cross-modal
         let normVCA = audioToVideoNorm(videoX)
@@ -293,9 +289,7 @@ class LTX2TransformerBlock: Module {
                 contextMask: audioArgs.contextMask,
                 embeddedTimestep: audioArgs.embeddedTimestep,
                 crossVideoScaleShift: audioArgs.crossVideoScaleShift,
-                crossVideoGate: audioArgs.crossVideoGate,
                 crossAudioScaleShift: audioArgs.crossAudioScaleShift,
-                crossAudioGate: audioArgs.crossAudioGate,
                 crossVideoRoPE: audioArgs.crossVideoRoPE,
                 crossAudioRoPE: audioArgs.crossAudioRoPE
             )

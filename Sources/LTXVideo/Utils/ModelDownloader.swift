@@ -44,9 +44,8 @@ public typealias DownloadProgressCallback = @Sendable (DownloadProgress) -> Void
 
 /// Downloads model weights from HuggingFace Hub
 ///
-/// Uses per-component downloading following the Diffusers format:
-/// - `text_encoder/` — Gemma 3 12B (sharded safetensors)
-/// - `tokenizer/` — Gemma tokenizer
+/// Uses per-component downloading:
+/// - `vlm-gemma/` — Shared VLM Gemma 3 12B 4-bit QAT (text encoding + prompt enhancement)
 /// - `connectors/` — Text encoder connector
 /// - `vae/` — Video VAE decoder
 /// - Unified safetensors file — Transformer weights (extracted from unified file)
@@ -152,106 +151,6 @@ public actor ModelDownloader {
     /// Cache subdirectory for a model variant
     private func componentCacheDir(model: LTXModel) -> URL {
         cacheDirectory.appendingPathComponent("ltx-\(model.rawValue)")
-    }
-
-    /// Download Gemma text encoder weights
-    ///
-    /// Downloads from `text_encoder/` subdirectory (sharded Gemma 3 12B safetensors)
-    ///
-    /// - Parameters:
-    ///   - model: The LTX model variant
-    ///   - progress: Optional progress callback
-    /// - Returns: Path to the text encoder directory
-    public func downloadTextEncoder(
-        model: LTXModel = .dev,
-        progress: DownloadProgressCallback? = nil
-    ) async throws -> URL {
-        let repoId = model.huggingFaceRepo
-        let localDir = componentCacheDir(model: model).appendingPathComponent("text_encoder")
-
-        progress?(DownloadProgress(progress: 0.0, message: "Preparing to download text encoder..."))
-
-        // Quick check: if config.json exists, assume already downloaded
-        if FileManager.default.fileExists(atPath: localDir.appendingPathComponent("config.json").path) {
-            progress?(DownloadProgress(progress: 1.0, message: "Text encoder already downloaded"))
-            return localDir
-        }
-
-        // Get file list from HuggingFace
-        // Filter to only model-*.safetensors (HF Transformers format), not diffusion_pytorch_model-*
-        // (Diffusers format). Both contain the same Gemma weights but we don't need both.
-        let allFiles = try await listRepoFiles(repoId: repoId)
-        let textEncoderFiles = allFiles.filter { file in
-            guard file.hasPrefix("text_encoder/") else { return false }
-            let name = String(file.dropFirst("text_encoder/".count))
-            // Skip Diffusers-format weight files (we use model-* format)
-            if name.hasPrefix("diffusion_pytorch_model") { return false }
-            return true
-        }
-
-        guard !textEncoderFiles.isEmpty else {
-            throw LTXError.downloadFailed("No text_encoder files found in \(repoId)")
-        }
-
-        try FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
-
-        let totalFiles = textEncoderFiles.count
-        for (i, file) in textEncoderFiles.enumerated() {
-            let localName = String(file.dropFirst("text_encoder/".count))
-            progress?(DownloadProgress(
-                progress: Double(i) / Double(totalFiles),
-                currentFile: localName,
-                message: "Downloading text_encoder/\(localName)..."
-            ))
-            try await downloadFile(
-                repoId: repoId,
-                filename: file,
-                to: localDir.appendingPathComponent(localName)
-            )
-        }
-
-        progress?(DownloadProgress(progress: 1.0, message: "Text encoder download complete"))
-        return localDir
-    }
-
-    /// Download tokenizer files
-    ///
-    /// - Parameters:
-    ///   - model: The LTX model variant
-    ///   - progress: Optional progress callback
-    /// - Returns: Path to the tokenizer directory
-    public func downloadTokenizer(
-        model: LTXModel = .dev,
-        progress: DownloadProgressCallback? = nil
-    ) async throws -> URL {
-        let repoId = model.huggingFaceRepo
-        let localDir = componentCacheDir(model: model).appendingPathComponent("tokenizer")
-
-        if FileManager.default.fileExists(atPath: localDir.appendingPathComponent("tokenizer_config.json").path) {
-            progress?(DownloadProgress(progress: 1.0, message: "Tokenizer already downloaded"))
-            return localDir
-        }
-
-        let allFiles = try await listRepoFiles(repoId: repoId)
-        let tokenizerFiles = allFiles.filter { $0.hasPrefix("tokenizer/") }
-
-        guard !tokenizerFiles.isEmpty else {
-            throw LTXError.downloadFailed("No tokenizer files found in \(repoId)")
-        }
-
-        try FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
-
-        for file in tokenizerFiles {
-            let localName = String(file.dropFirst("tokenizer/".count))
-            try await downloadFile(
-                repoId: repoId,
-                filename: file,
-                to: localDir.appendingPathComponent(localName)
-            )
-        }
-
-        progress?(DownloadProgress(progress: 1.0, message: "Tokenizer download complete"))
-        return localDir
     }
 
     /// Download connector weights
@@ -411,22 +310,108 @@ public actor ModelDownloader {
         return destination
     }
 
-    // MARK: - Legacy Compatibility
+    // MARK: - VLM Gemma (Shared 4-bit Model)
 
-    /// Download Gemma text encoder (legacy API — calls downloadTextEncoder + downloadTokenizer)
+    /// HuggingFace repo for the shared VLM Gemma model (4-bit QAT, ~7.5GB)
+    private static let vlmGemmaRepoID = "mlx-community/gemma-3-12b-it-qat-4bit"
+
+    /// Files to download from the VLM Gemma repo
+    private static let vlmGemmaFiles = [
+        "model-00001-of-00002.safetensors",
+        "model-00002-of-00002.safetensors",
+        "model.safetensors.index.json",
+        "config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "added_tokens.json",
+        "generation_config.json",
+        "preprocessor_config.json",
+        "processor_config.json",
+        "chat_template.json",
+    ]
+
+    /// Shared cache directory for VLM Gemma (used by all model variants)
+    internal var vlmGemmaCacheDir: URL {
+        cacheDirectory.appendingPathComponent("vlm-gemma")
+    }
+
+    /// Download VLM Gemma model (shared 4-bit QAT, ~7.5GB)
+    ///
+    /// Downloads `mlx-community/gemma-3-12b-it-qat-4bit` which provides:
+    /// - Language model weights for text encoding (hidden state extraction)
+    /// - Tokenizer files
+    /// - VLM config (with quantization info parsed by Gemma3Config)
+    ///
+    /// This replaces per-variant text_encoder + tokenizer downloads, saving ~40GB disk space.
+    /// The same VLM weights are used for both dev and distilled variants.
+    ///
+    /// - Parameter progress: Optional progress callback
+    /// - Returns: Path to the VLM Gemma directory (contains model + tokenizer files)
+    public func downloadVLMGemma(
+        progress: DownloadProgressCallback? = nil
+    ) async throws -> URL {
+        let localDir = vlmGemmaCacheDir
+
+        // Quick check: if config.json exists, assume already downloaded
+        if FileManager.default.fileExists(atPath: localDir.appendingPathComponent("config.json").path) {
+            progress?(DownloadProgress(progress: 1.0, message: "VLM Gemma already downloaded"))
+            return localDir
+        }
+
+        // Also check MLXVLM cache location (may have been downloaded by I2V enhancement)
+        let mlxvlmCacheDir = cacheDirectory.appendingPathComponent(
+            "mlx-community/gemma-3-12b-it-qat-4bit")
+        if FileManager.default.fileExists(atPath: mlxvlmCacheDir.appendingPathComponent("config.json").path) {
+            // Symlink to our cache dir to avoid re-downloading
+            try FileManager.default.createDirectory(
+                at: localDir.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(
+                at: localDir,
+                withDestinationURL: mlxvlmCacheDir)
+            progress?(DownloadProgress(progress: 1.0, message: "VLM Gemma found in MLXVLM cache"))
+            return localDir
+        }
+
+        try FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
+
+        progress?(DownloadProgress(progress: 0.0, message: "Downloading VLM Gemma (4-bit, ~7.5GB)..."))
+
+        let totalFiles = Self.vlmGemmaFiles.count
+        for (i, file) in Self.vlmGemmaFiles.enumerated() {
+            progress?(DownloadProgress(
+                progress: Double(i) / Double(totalFiles),
+                currentFile: file,
+                message: "Downloading vlm-gemma/\(file)..."
+            ))
+            try await downloadFile(
+                repoId: Self.vlmGemmaRepoID,
+                filename: file,
+                to: localDir.appendingPathComponent(file)
+            )
+        }
+
+        progress?(DownloadProgress(progress: 1.0, message: "VLM Gemma download complete"))
+        return localDir
+    }
+
+    /// Download Gemma text encoder — uses shared VLM Gemma (4-bit QAT)
+    ///
+    /// Returns the VLM Gemma directory which contains both model weights and tokenizer.
+    /// The `model` parameter is ignored since all variants share the same Gemma weights.
     public func downloadGemma(
         model: LTXModel = .dev,
         progress: DownloadProgressCallback? = nil
     ) async throws -> (modelDir: URL, tokenizerDir: URL) {
-        let modelDir = try await downloadTextEncoder(model: model, progress: progress)
-        let tokenizerDir = try await downloadTokenizer(model: model, progress: progress)
-        return (modelDir, tokenizerDir)
+        let vlmDir = try await downloadVLMGemma(progress: progress)
+        return (modelDir: vlmDir, tokenizerDir: vlmDir)
     }
 
-    /// Check if Gemma text encoder is downloaded for the given model
+    /// Check if VLM Gemma is downloaded (shared across all model variants)
     public func isGemmaDownloaded(model: LTXModel = .dev) -> Bool {
-        let dir = componentCacheDir(model: model).appendingPathComponent("text_encoder")
-        return FileManager.default.fileExists(atPath: dir.appendingPathComponent("config.json").path)
+        return FileManager.default.fileExists(
+            atPath: vlmGemmaCacheDir.appendingPathComponent("config.json").path)
     }
 
     /// Get the Gemma model and tokenizer directories (downloads if needed)
@@ -458,13 +443,11 @@ public actor ModelDownloader {
     ) async throws -> LTXComponentPaths {
         progress?(DownloadProgress(progress: 0.0, message: "Downloading \(model.displayName) components..."))
 
-        let textEncoderDir = try await downloadTextEncoder(model: model) { p in
+        let vlmDir = try await downloadVLMGemma { p in
             progress?(DownloadProgress(progress: p.progress * 0.4, currentFile: p.currentFile, message: p.message))
         }
-
-        let tokenizerDir = try await downloadTokenizer(model: model) { p in
-            progress?(DownloadProgress(progress: 0.4 + p.progress * 0.05, currentFile: p.currentFile, message: p.message))
-        }
+        let textEncoderDir = vlmDir
+        let tokenizerDir = vlmDir
 
         let connectorPath = try await downloadConnector(model: model) { p in
             progress?(DownloadProgress(progress: 0.45 + p.progress * 0.1, currentFile: p.currentFile, message: p.message))
@@ -580,9 +563,9 @@ public actor ModelDownloader {
 
 /// Paths to all downloaded LTX-2 components
 public struct LTXComponentPaths: Sendable {
-    /// Directory containing Gemma text encoder weights
+    /// Directory containing Gemma text encoder weights (VLM Gemma, shared)
     public let textEncoderDir: URL
-    /// Directory containing tokenizer files
+    /// Directory containing tokenizer files (same as textEncoderDir for VLM Gemma)
     public let tokenizerDir: URL
     /// Path to connector safetensors file
     public let connectorPath: URL
@@ -1400,6 +1383,9 @@ class LTXWeightLoader {
                 connectorRaw["audio_embeddings_connector." + String(key.dropFirst(audioConnectorPrefix.count))] = value
             } else if key.hasPrefix(projPrefix) {
                 connectorRaw["text_embedding_projection." + String(key.dropFirst(projPrefix.count))] = value
+            } else if key.hasPrefix("text_embedding_projection.") {
+                // Top-level text_embedding_projection (without model.diffusion_model. prefix)
+                connectorRaw[key] = value
             } else if key.hasPrefix(diffusionPrefix) {
                 transformerRaw[String(key.dropFirst(diffusionPrefix.count))] = value
             } else if key.hasPrefix("vae.") {

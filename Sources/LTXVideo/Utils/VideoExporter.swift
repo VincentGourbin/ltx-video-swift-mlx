@@ -2,6 +2,7 @@
 // Copyright 2025
 
 import AVFoundation
+import CoreMedia
 import CoreImage
 import Foundation
 @preconcurrency import MLX
@@ -137,13 +138,19 @@ public actor VideoExporter {
         )
     }
 
-    /// Export frames to MP4 file
+    /// Export frames to MP4 file, optionally muxing audio into the same container
+    ///
+    /// When audio is provided, writes video to a temp file first, then muxes
+    /// video + audio via AVMutableComposition to avoid AVAssetWriter interleaving deadlocks.
     ///
     /// - Parameters:
     ///   - frames: Array of CGImage frames
     ///   - width: Video width
     ///   - height: Video height
     ///   - fps: Frames per second
+    ///   - audioSamples: Optional interleaved Int16 stereo PCM data
+    ///   - audioSampleRate: Audio sample rate (default 24000)
+    ///   - audioChannels: Number of audio channels (default 2)
     ///   - outputURL: Output file URL
     /// - Returns: URL to the exported video
     public func export(
@@ -151,6 +158,9 @@ public actor VideoExporter {
         width: Int,
         height: Int,
         fps: Double? = nil,
+        audioSamples: Data? = nil,
+        audioSampleRate: Int = 24000,
+        audioChannels: Int = 2,
         to outputURL: URL
     ) async throws -> URL {
         guard !frames.isEmpty else {
@@ -162,10 +172,61 @@ public actor VideoExporter {
             try FileManager.default.removeItem(at: outputURL)
         }
 
-        // Create asset writer
+        if let pcmData = audioSamples {
+            // Two-pass approach: write video to temp, write audio to temp, mux together
+            let tempDir = FileManager.default.temporaryDirectory
+            let videoTempURL = tempDir.appendingPathComponent("ltx_video_\(UUID().uuidString).mp4")
+            let audioTempURL = tempDir.appendingPathComponent("ltx_audio_\(UUID().uuidString).m4a")
+
+            defer {
+                try? FileManager.default.removeItem(at: videoTempURL)
+                try? FileManager.default.removeItem(at: audioTempURL)
+            }
+
+            // 1. Write video-only
+            try await writeVideoOnly(
+                frames: frames, width: width, height: height,
+                fps: fps, to: videoTempURL
+            )
+
+            // 2. Write audio-only
+            try await writeAudioOnly(
+                pcmData: pcmData, sampleRate: audioSampleRate,
+                channels: audioChannels, to: audioTempURL
+            )
+
+            // 3. Mux video + audio into final output
+            try await muxVideoAndAudio(
+                videoURL: videoTempURL,
+                audioURL: audioTempURL,
+                to: outputURL
+            )
+
+            return outputURL
+        } else {
+            // Video-only export (original path)
+            return try await writeVideoOnly(
+                frames: frames, width: width, height: height,
+                fps: fps, to: outputURL
+            )
+        }
+    }
+
+    /// Write video frames to an MP4 file (no audio)
+    @discardableResult
+    private func writeVideoOnly(
+        frames: [CGImage],
+        width: Int,
+        height: Int,
+        fps: Double?,
+        to outputURL: URL
+    ) async throws -> URL {
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            try FileManager.default.removeItem(at: outputURL)
+        }
+
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
 
-        // Video settings
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: config.codec,
             AVVideoWidthKey: width,
@@ -181,7 +242,6 @@ public actor VideoExporter {
         )
         writerInput.expectsMediaDataInRealTime = false
 
-        // Pixel buffer adaptor
         let sourcePixelBufferAttributes: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: config.pixelFormat,
             kCVPixelBufferWidthKey as String: width,
@@ -197,27 +257,21 @@ public actor VideoExporter {
         writer.startWriting()
         writer.startSession(atSourceTime: .zero)
 
-        // Frame timing
         let effectiveFps = fps ?? config.fps
         let frameDuration = CMTime(value: 1, timescale: CMTimeScale(effectiveFps))
 
-        // Write frames
         for (index, frame) in frames.enumerated() {
-            // Wait for input to be ready
             while !writerInput.isReadyForMoreMediaData {
-                try await Task.sleep(nanoseconds: 10_000_000)  // 10ms
+                try await Task.sleep(nanoseconds: 10_000_000)
             }
 
-            // Create pixel buffer from CGImage
             guard let pixelBuffer = createPixelBuffer(from: frame, width: width, height: height)
             else {
                 throw LTXError.exportFailed("Failed to create pixel buffer for frame \(index)")
             }
 
-            // Calculate presentation time
             let presentationTime = CMTimeMultiply(frameDuration, multiplier: Int32(index))
 
-            // Append pixel buffer
             if !adaptor.append(pixelBuffer, withPresentationTime: presentationTime) {
                 throw LTXError.exportFailed(
                     "Failed to append frame \(index): \(writer.error?.localizedDescription ?? "unknown error")"
@@ -225,9 +279,7 @@ public actor VideoExporter {
             }
         }
 
-        // Finish writing
         writerInput.markAsFinished()
-
         await writer.finishWriting()
 
         if let error = writer.error {
@@ -235,6 +287,203 @@ public actor VideoExporter {
         }
 
         return outputURL
+    }
+
+    /// Write PCM audio data to an M4A file (AAC encoded)
+    private func writeAudioOnly(
+        pcmData: Data,
+        sampleRate: Int,
+        channels: Int,
+        to outputURL: URL
+    ) async throws {
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            try FileManager.default.removeItem(at: outputURL)
+        }
+
+        let writer = try AVAssetWriter(outputURL: outputURL, fileType: .m4a)
+
+        let audioSettings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: sampleRate,
+            AVNumberOfChannelsKey: channels,
+            AVEncoderBitRateKey: 128000,
+        ]
+
+        let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
+        audioInput.expectsMediaDataInRealTime = false
+        writer.add(audioInput)
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+
+        // Create audio format description for PCM input
+        let bytesPerFrame = 2 * channels  // Int16 per channel
+        let totalFrames = pcmData.count / bytesPerFrame
+        let chunkSize = 4096
+
+        var asbd = AudioStreamBasicDescription(
+            mSampleRate: Float64(sampleRate),
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked,
+            mBytesPerPacket: UInt32(bytesPerFrame),
+            mFramesPerPacket: 1,
+            mBytesPerFrame: UInt32(bytesPerFrame),
+            mChannelsPerFrame: UInt32(channels),
+            mBitsPerChannel: 16,
+            mReserved: 0
+        )
+
+        var formatDescription: CMAudioFormatDescription?
+        let fmtStatus = CMAudioFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            asbd: &asbd,
+            layoutSize: 0,
+            layout: nil,
+            magicCookieSize: 0,
+            magicCookie: nil,
+            extensions: nil,
+            formatDescriptionOut: &formatDescription
+        )
+        guard fmtStatus == noErr, let fmt = formatDescription else {
+            throw LTXError.exportFailed("Failed to create audio format description (status: \(fmtStatus))")
+        }
+
+        var frameOffset = 0
+        while frameOffset < totalFrames {
+            while !audioInput.isReadyForMoreMediaData {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+
+            let framesInChunk = min(chunkSize, totalFrames - frameOffset)
+            let byteOffset = frameOffset * bytesPerFrame
+            let byteLength = framesInChunk * bytesPerFrame
+
+            var blockBuffer: CMBlockBuffer?
+            CMBlockBufferCreateWithMemoryBlock(
+                allocator: kCFAllocatorDefault,
+                memoryBlock: nil,
+                blockLength: byteLength,
+                blockAllocator: kCFAllocatorDefault,
+                customBlockSource: nil,
+                offsetToData: 0,
+                dataLength: byteLength,
+                flags: 0,
+                blockBufferOut: &blockBuffer
+            )
+            guard let block = blockBuffer else {
+                throw LTXError.exportFailed("Failed to create audio block buffer")
+            }
+
+            pcmData.withUnsafeBytes { rawBuf in
+                let src = rawBuf.baseAddress!.advanced(by: byteOffset)
+                CMBlockBufferReplaceDataBytes(
+                    with: src,
+                    blockBuffer: block,
+                    offsetIntoDestination: 0,
+                    dataLength: byteLength
+                )
+            }
+
+            let presentationTime = CMTime(
+                value: CMTimeValue(frameOffset),
+                timescale: CMTimeScale(sampleRate)
+            )
+
+            var sampleBuffer: CMSampleBuffer?
+            CMAudioSampleBufferCreateReadyWithPacketDescriptions(
+                allocator: kCFAllocatorDefault,
+                dataBuffer: block,
+                formatDescription: fmt,
+                sampleCount: framesInChunk,
+                presentationTimeStamp: presentationTime,
+                packetDescriptions: nil,
+                sampleBufferOut: &sampleBuffer
+            )
+            guard let sb = sampleBuffer else {
+                throw LTXError.exportFailed("Failed to create audio sample buffer")
+            }
+
+            if !audioInput.append(sb) {
+                throw LTXError.exportFailed(
+                    "Failed to append audio: \(writer.error?.localizedDescription ?? "unknown")"
+                )
+            }
+
+            frameOffset += framesInChunk
+        }
+
+        audioInput.markAsFinished()
+        await writer.finishWriting()
+
+        if let error = writer.error {
+            throw LTXError.exportFailed("Audio export failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Mux a video file and an audio file into a single MP4 using AVMutableComposition
+    private func muxVideoAndAudio(
+        videoURL: URL,
+        audioURL: URL,
+        to outputURL: URL
+    ) async throws {
+        let videoAsset = AVURLAsset(url: videoURL)
+        let audioAsset = AVURLAsset(url: audioURL)
+
+        let composition = AVMutableComposition()
+
+        // Add video track
+        guard let videoTrack = try await videoAsset.loadTracks(withMediaType: .video).first,
+              let compositionVideoTrack = composition.addMutableTrack(
+                  withMediaType: .video,
+                  preferredTrackID: kCMPersistentTrackID_Invalid
+              )
+        else {
+            throw LTXError.exportFailed("Failed to create composition video track")
+        }
+
+        let videoDuration = try await videoAsset.load(.duration)
+        try compositionVideoTrack.insertTimeRange(
+            CMTimeRange(start: .zero, duration: videoDuration),
+            of: videoTrack,
+            at: .zero
+        )
+
+        // Add audio track
+        guard let audioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first,
+              let compositionAudioTrack = composition.addMutableTrack(
+                  withMediaType: .audio,
+                  preferredTrackID: kCMPersistentTrackID_Invalid
+              )
+        else {
+            throw LTXError.exportFailed("Failed to create composition audio track")
+        }
+
+        let audioDuration = try await audioAsset.load(.duration)
+        // Use shorter of video/audio duration
+        let insertDuration = CMTimeMinimum(videoDuration, audioDuration)
+        try compositionAudioTrack.insertTimeRange(
+            CMTimeRange(start: .zero, duration: insertDuration),
+            of: audioTrack,
+            at: .zero
+        )
+
+        // Export the composition
+        guard let exportSession = AVAssetExportSession(
+            asset: composition,
+            presetName: AVAssetExportPresetPassthrough
+        ) else {
+            throw LTXError.exportFailed("Failed to create export session")
+        }
+
+        exportSession.outputURL = outputURL
+        exportSession.outputFileType = .mp4
+
+        await exportSession.export()
+
+        if exportSession.status != .completed {
+            throw LTXError.exportFailed(
+                "Muxing failed: \(exportSession.error?.localizedDescription ?? "unknown")"
+            )
+        }
     }
 
     /// Create pixel buffer from CGImage
@@ -375,17 +624,22 @@ extension VideoExporter {
 // MARK: - Convenience Export Functions
 
 extension VideoExporter {
-    /// Export an MLXArray video tensor directly to MP4
+    /// Export an MLXArray video tensor directly to MP4, optionally with muxed audio
     ///
     /// Convenience method that converts a raw tensor to CGImages and exports
     /// to an MP4 file in a single call. Handles both 4D ``(F, H, W, C)`` and
     /// 5D ``(B, F, H, W, C)`` tensor layouts automatically.
+    ///
+    /// When `audioWaveform` is provided, the audio is muxed into the MP4 as a
+    /// second track — no separate WAV file needed.
     ///
     /// - Parameters:
     ///   - frames: Video tensor of shape `(F, H, W, C)` or `(B, F, H, W, C)`, uint8 [0, 255]
     ///   - width: Video width in pixels
     ///   - height: Video height in pixels
     ///   - fps: Frames per second (default: 24.0)
+    ///   - audioWaveform: Optional audio waveform `(B, 2, samples)` or `(2, samples)`, float32 [-1, 1]
+    ///   - audioSampleRate: Audio sample rate in Hz (default: 24000)
     ///   - outputURL: Output file URL (must end in `.mp4`)
     /// - Returns: URL to the exported video file
     /// - Throws: ``LTXError/exportFailed(_:)`` if conversion or encoding fails
@@ -394,12 +648,30 @@ extension VideoExporter {
         width: Int,
         height: Int,
         fps: Double = 24.0,
+        audioWaveform: MLXArray? = nil,
+        audioSampleRate: Int = 24000,
         to outputURL: URL
     ) async throws -> URL {
+        LTXDebug.log("exportVideo: converting tensor \(tensor.shape) to images...")
         let images = tensorToImages(tensor)
+        LTXDebug.log("exportVideo: converted \(images.count) images")
 
         guard !images.isEmpty else {
             throw LTXError.exportFailed("Failed to convert tensor to images")
+        }
+
+        // Convert audio waveform to interleaved Int16 PCM data
+        let audioSamples: Data?
+        let audioChannels: Int
+        if let waveform = audioWaveform {
+            LTXDebug.log("exportVideo: converting audio waveform \(waveform.shape) to PCM...")
+            let (pcm, channels) = waveformToInterleavedPCM(waveform)
+            LTXDebug.log("exportVideo: PCM data \(pcm.count) bytes, \(channels) channels")
+            audioSamples = pcm
+            audioChannels = channels
+        } else {
+            audioSamples = nil
+            audioChannels = 2
         }
 
         let exporter = VideoExporter()
@@ -408,8 +680,40 @@ extension VideoExporter {
             width: width,
             height: height,
             fps: fps,
+            audioSamples: audioSamples,
+            audioSampleRate: audioSampleRate,
+            audioChannels: audioChannels,
             to: outputURL
         )
+    }
+
+    /// Convert an MLXArray waveform to interleaved Int16 PCM data
+    ///
+    /// - Parameter waveform: `(B, C, samples)` or `(C, samples)` float32 in [-1, 1]
+    /// - Returns: Interleaved PCM Data and channel count
+    private static func waveformToInterleavedPCM(_ waveform: MLXArray) -> (Data, Int) {
+        var audio = waveform
+        if audio.ndim == 3 {
+            audio = audio.squeezed(axis: 0)  // (C, samples)
+        }
+
+        let numChannels = audio.dim(0)
+        let numSamples = audio.dim(1)
+
+        // Clamp, scale to Int16 range, transpose to interleaved (samples, channels)
+        let clamped = MLX.clip(audio, min: -1.0, max: 1.0)
+        let scaled = (clamped * 32767.0).asType(.int16)  // (C, samples)
+        let interleaved = scaled.transposed(0, 1)  // (samples, C) — interleaved layout
+
+        // Force contiguous layout via reshape (transpose creates a view, not contiguous memory)
+        let contiguous = interleaved.reshaped(numSamples * numChannels)
+        MLX.eval(contiguous)
+
+        // Bulk copy — MLX int16 is already little-endian on ARM
+        let mlxData = contiguous.asData(access: .copy)
+        let pcmData = Data(mlxData.data)
+
+        return (pcmData, numChannels)
     }
 
     /// Save a single frame as a PNG file

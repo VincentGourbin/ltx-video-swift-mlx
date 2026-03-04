@@ -317,28 +317,31 @@ struct Generate: AsyncParsableCommand {
 
             let genTime = Date().timeIntervalSince(startGen)
             print("Generation completed in \(String(format: "%.1f", genTime))s")
+            fflush(stdout)
 
-            // Export video
-            print("\nExporting video to \(output)...")
+            // Export video with muxed audio
+            print("\nExporting video+audio to \(output)...")
+            fflush(stdout)
             let outputURL = URL(fileURLWithPath: output)
             let videoURL = try await VideoExporter.exportVideo(
                 frames: audioResult.frames,
                 width: width,
                 height: height,
                 fps: 24.0,
+                audioWaveform: audioResult.audioWaveform,
+                audioSampleRate: audioResult.audioSampleRate,
                 to: outputURL
             )
-            print("Video saved to: \(videoURL.path)")
+            print("Video+audio saved to: \(videoURL.path)")
 
-            // Export audio WAV
-            let audioPath = output.replacingOccurrences(of: ".mp4", with: ".wav")
-            print("Exporting audio to \(audioPath)...")
+            // Also export standalone WAV for debugging comparison
+            let wavPath = output.replacingOccurrences(of: ".mp4", with: ".wav")
             try AudioExporter.exportToWAV(
                 waveform: audioResult.audioWaveform,
                 sampleRate: audioResult.audioSampleRate,
-                path: audioPath
+                path: wavPath
             )
-            print("Audio saved to: \(audioPath)")
+            print("Audio WAV saved to: \(wavPath)")
 
             // Print summary
             print("\n--- Summary ---")
