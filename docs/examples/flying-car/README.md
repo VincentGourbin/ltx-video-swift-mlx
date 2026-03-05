@@ -1,198 +1,128 @@
-# Flying Car — 8 Configuration Comparison (Image-to-Video + Audio)
+# Flying Car — Image-to-Video + Audio Benchmarks
 
 **Input Image**: [example_input.png](../example_input.png) (Volkswagen Karmann Ghia)
-**Prompt**: *"make this car fly"* (enhanced via multimodal VLM — Gemma sees the input image)
 
-All videos generated with: `--image ../example_input.png --audio --enhance-prompt --seed 42 --profile -f 121` (5 seconds at 24fps, stereo audio at 24kHz)
+All videos generated from the same input image with `--audio --seed 42 --audio-gain 0.5` at **1024x640** (3:2 ratio).
 
-## Performance Summary
+## Creative Tests (10 seconds, 241 frames)
 
-| # | Configuration | Model | Steps | CFG | Resolution | Time |
-|---|---------------|-------|-------|-----|------------|------|
-| 1 | Distilled | distilled | 8 | 1.0 | 768x512 | ~350s |
-| 2 | Dev | dev | 40 | 3.0 | 768x512 | 1600s |
-| 3 | Dev + LoRA | dev + distilled LoRA | 8 | 1.0 | 768x512 | 309s |
-| 4 | Distilled + Upscaler | distilled | 8+3 | 1.0 | 384x256 -> 768x512 | 216s |
-| 5 | Dev + Upscaler | dev (distilled sched.) | 8+3 | 1.0 | 384x256 -> 768x512 | 225s |
-| 6 | **Dev + LoRA + Upscaler** | dev + distilled LoRA | 8+3 | 1.0 | 384x256 -> 768x512 | 216s |
-| 7 | Dev 1024x576 | dev | 40 | 3.0 | 1024x576 | 2479s |
-| 8 | Distilled qint8 | distilled (8-bit) | 8 | 1.0 | 768x512 | 341s |
+Two-stage distilled pipeline (512x320 → upscale 2x → 1024x640), 8+3 steps.
 
-> All cases include dual video/audio generation. Audio adds ~5-10% overhead to generation time.
+| # | Prompt | Enhancement | Time | File |
+|---|--------|-------------|------|------|
+| 1 | "make this car fly" | VLM multimodal (sees image) | 1289s | [01-distilled-2stage-enhanced.mp4](01-distilled-2stage-enhanced.mp4) |
+| 2 | Back to the Future style (manual) | None | 1243s | [02-distilled-2stage-bttf.mp4](02-distilled-2stage-bttf.mp4) |
 
-> **Note on #5**: Dev + Upscaler without distilled LoRA produces visible noise artifacts. This is a model limitation, not a code bug.
+<details>
+<summary>Bench #1 command</summary>
 
-> **Recommended**: #6 (Dev + LoRA + Upscaler) offers the best quality/speed ratio. For maximum quality at high resolution, use #7 (Dev 1024).
+```bash
+ltx-video generate --image docs/examples/example_input.png --audio --enhance-prompt --seed 42 --audio-gain 0.5 \
+    -m distilled --two-stage -w 1024 -h 640 -f 241 \
+    -o docs/examples/flying-car/01-distilled-2stage-enhanced.mp4 \
+    "make this car fly"
+```
+</details>
 
-*Hardware: Apple Silicon M3 Max 96GB. 121 frames (5 seconds at 24fps). Audio: stereo 24kHz, muxed into MP4.*
+<details>
+<summary>Bench #2 command & prompt</summary>
 
-## Video Comparison
+```bash
+ltx-video generate --image docs/examples/example_input.png --audio --seed 42 --audio-gain 0.5 \
+    -m distilled --two-stage -w 1024 -h 640 -f 241 \
+    -o docs/examples/flying-car/02-distilled-2stage-bttf.mp4 \
+    "The vintage car begins to hover and levitate, its wheels slowly folding underneath the chassis, then it accelerates forward with a futuristic humming sound growing louder, glowing light trails behind it as it launches into the sky like a DeLorean from Back to the Future"
+```
+</details>
 
-### Single-stage
+### Video Comparison
 
 <table>
 <tr>
-<td align="center"><b>1. Distilled</b></td>
-<td align="center"><b>2. Dev</b></td>
-<td align="center"><b>3. Dev + LoRA</b></td>
+<td align="center"><b>1. Enhanced prompt</b> (1289s)</td>
+<td align="center"><b>2. Manual BTTF prompt</b> (1243s)</td>
 </tr>
 <tr>
-<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/flying-car/distilled.mp4" controls width="256"></video></td>
-<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/flying-car/dev.mp4" controls width="256"></video></td>
-<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/flying-car/dev-lora.mp4" controls width="256"></video></td>
+<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/flying-car/01-distilled-2stage-enhanced.mp4" controls width="384"></video></td>
+<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/flying-car/02-distilled-2stage-bttf.mp4" controls width="384"></video></td>
 </tr>
 </table>
 
-### Two-stage (with 2x spatial upscaler)
+---
+
+## Performance Benchmarks (5 seconds, 121 frames)
+
+**Prompt**: *"The vintage car starts its engine with a soft purr, then slowly drives away down the sunlit road, tires gently rolling on the pavement, engine humming quietly as it disappears into the distance"*
+
+All with `--audio --seed 42 --audio-gain 0.5 --profile`, 1024x640, I2V.
+
+| # | Configuration | Model | Steps | CFG | Quant | Time | RAM | Notes |
+|---|---------------|-------|-------|-----|-------|------|-----|-------|
+| 3 | Dev | dev | 40 (×2 passes) | 3.0 | bf16 | **7452s** (~2h) | N/A | Dual CFG passes for audio |
+| 4 | Dev qint8 | dev | 40 (×2 passes) | 3.0 | qint8 | **HANG** | — | Bug: audio model loading hangs |
+| 5 | Two-stage | distilled | 8+3 | 1.0 | bf16 | **558s** (~9min) | N/A | 512x320 → 1024x640 |
+| 6 | Two-stage qint8 | distilled | 8+3 | 1.0 | qint8 | **559s** (~9min) | N/A | 512x320 → 1024x640 |
+
+> **RAM profiling**: Not yet available — `generateVideoWithAudio()` does not wire the `--profile` memory instrumentation. To be added. For reference, the video-only [beaver-dam benchmark](../beaver-dam/) shows ~27 GB mean denoising RAM for bf16 and ~15 GB for qint8 at 768x512.
+
+> **Note on #4**: Dev model with `--transformer-quant qint8 --audio` hangs during audio model loading. This is a known bug — the quantized video transformer conflicts with the dual audio/video transformer loading. Two-stage qint8 (#6) works because it uses the distilled model. To be investigated.
+
+> **Recommended**: Two-stage (#5/#6) offers the best speed at 1024x640. Dev single-stage (#3) produces the highest quality but takes 13x longer due to 40 steps × 2 CFG passes.
+
+*Hardware: Apple Silicon M3 Max 96GB. Audio: mono 24kHz, muxed into MP4.*
+
+### Video Comparison
 
 <table>
 <tr>
-<td align="center"><b>4. Distilled + Upscaler</b></td>
-<td align="center"><b>5. Dev + Upscaler</b> *</td>
-<td align="center"><b>6. Dev + LoRA + Upscaler</b></td>
+<td align="center"><b>3. Dev bf16</b> (7452s)</td>
+<td align="center"><b>5. Two-stage bf16</b> (558s)</td>
+<td align="center"><b>6. Two-stage qint8</b> (559s)</td>
 </tr>
 <tr>
-<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/flying-car/distilled-upscaler.mp4" controls width="256"></video></td>
-<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/flying-car/dev-upscaler.mp4" controls width="256"></video></td>
-<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/flying-car/dev-lora-upscaler.mp4" controls width="256"></video></td>
+<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/flying-car/03-dev-bf16.mp4" controls width="256"></video></td>
+<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/flying-car/05-2stage-bf16.mp4" controls width="256"></video></td>
+<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/flying-car/06-2stage-qint8.mp4" controls width="256"></video></td>
 </tr>
 </table>
 
-\* *Video 5 exhibits noise artifacts — see [beaver-dam explanation](../beaver-dam/README.md#why-two-stage-requires-distilled-lora).*
+---
 
-### High resolution / Quantization
+<details>
+<summary>Bench #3 command (Dev bf16)</summary>
 
-<table>
-<tr>
-<td align="center"><b>7. Dev 1024x576</b></td>
-<td align="center"><b>8. Distilled qint8</b></td>
-</tr>
-<tr>
-<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/flying-car/dev-1024x576.mp4" controls width="256"></video></td>
-<td><video src="https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/flying-car/distilled-qint8.mp4" controls width="256"></video></td>
-</tr>
-</table>
+```bash
+ltx-video generate --image docs/examples/example_input.png --audio --seed 42 --audio-gain 0.5 --profile \
+    -m dev -w 1024 -h 640 -f 121 \
+    -o docs/examples/flying-car/03-dev-bf16.mp4 \
+    "The vintage car starts its engine with a soft purr, then slowly drives away down the sunlit road, tires gently rolling on the pavement, engine humming quietly as it disappears into the distance"
+```
+</details>
 
-### Still Frame Comparison (Frame 12)
+<details>
+<summary>Bench #5 command (Two-stage bf16)</summary>
 
-| Distilled | Dev | Dev + LoRA |
-|-----------|-----|------------|
-| ![](frames/distilled_frame_12.png) | ![](frames/dev_frame_12.png) | ![](frames/dev-lora_frame_12.png) |
+```bash
+ltx-video generate --image docs/examples/example_input.png --audio --seed 42 --audio-gain 0.5 --profile \
+    -m distilled --two-stage -w 1024 -h 640 -f 121 \
+    -o docs/examples/flying-car/05-2stage-bf16.mp4 \
+    "The vintage car starts its engine with a soft purr, then slowly drives away down the sunlit road, tires gently rolling on the pavement, engine humming quietly as it disappears into the distance"
+```
+</details>
 
-| Distilled + Upscaler | Dev + Upscaler * | Dev + LoRA + Upscaler |
-|----------------------|------------------|------------------------|
-| ![](frames/distilled-upscaler_frame_12.png) | ![](frames/dev-upscaler_frame_12.png) | ![](frames/dev-lora-upscaler_frame_12.png) |
+<details>
+<summary>Bench #6 command (Two-stage qint8)</summary>
 
-| Dev 1024x576 | Distilled qint8 |
-|--------------|-----------------|
-| ![](frames/dev-1024x576_frame_12.png) | ![](frames/distilled-qint8_frame_12.png) |
+```bash
+ltx-video generate --image docs/examples/example_input.png --audio --seed 42 --audio-gain 0.5 --profile \
+    -m distilled --two-stage --transformer-quant qint8 -w 1024 -h 640 -f 121 \
+    -o docs/examples/flying-car/06-2stage-qint8.mp4 \
+    "The vintage car starts its engine with a soft purr, then slowly drives away down the sunlit road, tires gently rolling on the pavement, engine humming quietly as it disappears into the distance"
+```
+</details>
 
 ---
 
-## Detailed Results
+## Known Issues
 
-### 1. Distilled
-
-8 steps, no CFG. Fastest single-stage option.
-
-```bash
-ltx-video generate --image docs/examples/example_input.png --audio --enhance-prompt --seed 42 --profile \
-    -m distilled -w 768 -h 512 -f 121 -o docs/examples/flying-car/distilled.mp4 "make this car fly"
-```
-
----
-
-### 2. Dev
-
-40 steps with CFG 3.0. Best single-stage quality at 768x512.
-
-```bash
-ltx-video generate --image docs/examples/example_input.png --audio --enhance-prompt --seed 42 --profile \
-    -m dev -w 768 -h 512 -f 121 -o docs/examples/flying-car/dev.mp4 "make this car fly"
-```
-
----
-
-### 3. Dev + Distilled LoRA
-
-Dev model weights with distilled LoRA fused in. 8 steps, no CFG.
-
-```bash
-ltx-video generate --image docs/examples/example_input.png --audio --enhance-prompt --seed 42 --profile \
-    --distilled-lora -w 768 -h 512 -f 121 -o docs/examples/flying-car/dev-lora.mp4 "make this car fly"
-```
-
----
-
-### 4. Distilled + Upscaler
-
-Two-stage: distilled at 384x256, then upscale 2x and refine at 768x512.
-
-```bash
-ltx-video generate --image docs/examples/example_input.png --audio --enhance-prompt --seed 42 --profile \
-    -m distilled --two-stage -w 768 -h 512 -f 121 -o docs/examples/flying-car/distilled-upscaler.mp4 "make this car fly"
-```
-
----
-
-### 5. Dev + Upscaler (not recommended)
-
-> **Warning**: This configuration produces visible noise artifacts. Use #6 (with LoRA) or #7 (single-stage 1024) instead.
-
-```bash
-ltx-video generate --image docs/examples/example_input.png --audio --enhance-prompt --seed 42 --profile \
-    -m dev --two-stage --steps 40 --guidance 4.0 -w 768 -h 512 -f 121 -o docs/examples/flying-car/dev-upscaler.mp4 "make this car fly"
-```
-
----
-
-### 6. Dev + LoRA + Upscaler (Two-Stage)
-
-The standard HuggingFace Space pipeline. **Best quality/speed ratio.**
-
-```bash
-ltx-video generate --image docs/examples/example_input.png --audio --enhance-prompt --seed 42 --profile \
-    --distilled-lora --two-stage -w 768 -h 512 -f 121 -o docs/examples/flying-car/dev-lora-upscaler.mp4 "make this car fly"
-```
-
----
-
-### 7. Dev 1024x576 (Single-Stage)
-
-Dev model at full 1024x576 resolution. Highest quality, significantly slower.
-
-```bash
-ltx-video generate --image docs/examples/example_input.png --audio --enhance-prompt --seed 42 --profile \
-    -m dev -w 1024 -h 576 -f 121 -o docs/examples/flying-car/dev-1024x576.mp4 "make this car fly"
-```
-
----
-
-### 8. Distilled qint8 (8-bit Quantized)
-
-Distilled model with on-the-fly 8-bit quantization. ~44% less RAM during inference.
-
-```bash
-ltx-video generate --image docs/examples/example_input.png --audio --enhance-prompt --seed 42 --profile \
-    -m distilled --transformer-quant qint8 -w 768 -h 512 -f 121 -o docs/examples/flying-car/distilled-qint8.mp4 "make this car fly"
-```
-
----
-
-## Reproduction
-
-All commands can be run sequentially using the generation script:
-```bash
-bash docs/examples/flying-car/generate-all.sh
-```
-
-Models are auto-downloaded on first run (~20-25 GB depending on variant).
-
-To extract comparison frames:
-```bash
-for f in distilled dev dev-lora distilled-upscaler dev-upscaler dev-lora-upscaler dev-1024x576 distilled-qint8; do
-    ffmpeg -i docs/examples/flying-car/$f.mp4 \
-        -vf "select=eq(n\,12)" -vframes 1 \
-        docs/examples/flying-car/frames/${f}_frame_12.png
-done
-```
+- **Dev + qint8 + audio**: Hangs during audio model loading. Likely conflict between quantized video transformer and dual audio/video transformer weight loading. Workaround: use bf16 for dev+audio, or use two-stage (distilled) which supports qint8+audio.
