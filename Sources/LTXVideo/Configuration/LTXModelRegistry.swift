@@ -27,8 +27,14 @@ public enum LTXModelRegistry {
 
     // MARK: - Directories
 
+    /// Custom models directory set by the app/user. When nil, falls back to system caches.
+    nonisolated(unsafe) public static var customModelsDirectory: URL?
+
     /// Base directory for cached models
     public static var modelsDirectory: URL {
+        if let custom = customModelsDirectory {
+            return custom
+        }
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         return cacheDir.appendingPathComponent("ltx-video-mlx", isDirectory: true)
     }

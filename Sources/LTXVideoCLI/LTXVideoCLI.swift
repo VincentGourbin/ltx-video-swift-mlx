@@ -59,6 +59,9 @@ struct Generate: AsyncParsableCommand {
     @Option(name: .long, help: "HuggingFace token for gated models")
     var hfToken: String?
 
+    @Option(name: .long, help: "Custom directory for model storage (default: ~/Library/Caches/ltx-video-mlx)")
+    var modelsDir: String?
+
     @Option(name: .long, help: "Path to local Gemma3 model directory")
     var gemmaPath: String?
 
@@ -117,6 +120,11 @@ struct Generate: AsyncParsableCommand {
     var dryRun: Bool = false
 
     mutating func run() async throws {
+        // Configure custom models directory if specified
+        if let dir = modelsDir {
+            LTXModelRegistry.customModelsDirectory = URL(fileURLWithPath: dir)
+        }
+
         // Enable debug mode if requested
         if debug {
             LTXDebug.enableDebugMode()
@@ -453,10 +461,18 @@ struct Download: AsyncParsableCommand {
     @Option(name: .long, help: "HuggingFace token for gated models")
     var hfToken: String?
 
+    @Option(name: .long, help: "Custom directory for model storage (default: ~/Library/Caches/ltx-video-mlx)")
+    var modelsDir: String?
+
     @Flag(name: .long, help: "Force re-download even if files exist")
     var force: Bool = false
 
     mutating func run() async throws {
+        // Configure custom models directory if specified
+        if let dir = modelsDir {
+            LTXModelRegistry.customModelsDirectory = URL(fileURLWithPath: dir)
+        }
+
         print("LTX-2 Model Download")
         print("====================")
 

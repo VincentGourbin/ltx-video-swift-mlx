@@ -3056,6 +3056,71 @@ public actor LTXPipeline {
         return url.path
     }
 
+    // MARK: - Download-Only APIs (for pre-fetching without loading)
+
+    /// Download all core model components without loading them into memory.
+    ///
+    /// Downloads (if not already cached): Gemma VLM, connector, VAE, unified transformer weights.
+    /// Use this to pre-fetch models in the background before the user starts generating.
+    ///
+    /// - Parameter progressCallback: Optional callback for download progress
+    /// - Returns: Paths to all downloaded components
+    public func downloadModels(
+        progressCallback: DownloadProgressCallback? = nil
+    ) async throws -> LTXComponentPaths {
+        return try await downloader.downloadAllComponents(model: model, progress: progressCallback)
+    }
+
+    /// Download audio model components without loading them into memory.
+    ///
+    /// Downloads (if not already cached): audio VAE and vocoder weights.
+    ///
+    /// - Parameter progressCallback: Optional callback for download progress
+    public func downloadAudioModels(
+        progressCallback: DownloadProgressCallback? = nil
+    ) async throws {
+        _ = try await downloader.downloadAudioVAE { p in
+            progressCallback?(DownloadProgress(
+                progress: p.progress * 0.5,
+                currentFile: p.currentFile,
+                message: p.message
+            ))
+        }
+        _ = try await downloader.downloadVocoder { p in
+            progressCallback?(DownloadProgress(
+                progress: 0.5 + p.progress * 0.5,
+                currentFile: p.currentFile,
+                message: p.message
+            ))
+        }
+    }
+
+    /// Check if all core models are downloaded (Gemma, connector, VAE, transformer)
+    public var areModelsDownloaded: Bool {
+        get async {
+            await downloader.isGemmaDownloaded(model: model)
+                // Connector and VAE checks via file existence
+                && FileManager.default.fileExists(
+                    atPath: LTXModelRegistry.modelsDirectory
+                        .appendingPathComponent("ltx-\(model.rawValue)")
+                        .appendingPathComponent(model.unifiedWeightsFilename).path)
+        }
+    }
+
+    /// Check if distilled LoRA weights are downloaded
+    public var isDistilledLoRADownloaded: Bool {
+        get async {
+            await downloader.isDistilledLoRADownloaded()
+        }
+    }
+
+    /// Check if spatial upscaler weights are downloaded
+    public var isUpscalerDownloaded: Bool {
+        get async {
+            await downloader.isUpscalerDownloaded()
+        }
+    }
+
     /// Fuse LoRA weights into the transformer (permanent merge)
     ///
     /// Uses batched processing per transformer block to minimize peak memory.

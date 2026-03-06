@@ -62,13 +62,8 @@ public actor ModelDownloader {
     public init(hfToken: String? = nil, cacheDir: URL? = nil) {
         self.hfToken = hfToken
 
-        // Use custom cache directory or default
-        if let customDir = cacheDir {
-            self.cacheDirectory = customDir
-        } else {
-            let cacheBase = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            self.cacheDirectory = cacheBase.appendingPathComponent("models")
-        }
+        // Use explicit cache directory, or fall back to LTXModelRegistry.modelsDirectory
+        self.cacheDirectory = cacheDir ?? LTXModelRegistry.modelsDirectory
 
         // Create session with configuration
         let config = URLSessionConfiguration.default
