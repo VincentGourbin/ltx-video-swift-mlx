@@ -12,26 +12,37 @@ import MLX
 @Suite("GenerationProgress")
 struct GenerationProgressTests {
     @Test func testProgressFraction() {
-        let p = GenerationProgress(currentStep: 0, totalSteps: 8, sigma: 1.0)
+        let p = GenerationProgress(currentStep: 0, totalSteps: 8, sigma: 1.0, phase: .denoising)
         #expect(p.progress == 1.0 / 8.0)
 
-        let p2 = GenerationProgress(currentStep: 7, totalSteps: 8, sigma: 0.0)
+        let p2 = GenerationProgress(currentStep: 7, totalSteps: 8, sigma: 0.0, phase: .denoising)
         #expect(p2.progress == 1.0)
     }
 
     @Test func testStatusString() {
-        let p = GenerationProgress(currentStep: 2, totalSteps: 8, sigma: 0.725)
-        #expect(p.status == "Step 3/8 (σ=0.7250)")
+        let p = GenerationProgress(currentStep: 2, totalSteps: 8, sigma: 0.725, phase: .denoising)
+        #expect(p.status == "Step 3/8 [denoising] (σ=0.7250)")
     }
 
     @Test func testStatusFirstStep() {
-        let p = GenerationProgress(currentStep: 0, totalSteps: 8, sigma: 1.0)
-        #expect(p.status == "Step 1/8 (σ=1.0000)")
+        let p = GenerationProgress(currentStep: 0, totalSteps: 8, sigma: 1.0, phase: .denoising)
+        #expect(p.status == "Step 1/8 [denoising] (σ=1.0000)")
     }
 
     @Test func testStatusLastStep() {
-        let p = GenerationProgress(currentStep: 7, totalSteps: 8, sigma: 0.42)
-        #expect(p.status == "Step 8/8 (σ=0.4200)")
+        let p = GenerationProgress(currentStep: 7, totalSteps: 8, sigma: 0.42, phase: .refinement)
+        #expect(p.status == "Step 8/8 [refinement] (σ=0.4200)")
+    }
+
+    @Test func testPhaseStatus() {
+        let p = GenerationProgress(currentStep: 8, totalSteps: 8, sigma: 0, phase: .upscaling)
+        #expect(p.status == "[upscaling]")
+
+        let p2 = GenerationProgress(currentStep: 8, totalSteps: 8, sigma: 0, phase: .decoding)
+        #expect(p2.status == "[decoding]")
+
+        let p3 = GenerationProgress(currentStep: 8, totalSteps: 8, sigma: 0, phase: .exporting)
+        #expect(p3.status == "[exporting]")
     }
 }
 
