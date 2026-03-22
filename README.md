@@ -23,18 +23,30 @@ Swift implementation of [LTX-2.3](https://github.com/Lightricks/LTX-2) video gen
 
 ## Quick Start
 
-### Build
+### Option 1: Download the pre-built CLI (fastest)
+
+Grab the latest release binary from the [Releases page](https://github.com/VincentGourbin/ltx-video-swift-mlx/releases) — no build step required.
+
+### Option 2: Build from source
+
+> **Important**: Use `xcodebuild` (not `swift build`) to run the CLI. MLX requires Metal shaders (`default.metallib`) that are only bundled correctly by `xcodebuild`. `swift build` works for syntax checking but the resulting binary will fail at runtime with a "metallib not found" error. See [#3](https://github.com/VincentGourbin/ltx-video-swift-mlx/issues/3).
 
 ```bash
 git clone https://github.com/VincentGourbin/ltx-video-swift-mlx.git
 cd ltx-video-swift-mlx
-swift build
-```
 
-Or build Release with Xcode:
-```bash
+# Build Release
 xcodebuild -scheme ltx-video -configuration Release -derivedDataPath .xcodebuild \
   -destination 'platform=macOS' build
+
+# Run from the build directory (required — the metallib bundle must be alongside the binary)
+.xcodebuild/Build/Products/Release/ltx-video generate "A cat" -w 768 -h 512 -f 121
+```
+
+To run from another location, copy both the binary and its resource bundle:
+```bash
+cp .xcodebuild/Build/Products/Release/ltx-video /usr/local/bin/
+cp -R .xcodebuild/Build/Products/Release/mlx-swift_Cmlx.bundle /usr/local/bin/
 ```
 
 ### Generate a Video
@@ -98,7 +110,7 @@ ltx-video generate "A car engine starting" \
 
 > **Status**: Theoretically functional, currently under validation. The full training pipeline runs end-to-end (dataset loading, latent caching, gradient computation, checkpoint saving, LoRA export). Validation is in progress with the [Cakeify dataset](https://huggingface.co/datasets/Lightricks/Cakeify-Dataset).
 
-Train a LoRA on the dev model using QLoRA (int4 quantization) to fit on Apple Silicon:
+Train a LoRA on the dev model using QLoRA (quantized base weights) to fit on Apple Silicon:
 
 ```bash
 # Prepare dataset: directory of video.mp4 + video.txt pairs
@@ -106,10 +118,9 @@ Train a LoRA on the dev model using QLoRA (int4 quantization) to fit on Apple Si
 
 # Train with trigger word (e.g., Cakeify style)
 ltx-video train dataset/ -o /tmp/my-lora \
-    --model dev --rank 64 --steps 2000 --save-every 500 \
-    -w 384 -h 384 -f 9 --transformer-quant int4 \
-    --trigger-word "MYSTYLE" \
-    --ltx-weights /path/to/ltx-2.3-22b-dev.safetensors
+    --model dev --rank 16 --steps 2000 --save-every 250 \
+    -w 512 -h 512 -f 121 --transformer-quant qint8 \
+    --lora-blocks 16 --trigger-word "MYSTYLE"
 
 # Use the trained LoRA for generation
 ltx-video generate "MYSTYLE a red car on a road" \
@@ -118,6 +129,10 @@ ltx-video generate "MYSTYLE a red car on a road" \
 ```
 
 A `learning_curve.svg` is generated live in the output directory for monitoring.
+
+**Selective LoRA blocks**: `--lora-blocks 16` trains only the last 16 of 48 transformer blocks, cutting backward graph memory via `stopGradient()`. This enables training at higher resolutions and frame counts (e.g. 512×512×121f on 96GB). The last blocks control style and texture — sufficient for most style-transfer LoRAs.
+
+**Aspect ratio**: training videos are automatically resized to fit within the `--width`/`--height` budget while preserving their native aspect ratio (dimensions rounded to 32). No stretching or distortion.
 
 **Memory presets** (all use int4 quantization for the 22B model):
 
@@ -292,6 +307,7 @@ flowchart TD
 | `-h, --height` | `256` | Training video height (divisible by 32) |
 | `-f, --frames` | `9` | Frame count (must be 8n+1) |
 | `--transformer-quant` | `bf16` | Quantization: `bf16`, `qint8`, `int4` |
+| `--lora-blocks` | `0` | Train only last N blocks (0 = all). Reduces memory for long videos |
 | `--trigger-word` | none | Trigger word to prepend to captions |
 | `--grad-accum` | `1` | Gradient accumulation steps |
 | `--max-grad-norm` | `1.0` | Gradient clipping norm |
