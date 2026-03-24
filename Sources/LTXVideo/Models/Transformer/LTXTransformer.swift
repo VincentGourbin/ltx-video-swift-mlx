@@ -539,6 +539,20 @@ class LTXTransformer: Module {
 // MARK: - Configuration Methods
 
 extension LTXTransformer {
+    /// Set/clear STG self-attention skip on specified blocks
+    func setSTGBlocks(_ blocks: [Int]) {
+        for (i, block) in transformerBlocks.enumerated() {
+            block.skipSelfAttention = blocks.contains(i)
+        }
+    }
+
+    /// Clear all STG perturbation flags
+    func clearSTG() {
+        for block in transformerBlocks {
+            block.skipSelfAttention = false
+        }
+    }
+
     /// Set cross-attention scaling for specified blocks
     ///
     /// - Parameters:

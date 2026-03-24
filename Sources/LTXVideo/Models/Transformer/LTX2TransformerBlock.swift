@@ -73,6 +73,9 @@ class LTX2TransformerBlock: Module {
     let audioDim: Int
     let numSSTValues: Int  // 6 for LTX-2, 9 for LTX-2.3
 
+    /// When true, video self-attention is skipped (STG perturbation)
+    var skipVideoSelfAttention: Bool = false
+
     // --- Video modules ---
     @ModuleInfo(key: "norm1") var norm1: RMSNorm
     @ModuleInfo(key: "attn1") var attn1: LTXAttention
@@ -227,10 +230,14 @@ class LTX2TransformerBlock: Module {
             audioSST[0..., 0..., ffIdx + 2, 0...]
         )
 
-        // Phase 1: Video self-attention
-        let normV1 = norm1(videoX) * (1 + vScaleMSA) + vShiftMSA
-        let vSelfOut = attn1(normV1, pe: videoArgs.positionalEmbeddings)
-        videoX = videoX + vSelfOut * vGateMSA
+        // Phase 1: Video self-attention (skip for STG perturbation)
+        if skipVideoSelfAttention {
+            // STG: skip video self-attention, residual unchanged
+        } else {
+            let normV1 = norm1(videoX) * (1 + vScaleMSA) + vShiftMSA
+            let vSelfOut = attn1(normV1, pe: videoArgs.positionalEmbeddings)
+            videoX = videoX + vSelfOut * vGateMSA
+        }
 
         // Phase 2: Audio self-attention
         let normA1 = audioNorm1(audioX) * (1 + aScaleMSA) + aShiftMSA

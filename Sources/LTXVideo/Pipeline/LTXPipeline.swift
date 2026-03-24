@@ -1267,10 +1267,12 @@ public actor LTXPipeline {
             LTXDebug.log("Regenerating \(regenFrames)/\(latentFrames) latent frames")
         }
 
-        // Determine model mode: dev (30 steps + CFG) or distilled (8 steps, no CFG)
+        // Determine model mode: dev (30 steps + CFG + STG) or distilled (8 steps, no guidance)
         let useDevModel = (model == .dev)
         let retakeSteps = useDevModel ? 30 : 8
         let cfgScale: Float = useDevModel ? 3.0 : 1.0
+        let stgScale: Float = useDevModel ? 1.0 : 0.0
+        let stgBlocks: [Int] = useDevModel ? [28] : []  // LTX-2.3 default
         let guidanceRescale: Float = useDevModel ? 0.7 : 0.0
 
         let scheduler = LTXScheduler(isDistilled: !useDevModel)
@@ -1401,7 +1403,8 @@ public actor LTXPipeline {
 
             // Positive pass (conditioned)
             let audioCtx = (audioTextEmbeddings ?? MLXArray.zeros([videoPatchified.dim(0), 1, ltx2Transformer?.config.audioInnerDim ?? 2048])).asType(.bfloat16)
-            var denoisedVideo = runTransformer(context: videoTextEmbeddings, audioContext: audioCtx)
+            let condDenoised = runTransformer(context: videoTextEmbeddings, audioContext: audioCtx)
+            var denoisedVideo = condDenoised
 
             // CFG: negative pass + guidance (dev model only)
             if cfgScale != 1.0, let negCtx = negVideoTextEmbeddings {
@@ -1409,17 +1412,29 @@ public actor LTXPipeline {
                 let negDenoised = runTransformer(context: negCtx, audioContext: negAudioCtx)
 
                 // CFG: pred = cond + (cfg_scale - 1) * (cond - uncond)
-                var guided = denoisedVideo + MLXArray(cfgScale - 1.0) * (denoisedVideo - negDenoised)
+                denoisedVideo = denoisedVideo + MLXArray(cfgScale - 1.0) * (condDenoised - negDenoised)
+            }
 
-                // Guidance rescale: factor = rescale * (cond.std / pred.std) + (1 - rescale)
-                if guidanceRescale > 0 {
-                    let condStd = denoisedVideo.asType(.float32).variance().sqrt()
-                    let predStd = guided.asType(.float32).variance().sqrt()
-                    let factor = MLXArray(guidanceRescale) * (condStd / predStd) + MLXArray(1.0 - guidanceRescale)
-                    guided = guided * factor
-                }
+            // STG: perturbed pass with self-attention skipped on stgBlocks (dev model only)
+            if stgScale != 0.0 && !stgBlocks.isEmpty {
+                if let ltx2 = ltx2Transformer { ltx2.setSTGBlocks(stgBlocks) }
+                if let t = transformer as? LTXTransformer { t.setSTGBlocks(stgBlocks) }
 
-                denoisedVideo = guided
+                let stgDenoised = runTransformer(context: videoTextEmbeddings, audioContext: audioCtx)
+
+                if let ltx2 = ltx2Transformer { ltx2.clearSTG() }
+                if let t = transformer as? LTXTransformer { t.clearSTG() }
+
+                // STG: pred += stg_scale * (cond - perturbed)
+                denoisedVideo = denoisedVideo + MLXArray(stgScale) * (condDenoised - stgDenoised)
+            }
+
+            // Guidance rescale (applied after all guidance terms, matching Lightricks)
+            if guidanceRescale > 0 {
+                let condStd = condDenoised.asType(.float32).variance().sqrt()
+                let predStd = denoisedVideo.asType(.float32).variance().sqrt()
+                let factor = MLXArray(guidanceRescale) * (condStd / predStd) + MLXArray(1.0 - guidanceRescale)
+                denoisedVideo = denoisedVideo * factor
             }
 
             // post_process_latent: blend denoised x0 with clean latent BEFORE Euler step

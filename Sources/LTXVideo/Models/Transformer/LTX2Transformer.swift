@@ -465,6 +465,20 @@ class LTX2Transformer: Module {
         return (videoOutput, audioOutput)
     }
 
+    /// Set/clear STG video self-attention skip on specified blocks
+    func setSTGBlocks(_ blocks: [Int]) {
+        for (i, block) in transformerBlocks.enumerated() {
+            block.skipVideoSelfAttention = blocks.contains(i)
+        }
+    }
+
+    /// Clear all STG perturbation flags
+    func clearSTG() {
+        for block in transformerBlocks {
+            block.skipVideoSelfAttention = false
+        }
+    }
+
     // MARK: - Helpers
 
     private func prepareAttentionMask(_ mask: MLXArray?) -> MLXArray? {

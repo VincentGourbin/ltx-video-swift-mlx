@@ -35,6 +35,10 @@ struct TransformerArgs {
     /// Shape: (B, 1, 2, D) — shift and scale for prompt modulation
     var promptTimesteps: MLXArray?
 
+    /// Block indices where video self-attention should be skipped (STG perturbation).
+    /// When a block's index is in this set, self-attention output is zeroed.
+    var skipSelfAttentionBlocks: Set<Int>?
+
     init(
         x: MLXArray,
         context: MLXArray,
@@ -129,6 +133,9 @@ class BasicTransformerBlock: Module {
     /// Cross-attention output scaling factor (1.0 = no change, >1.0 = stronger prompt adherence)
     var crossAttentionScale: Float = 1.0
 
+    /// When true, self-attention is skipped (STG perturbation for guidance)
+    var skipSelfAttention: Bool = false
+
     init(
         dim: Int,
         numHeads: Int,
@@ -212,10 +219,14 @@ class BasicTransformerBlock: Module {
             end: 3
         )
 
-        // Self-attention with AdaLN
+        // Self-attention with AdaLN (skip for STG perturbation)
         let normX = adaln(x, scale: scaleMSA, shift: shiftMSA, eps: normEps)
-        let attnOut = attn1(normX, pe: args.positionalEmbeddings)
-        x = residualGate(x, residual: attnOut, gate: gateMSA)
+        if skipSelfAttention {
+            // STG: skip self-attention, just apply gate to zero → residual unchanged
+        } else {
+            let attnOut = attn1(normX, pe: args.positionalEmbeddings)
+            x = residualGate(x, residual: attnOut, gate: gateMSA)
+        }
 
         // Cross-attention
         if numSSTValues == 9 {
