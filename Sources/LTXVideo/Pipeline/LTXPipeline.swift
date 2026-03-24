@@ -1267,17 +1267,54 @@ public actor LTXPipeline {
             LTXDebug.log("Regenerating \(regenFrames)/\(latentFrames) latent frames")
         }
 
-        // Full distilled sigma schedule (matching Lightricks reference — no truncation)
-        let scheduler = LTXScheduler(isDistilled: true)
+        // Determine model mode: dev (30 steps + CFG) or distilled (8 steps, no CFG)
+        let useDevModel = (model == .dev)
+        let retakeSteps = useDevModel ? 30 : 8
+        let cfgScale: Float = useDevModel ? 3.0 : 1.0
+        let guidanceRescale: Float = useDevModel ? 0.7 : 0.0
+
+        let scheduler = LTXScheduler(isDistilled: !useDevModel)
         scheduler.setTimesteps(
-            numSteps: 8,
-            distilled: true,
+            numSteps: retakeSteps,
+            distilled: !useDevModel,
             latentTokenCount: latentShape.tokenCount
         )
         let sigmas = scheduler.sigmas
         let numSteps = sigmas.count - 1
 
-        LTXDebug.log("Retake: \(numSteps) steps, sigmas: \(sigmas)")
+        // Encode negative prompt for CFG (dev model only)
+        var negVideoTextEmbeddings: MLXArray? = nil
+        var negAudioTextEmbeddings: MLXArray? = nil
+        if useDevModel {
+            // Re-load Gemma for negative prompt encoding (was unloaded above)
+            // Use empty string as negative prompt (matching Lightricks default for MLX)
+            try await loadModels(progressCallback: nil)
+            guard let gemma2 = gemmaModel else {
+                throw LTXError.modelNotLoaded("Failed to reload Gemma for negative prompt")
+            }
+            let negPrompt = ""
+            let (negInputIds, negAttentionMask) = tokenizePrompt(negPrompt, maxLength: textMaxLength)
+            let (_, negAllHidden) = gemma2(negInputIds, attentionMask: negAttentionMask, outputHiddenStates: true)
+            guard let negStates = negAllHidden, negStates.count == gemma2.config.hiddenLayers + 1 else {
+                throw LTXError.generationFailed("Failed to extract Gemma hidden states for negative prompt")
+            }
+            let negEncoderOutput = textEncoder.encodeFromHiddenStates(
+                hiddenStates: negStates,
+                attentionMask: negAttentionMask,
+                paddingSide: "left"
+            )
+            negVideoTextEmbeddings = negEncoderOutput.videoEncoding
+            negAudioTextEmbeddings = negEncoderOutput.audioEncoding
+            MLX.eval(negVideoTextEmbeddings!)
+            if let nae = negAudioTextEmbeddings { MLX.eval(nae) }
+
+            // Unload Gemma again
+            self.gemmaModel = nil
+            self.tokenizer = nil
+            Memory.clearCache()
+        }
+
+        LTXDebug.log("Retake: \(numSteps) steps, cfg=\(cfgScale), rescale=\(guidanceRescale), sigmas: \(sigmas)")
 
         // Noise injection: pure noise where denoise_mask=1, clean elsewhere
         // (matching Lightricks GaussianNoiser with noise_scale=1.0)
@@ -1320,54 +1357,69 @@ public actor LTXPipeline {
 
             let videoPatchified = patchify(videoLatent).asType(.bfloat16)
 
-            // Get denoised x0 prediction from the transformer
-            var denoisedVideo: MLXArray
-
-            if let ltx2 = ltx2Transformer {
-                let audioInput = frozenAudioLatentPacked ?? MLXArray.zeros([videoPatchified.dim(0), 1, 128]).asType(DType.bfloat16)
-                let audioFrames = frozenAudioLatentPacked != nil ? retakeAudioNumFrames : 1
-                // Use proper audio encoding (2048-dim) matching Lightricks, NOT video encoding
-                let audioCtx = (audioTextEmbeddings ?? MLXArray.zeros([videoPatchified.dim(0), 1, ltx2.config.audioInnerDim])).asType(.bfloat16)
-                let (videoVelPred, _) = ltx2(
-                    videoLatent: videoPatchified,
-                    audioLatent: audioInput,
-                    videoContext: videoTextEmbeddings.asType(.bfloat16),
-                    audioContext: audioCtx,
-                    videoTimesteps: videoTimestep,
-                    audioTimesteps: MLXArray([Float(0)]),
-                    videoContextMask: nil,       // matching Lightricks: context_mask=None
-                    audioContextMask: nil,
-                    videoLatentShape: (frames: latentShape.frames, height: latentShape.height, width: latentShape.width),
-                    audioNumFrames: audioFrames
-                )
-                let videoVelocity = unpatchify(videoVelPred, shape: latentShape).asType(.float32)
-                // to_denoised with per-token sigma: x0 = sample - sigma * velocity
-                // Build per-frame sigma from denoiseMask (kept=0, regen=sigma)
-                let sigma5d: MLXArray
-                if let mask = denoiseMask5d {
-                    sigma5d = mask * MLXArray(sigma)  // (1,1,F,1,1): kept=0, regen=sigma
-                } else {
-                    sigma5d = MLXArray(sigma)
-                }
-                denoisedVideo = videoLatent - sigma5d * videoVelocity
-            } else if let videoTransformer = transformer {
-                let velocityPred = videoTransformer(
-                    latent: videoPatchified,
-                    context: videoTextEmbeddings.asType(.bfloat16),
-                    timesteps: videoTimestep,
-                    contextMask: nil,            // matching Lightricks: context_mask=None
-                    latentShape: (frames: latentShape.frames, height: latentShape.height, width: latentShape.width)
-                )
-                let videoVelocity = unpatchify(velocityPred, shape: latentShape).asType(.float32)
-                let sigma5d: MLXArray
-                if let mask = denoiseMask5d {
-                    sigma5d = mask * MLXArray(sigma)
-                } else {
-                    sigma5d = MLXArray(sigma)
-                }
-                denoisedVideo = videoLatent - sigma5d * videoVelocity
+            // Per-frame sigma for to_denoised (kept=0, regen=sigma)
+            let sigma5d: MLXArray
+            if let mask = denoiseMask5d {
+                sigma5d = mask * MLXArray(sigma)
             } else {
-                fatalError("No transformer loaded")
+                sigma5d = MLXArray(sigma)
+            }
+
+            // Helper: run transformer and compute denoised x0
+            func runTransformer(context: MLXArray, audioContext: MLXArray) -> MLXArray {
+                if let ltx2 = ltx2Transformer {
+                    let audioInput = frozenAudioLatentPacked ?? MLXArray.zeros([videoPatchified.dim(0), 1, 128]).asType(DType.bfloat16)
+                    let audioFrames = frozenAudioLatentPacked != nil ? retakeAudioNumFrames : 1
+                    let (velPred, _) = ltx2(
+                        videoLatent: videoPatchified,
+                        audioLatent: audioInput,
+                        videoContext: context.asType(.bfloat16),
+                        audioContext: audioContext.asType(.bfloat16),
+                        videoTimesteps: videoTimestep,
+                        audioTimesteps: MLXArray([Float(0)]),
+                        videoContextMask: nil,
+                        audioContextMask: nil,
+                        videoLatentShape: (frames: latentShape.frames, height: latentShape.height, width: latentShape.width),
+                        audioNumFrames: audioFrames
+                    )
+                    let vel = unpatchify(velPred, shape: latentShape).asType(.float32)
+                    return videoLatent - sigma5d * vel
+                } else if let videoTransformer = transformer {
+                    let velPred = videoTransformer(
+                        latent: videoPatchified,
+                        context: context.asType(.bfloat16),
+                        timesteps: videoTimestep,
+                        contextMask: nil,
+                        latentShape: (frames: latentShape.frames, height: latentShape.height, width: latentShape.width)
+                    )
+                    let vel = unpatchify(velPred, shape: latentShape).asType(.float32)
+                    return videoLatent - sigma5d * vel
+                } else {
+                    fatalError("No transformer loaded")
+                }
+            }
+
+            // Positive pass (conditioned)
+            let audioCtx = (audioTextEmbeddings ?? MLXArray.zeros([videoPatchified.dim(0), 1, ltx2Transformer?.config.audioInnerDim ?? 2048])).asType(.bfloat16)
+            var denoisedVideo = runTransformer(context: videoTextEmbeddings, audioContext: audioCtx)
+
+            // CFG: negative pass + guidance (dev model only)
+            if cfgScale != 1.0, let negCtx = negVideoTextEmbeddings {
+                let negAudioCtx = (negAudioTextEmbeddings ?? audioCtx).asType(.bfloat16)
+                let negDenoised = runTransformer(context: negCtx, audioContext: negAudioCtx)
+
+                // CFG: pred = cond + (cfg_scale - 1) * (cond - uncond)
+                var guided = denoisedVideo + MLXArray(cfgScale - 1.0) * (denoisedVideo - negDenoised)
+
+                // Guidance rescale: factor = rescale * (cond.std / pred.std) + (1 - rescale)
+                if guidanceRescale > 0 {
+                    let condStd = denoisedVideo.asType(.float32).variance().sqrt()
+                    let predStd = guided.asType(.float32).variance().sqrt()
+                    let factor = MLXArray(guidanceRescale) * (condStd / predStd) + MLXArray(1.0 - guidanceRescale)
+                    guided = guided * factor
+                }
+
+                denoisedVideo = guided
             }
 
             // post_process_latent: blend denoised x0 with clean latent BEFORE Euler step
