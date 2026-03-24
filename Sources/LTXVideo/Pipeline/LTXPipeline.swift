@@ -1087,17 +1087,17 @@ public actor LTXPipeline {
 
     // MARK: - Retake (Video-to-Video)
 
-    /// Generate a retake from an existing video using two-stage pipeline.
+    /// Generate a retake from an existing video (single-stage, matching Lightricks reference).
     ///
-    /// Encodes the source video into latent space, partially noises it based on `retakeStrength`,
-    /// then denoises with a new prompt. Higher strength = more change from the source.
-    ///
-    /// Two-stage flow: encode source at half-res → denoise (truncated schedule) → upscale 2x → refine.
+    /// Encodes the source video at native resolution, selectively noises the temporal
+    /// region to regenerate, then denoises with a new prompt using the full sigma schedule.
+    /// Frames outside the retake window are preserved via `post_process_latent` at each step.
     ///
     /// - Parameters:
     ///   - prompt: New text description for the retaken video
-    ///   - config: Generation config with `videoPath` and `retakeStrength` set
-    ///   - upscalerWeightsPath: Path to spatial upscaler safetensors
+    ///   - config: Generation config with `videoPath` set. `retakeStrength` is unused
+    ///     (matching Lightricks: regenerated frames always start from pure noise).
+    ///   - upscalerWeightsPath: Unused (kept for API compatibility)
     ///   - onProgress: Optional progress callback
     ///   - profile: Enable performance profiling
     /// - Returns: VideoGenerationResult with retaken video frames
@@ -1126,21 +1126,13 @@ public actor LTXPipeline {
         }
 
         let generationStart = Date()
-        let strength = config.retakeStrength
 
-        guard config.width % 64 == 0 && config.height % 64 == 0 else {
-            throw LTXError.invalidConfiguration("Two-stage requires width and height divisible by 64. Got \(config.width)x\(config.height)")
-        }
+        LTXDebug.log("Retake (single-stage): \(config.width)x\(config.height)")
 
-        let halfWidth = config.width / 2
-        let halfHeight = config.height / 2
-
-        LTXDebug.log("Retake: \(halfWidth)x\(halfHeight) → \(config.width)x\(config.height), strength=\(strength)")
-
-        // Phase 0: Encode source video at half resolution
-        LTXDebug.log("Encoding source video at \(halfWidth)x\(halfHeight)...")
-        let cleanLatentHalf = try await encodeVideo(
-            path: videoPath, width: halfWidth, height: halfHeight,
+        // Phase 0: Encode source video at native resolution
+        LTXDebug.log("Encoding source video at \(config.width)x\(config.height)...")
+        let cleanLatent = try await encodeVideo(
+            path: videoPath, width: config.width, height: config.height,
             numFrames: config.numFrames
         )
         unloadVAEEncoder()
@@ -1182,7 +1174,7 @@ public actor LTXPipeline {
             effectivePrompt = prompt
         }
 
-        // Phase 1: Text encoding (same as generateVideo)
+        // Phase 1: Text encoding
         let textEncodingStart = Date()
         let (inputIds, attentionMask) = tokenizePrompt(effectivePrompt, maxLength: textMaxLength)
 
@@ -1201,10 +1193,11 @@ public actor LTXPipeline {
             paddingSide: "left"
         )
         let videoTextEmbeddings = encoderOutput.videoEncoding
-        let textMask = encoderOutput.attentionMask
-        MLX.eval(videoTextEmbeddings, textMask)
+        let audioTextEmbeddings = encoderOutput.audioEncoding
+        MLX.eval(videoTextEmbeddings)
+        if let ae = audioTextEmbeddings { MLX.eval(ae) }
 
-        LTXDebug.log("Text encoding: \(videoTextEmbeddings.shape)")
+        LTXDebug.log("Text encoding: video=\(videoTextEmbeddings.shape), audio=\(audioTextEmbeddings?.shape.description ?? "nil")")
         timings.textEncoding = Date().timeIntervalSince(textEncodingStart)
 
         // Unload Gemma
@@ -1212,20 +1205,20 @@ public actor LTXPipeline {
         self.tokenizer = nil
         Memory.clearCache()
 
-        // Phase 2: Stage 1 — Half-res retake denoising
-        let stage1Shape = VideoLatentShape.fromPixelDimensions(
+        // Phase 2: Single-stage denoising at native resolution
+        let latentShape = VideoLatentShape.fromPixelDimensions(
             batch: 1, channels: 128,
-            frames: config.numFrames, height: halfHeight, width: halfWidth
+            frames: config.numFrames, height: config.height, width: config.width
         )
 
-        LTXDebug.log("Stage 1 latent: \(stage1Shape.frames)x\(stage1Shape.height)x\(stage1Shape.width)")
+        LTXDebug.log("Retake latent: \(latentShape.frames)x\(latentShape.height)x\(latentShape.width)")
 
-        // Build temporal conditioning mask for partial retake
-        // condMask: 1 = keep (σ=0), 0 = regenerate (σ=strength)
-        // denoiseMask5d: 1 = regenerate, 0 = keep (for post-step blending)
+        // Build temporal masks for partial retake
+        // condMask: per-token, 1=keep (σ=0), 0=regenerate (σ=sigma)
+        // denoiseMask5d: per-frame 5D, 1=regenerate, 0=keep
         let isPartialRetake = config.retakeStartTime != nil || config.retakeEndTime != nil
-        var stage1CondMask: MLXArray? = nil
-        var stage1DenoiseMask5d: MLXArray? = nil
+        var condMask: MLXArray? = nil
+        var denoiseMask5d: MLXArray? = nil
 
         if isPartialRetake {
             let fps: Float = 24.0
@@ -1241,308 +1234,162 @@ public actor LTXPipeline {
                 )
             }
 
-            // Convert time range to latent frame indices
-            // Each latent frame covers 8 pixel frames (+ frame 0 is shared)
-            let latentFrames = stage1Shape.frames
-            let tokensPerFrame = stage1Shape.height * stage1Shape.width
+            let latentFrames = latentShape.frames
+            let tokensPerFrame = latentShape.height * latentShape.width
 
             let startPixelFrame = Int(startTime * fps)
             let endPixelFrame = min(Int(endTime * fps), config.numFrames - 1)
-
-            // Latent frame i covers pixel frames [i*8, (i+1)*8] (approx)
             let startLatentFrame = max(0, min(startPixelFrame / 8, latentFrames - 1))
             let endLatentFrame = max(startLatentFrame, min(latentFrames - 1, (endPixelFrame + 7) / 8))
 
             LTXDebug.log("Partial retake: time \(startTime)s-\(endTime)s → latent frames \(startLatentFrame)-\(endLatentFrame) of \(latentFrames)")
 
-            // Build per-token mask: 1=keep, 0=regenerate (matching I2V convention)
-            var maskValues = [Float](repeating: 1.0, count: stage1Shape.tokenCount)
-            for f in startLatentFrame...endLatentFrame {
-                let tokenOffset = f * tokensPerFrame
-                for t in 0..<tokensPerFrame {
-                    maskValues[tokenOffset + t] = 0.0  // regenerate
-                }
-            }
-            stage1CondMask = MLXArray(maskValues, [1, stage1Shape.tokenCount])
-            MLX.eval(stage1CondMask!)
-
-            // 5D mask for post-step blending: 1=regenerate, 0=keep
-            var mask5dValues = [Float](repeating: 0.0, count: latentFrames)
-            for f in startLatentFrame...endLatentFrame {
-                mask5dValues[f] = 1.0
-            }
-            stage1DenoiseMask5d = MLXArray(mask5dValues, [1, 1, latentFrames, 1, 1])
-            MLX.eval(stage1DenoiseMask5d!)
-
-            let regenFrames = endLatentFrame - startLatentFrame + 1
-            LTXDebug.log("Regenerating \(regenFrames)/\(latentFrames) latent frames")
-        }
-
-        // Compute truncated sigma schedule
-        let stage1Scheduler = LTXScheduler(isDistilled: true)
-        stage1Scheduler.setTimesteps(
-            numSteps: 8,
-            distilled: true,
-            latentTokenCount: stage1Shape.tokenCount
-        )
-        let stage1Sigmas = stage1Scheduler.truncatedSigmas(forStrength: strength)
-        let stage1NumSteps = stage1Sigmas.count - 1
-
-        LTXDebug.log("Stage 1 retake: \(stage1NumSteps) steps, strength=\(strength), sigmas: \(stage1Sigmas)")
-
-        // Generate noise and mix with clean latent
-        if let seed = config.seed {
-            MLXRandom.seed(seed)
-        }
-        let noise = generateNoise(shape: stage1Shape, seed: config.seed)
-
-        var videoLatent: MLXArray
-        if let denoiseMask = stage1DenoiseMask5d {
-            // Partial retake: only noise the frames to regenerate
-            let noisedLatent = MLXArray(strength) * noise + MLXArray(1.0 - strength) * cleanLatentHalf
-            videoLatent = denoiseMask * noisedLatent + (1 - denoiseMask) * cleanLatentHalf
-        } else {
-            // Full retake: noise everything
-            videoLatent = MLXArray(strength) * noise + MLXArray(1.0 - strength) * cleanLatentHalf
-        }
-        MLX.eval(videoLatent)
-
-        // Stage 1 denoising
-        let modeStr = isPartialRetake ? "partial" : "full"
-        let retakeStage2Steps = STAGE_2_DISTILLED_SIGMA_VALUES.count - 1
-        let retakeTotalSteps = stage1NumSteps + retakeStage2Steps
-        LTXDebug.log("=== Stage 1: Half-resolution \(modeStr) retake denoising (\(stage1NumSteps) steps) ===")
-        let stage1Start = Date()
-
-        for step in 0..<stage1NumSteps {
-            let stepStart = Date()
-            let sigma = stage1Sigmas[step]
-            let sigmaNext = stage1Sigmas[step + 1]
-
-            onProgress?(GenerationProgress(
-                currentStep: step, totalSteps: retakeTotalSteps, sigma: sigma, phase: .denoising
-            ))
-
-            // Per-token timestep: kept frames get σ=0, regenerated frames get σ
-            let videoTimestep: MLXArray
-            if let condMask = stage1CondMask {
-                videoTimestep = MLXArray(sigma) * (1 - condMask)
-            } else {
-                videoTimestep = MLXArray([sigma])
-            }
-
-            let videoPatchified = patchify(videoLatent).asType(.bfloat16)
-
-            if let ltx2 = ltx2Transformer {
-                // Use encoded source audio (frozen at σ=0) for cross-modal attention context
-                let audioInput = frozenAudioLatentPacked ?? MLXArray.zeros([videoPatchified.dim(0), 1, 128]).asType(DType.bfloat16)
-                let audioFrames = frozenAudioLatentPacked != nil ? retakeAudioNumFrames : 1
-                let (videoVelPred, _) = ltx2(
-                    videoLatent: videoPatchified,
-                    audioLatent: audioInput,
-                    videoContext: videoTextEmbeddings.asType(.bfloat16),
-                    audioContext: videoTextEmbeddings.asType(.bfloat16),
-                    videoTimesteps: videoTimestep,
-                    audioTimesteps: MLXArray([Float(0)]),  // σ=0 → frozen audio
-                    videoContextMask: textMask,
-                    audioContextMask: nil,
-                    videoLatentShape: (frames: stage1Shape.frames, height: stage1Shape.height, width: stage1Shape.width),
-                    audioNumFrames: audioFrames
-                )
-                let videoVelocity = unpatchify(videoVelPred, shape: stage1Shape).asType(.float32)
-                videoLatent = stage1Scheduler.step(
-                    latent: videoLatent, velocity: videoVelocity,
-                    sigma: sigma, sigmaNext: sigmaNext
-                )
-            } else if let videoTransformer = transformer {
-                let velocityPred = videoTransformer(
-                    latent: videoPatchified,
-                    context: videoTextEmbeddings.asType(.bfloat16),
-                    timesteps: videoTimestep,
-                    contextMask: nil,
-                    latentShape: (frames: stage1Shape.frames, height: stage1Shape.height, width: stage1Shape.width)
-                )
-                let videoVelocity = unpatchify(velocityPred, shape: stage1Shape).asType(.float32)
-                videoLatent = stage1Scheduler.step(
-                    latent: videoLatent, velocity: videoVelocity,
-                    sigma: sigma, sigmaNext: sigmaNext
-                )
-            }
-
-            // Post-step blending: replace kept frames with clean latent
-            if let denoiseMask = stage1DenoiseMask5d {
-                videoLatent = denoiseMask * videoLatent + (1 - denoiseMask) * cleanLatentHalf
-            }
-            MLX.eval(videoLatent)
-
-            if (step + 1) % 5 == 0 { Memory.clearCache() }
-            timings.denoiseSteps.append(Date().timeIntervalSince(stepStart))
-            timings.sampleMemory()
-
-            LTXDebug.log("Stage 1 step \(step)/\(stage1NumSteps): σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext)), time=\(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
-        }
-        LTXDebug.log("Stage 1 complete: \(String(format: "%.1f", Date().timeIntervalSince(stage1Start)))s")
-
-        // Phase 3: Upscale video 2x (same as generateVideo)
-        onProgress?(GenerationProgress(
-            currentStep: retakeTotalSteps, totalSteps: retakeTotalSteps, sigma: 0, phase: .upscaling
-        ))
-        LTXDebug.log("=== Upscaling video latent 2x ===")
-        let upscaleStart = Date()
-
-        let upscaler = try loadSpatialUpscaler(from: upscalerWeightsPath)
-
-        let latentMean = vaeDecoder.meanOfMeans
-        let latentStd = vaeDecoder.stdOfMeans
-        MLX.eval(latentMean, latentStd)
-
-        let mean5d = latentMean.reshaped([1, -1, 1, 1, 1])
-        let std5d = latentStd.reshaped([1, -1, 1, 1, 1])
-
-        let denormedLatent = videoLatent * std5d + mean5d
-        MLX.eval(denormedLatent)
-
-        let upscaledLatent = upscaler(denormedLatent)
-        MLX.eval(upscaledLatent)
-
-        videoLatent = (upscaledLatent - mean5d) / std5d
-        MLX.eval(videoLatent)
-
-        LTXDebug.log("Upscale time: \(String(format: "%.1f", Date().timeIntervalSince(upscaleStart)))s, shape: \(videoLatent.shape)")
-
-        // Phase 3b: Encode source at full-res for stage 2 blending (partial retake)
-        var cleanLatentFull: MLXArray? = nil
-        var stage2CondMask: MLXArray? = nil
-        var stage2DenoiseMask5d: MLXArray? = nil
-
-        if isPartialRetake {
-            LTXDebug.log("Encoding source video at full res \(config.width)x\(config.height) for stage 2 blending...")
-            cleanLatentFull = try await encodeVideo(
-                path: videoPath, width: config.width, height: config.height,
-                numFrames: config.numFrames
-            )
-            unloadVAEEncoder()
-
-            let stage2ShapeTmp = VideoLatentShape.fromPixelDimensions(
-                batch: 1, channels: 128,
-                frames: config.numFrames, height: config.height, width: config.width
-            )
-
-            let fps: Float = 24.0
-            let totalDuration = Float(config.numFrames) / fps
-            let startTime = min(config.retakeStartTime ?? 0.0, totalDuration)
-            let endTime = min(config.retakeEndTime ?? totalDuration, totalDuration)
-            let startPixelFrame = Int(startTime * fps)
-            let endPixelFrame = min(Int(endTime * fps), config.numFrames - 1)
-            let startLatentFrame = max(0, min(startPixelFrame / 8, stage2ShapeTmp.frames - 1))
-            let endLatentFrame = max(startLatentFrame, min(stage2ShapeTmp.frames - 1, (endPixelFrame + 7) / 8))
-            let tokensPerFrame = stage2ShapeTmp.height * stage2ShapeTmp.width
-
-            var maskValues = [Float](repeating: 1.0, count: stage2ShapeTmp.tokenCount)
+            // Per-token mask: 1=keep (σ=0), 0=regenerate
+            var maskValues = [Float](repeating: 1.0, count: latentShape.tokenCount)
             for f in startLatentFrame...endLatentFrame {
                 let tokenOffset = f * tokensPerFrame
                 for t in 0..<tokensPerFrame {
                     maskValues[tokenOffset + t] = 0.0
                 }
             }
-            stage2CondMask = MLXArray(maskValues, [1, stage2ShapeTmp.tokenCount])
-            MLX.eval(stage2CondMask!)
+            condMask = MLXArray(maskValues, [1, latentShape.tokenCount])
+            MLX.eval(condMask!)
 
-            var mask5dValues = [Float](repeating: 0.0, count: stage2ShapeTmp.frames)
+            // 5D mask: 1=regenerate, 0=keep
+            var mask5dValues = [Float](repeating: 0.0, count: latentFrames)
             for f in startLatentFrame...endLatentFrame {
                 mask5dValues[f] = 1.0
             }
-            stage2DenoiseMask5d = MLXArray(mask5dValues, [1, 1, stage2ShapeTmp.frames, 1, 1])
-            MLX.eval(stage2DenoiseMask5d!)
+            denoiseMask5d = MLXArray(mask5dValues, [1, 1, latentFrames, 1, 1])
+            MLX.eval(denoiseMask5d!)
+
+            let regenFrames = endLatentFrame - startLatentFrame + 1
+            LTXDebug.log("Regenerating \(regenFrames)/\(latentFrames) latent frames")
         }
 
-        // Phase 4: Stage 2 — Full-res refinement
-        LTXDebug.log("=== Stage 2: Full-resolution refinement (3 steps) ===")
-        let stage2Start = Date()
-
-        let stage2Shape = VideoLatentShape.fromPixelDimensions(
-            batch: 1, channels: 128,
-            frames: config.numFrames, height: config.height, width: config.width
+        // Full distilled sigma schedule (matching Lightricks reference — no truncation)
+        let scheduler = LTXScheduler(isDistilled: true)
+        scheduler.setTimesteps(
+            numSteps: 8,
+            distilled: true,
+            latentTokenCount: latentShape.tokenCount
         )
+        let sigmas = scheduler.sigmas
+        let numSteps = sigmas.count - 1
 
-        let stage2Sigmas = STAGE_2_DISTILLED_SIGMA_VALUES
-        let noiseScale = stage2Sigmas[0]
+        LTXDebug.log("Retake: \(numSteps) steps, sigmas: \(sigmas)")
 
-        let videoNoise = generateNoise(shape: stage2Shape)
-        if let denoiseMask = stage2DenoiseMask5d, let cleanFull = cleanLatentFull {
-            // Partial: only re-noise regenerated region, keep clean for rest
-            let noisedLatent = MLXArray(noiseScale) * videoNoise + MLXArray(1.0 - noiseScale) * videoLatent
-            videoLatent = denoiseMask * noisedLatent + (1 - denoiseMask) * cleanFull
+        // Noise injection: pure noise where denoise_mask=1, clean elsewhere
+        // (matching Lightricks GaussianNoiser with noise_scale=1.0)
+        if let seed = config.seed {
+            MLXRandom.seed(seed)
+        }
+        let noise = generateNoise(shape: latentShape, seed: config.seed)
+
+        var videoLatent: MLXArray
+        if let mask = denoiseMask5d {
+            // Partial: pure noise on regen frames, clean on kept frames
+            videoLatent = mask * noise + (1 - mask) * cleanLatent
         } else {
-            videoLatent = MLXArray(noiseScale) * videoNoise + MLXArray(1.0 - noiseScale) * videoLatent
+            // Full retake: pure noise
+            videoLatent = noise
         }
         MLX.eval(videoLatent)
 
-        let stage2NumSteps = stage2Sigmas.count - 1
-        for step in 0..<stage2NumSteps {
+        // Denoising loop (matching Lightricks euler_denoising_loop)
+        let modeStr = isPartialRetake ? "partial" : "full"
+        LTXDebug.log("=== Single-stage \(modeStr) retake denoising (\(numSteps) steps) ===")
+        let denoiseStart = Date()
+
+        for step in 0..<numSteps {
             let stepStart = Date()
-            let sigma = stage2Sigmas[step]
-            let sigmaNext = stage2Sigmas[step + 1]
+            let sigma = sigmas[step]
+            let sigmaNext = sigmas[step + 1]
 
             onProgress?(GenerationProgress(
-                currentStep: stage1NumSteps + step,
-                totalSteps: retakeTotalSteps,
-                sigma: sigma,
-                phase: .refinement
+                currentStep: step, totalSteps: numSteps, sigma: sigma, phase: .denoising
             ))
 
+            // Per-token timestep: kept frames get σ=0, regen frames get σ
             let videoTimestep: MLXArray
-            if let condMask = stage2CondMask {
-                videoTimestep = MLXArray(sigma) * (1 - condMask)
+            if let cm = condMask {
+                videoTimestep = MLXArray(sigma) * (1 - cm)
             } else {
                 videoTimestep = MLXArray([sigma])
             }
 
             let videoPatchified = patchify(videoLatent).asType(.bfloat16)
 
+            // Get denoised x0 prediction from the transformer
+            var denoisedVideo: MLXArray
+
             if let ltx2 = ltx2Transformer {
                 let audioInput = frozenAudioLatentPacked ?? MLXArray.zeros([videoPatchified.dim(0), 1, 128]).asType(DType.bfloat16)
                 let audioFrames = frozenAudioLatentPacked != nil ? retakeAudioNumFrames : 1
+                // Use proper audio encoding (2048-dim) matching Lightricks, NOT video encoding
+                let audioCtx = (audioTextEmbeddings ?? MLXArray.zeros([videoPatchified.dim(0), 1, ltx2.config.audioInnerDim])).asType(.bfloat16)
                 let (videoVelPred, _) = ltx2(
                     videoLatent: videoPatchified,
                     audioLatent: audioInput,
                     videoContext: videoTextEmbeddings.asType(.bfloat16),
-                    audioContext: videoTextEmbeddings.asType(.bfloat16),
+                    audioContext: audioCtx,
                     videoTimesteps: videoTimestep,
-                    audioTimesteps: MLXArray([Float(0)]),  // σ=0 → frozen audio
-                    videoContextMask: textMask,
+                    audioTimesteps: MLXArray([Float(0)]),
+                    videoContextMask: nil,       // matching Lightricks: context_mask=None
                     audioContextMask: nil,
-                    videoLatentShape: (frames: stage2Shape.frames, height: stage2Shape.height, width: stage2Shape.width),
+                    videoLatentShape: (frames: latentShape.frames, height: latentShape.height, width: latentShape.width),
                     audioNumFrames: audioFrames
                 )
-                let videoVelocity = unpatchify(videoVelPred, shape: stage2Shape).asType(.float32)
-                let dt = sigmaNext - sigma
-                videoLatent = videoLatent + MLXArray(dt) * videoVelocity
+                let videoVelocity = unpatchify(videoVelPred, shape: latentShape).asType(.float32)
+                // to_denoised with per-token sigma: x0 = sample - sigma * velocity
+                // Build per-frame sigma from denoiseMask (kept=0, regen=sigma)
+                let sigma5d: MLXArray
+                if let mask = denoiseMask5d {
+                    sigma5d = mask * MLXArray(sigma)  // (1,1,F,1,1): kept=0, regen=sigma
+                } else {
+                    sigma5d = MLXArray(sigma)
+                }
+                denoisedVideo = videoLatent - sigma5d * videoVelocity
             } else if let videoTransformer = transformer {
                 let velocityPred = videoTransformer(
                     latent: videoPatchified,
                     context: videoTextEmbeddings.asType(.bfloat16),
                     timesteps: videoTimestep,
-                    contextMask: nil,
-                    latentShape: (frames: stage2Shape.frames, height: stage2Shape.height, width: stage2Shape.width)
+                    contextMask: nil,            // matching Lightricks: context_mask=None
+                    latentShape: (frames: latentShape.frames, height: latentShape.height, width: latentShape.width)
                 )
-                let videoVelocity = unpatchify(velocityPred, shape: stage2Shape).asType(.float32)
-                let dt = sigmaNext - sigma
-                videoLatent = videoLatent + MLXArray(dt) * videoVelocity
+                let videoVelocity = unpatchify(velocityPred, shape: latentShape).asType(.float32)
+                let sigma5d: MLXArray
+                if let mask = denoiseMask5d {
+                    sigma5d = mask * MLXArray(sigma)
+                } else {
+                    sigma5d = MLXArray(sigma)
+                }
+                denoisedVideo = videoLatent - sigma5d * videoVelocity
+            } else {
+                fatalError("No transformer loaded")
             }
 
-            // Post-step blending for partial retake
-            if let denoiseMask = stage2DenoiseMask5d, let cleanFull = cleanLatentFull {
-                videoLatent = denoiseMask * videoLatent + (1 - denoiseMask) * cleanFull
+            // post_process_latent: blend denoised x0 with clean latent BEFORE Euler step
+            // (matching Lightricks: denoised = denoised * mask + clean * (1 - mask))
+            if let mask = denoiseMask5d {
+                denoisedVideo = mask * denoisedVideo + (1 - mask) * cleanLatent
             }
+
+            // Euler step: sample + velocity * dt
+            // velocity = (sample - denoised) / sigma
+            let velocity = (videoLatent - denoisedVideo) / MLXArray(sigma)
+            let dt = sigmaNext - sigma
+            videoLatent = (videoLatent.asType(.float32) + velocity.asType(.float32) * MLXArray(dt)).asType(videoLatent.dtype)
             MLX.eval(videoLatent)
 
+            if (step + 1) % 5 == 0 { Memory.clearCache() }
             timings.denoiseSteps.append(Date().timeIntervalSince(stepStart))
             timings.sampleMemory()
 
-            LTXDebug.log("Stage 2 step \(step)/\(stage2NumSteps): σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext)), time=\(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
+            LTXDebug.log("Step \(step)/\(numSteps): σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext)), time=\(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
         }
-        LTXDebug.log("Stage 2 complete: \(String(format: "%.1f", Date().timeIntervalSince(stage2Start)))s")
+        LTXDebug.log("Denoising complete: \(String(format: "%.1f", Date().timeIntervalSince(denoiseStart)))s")
 
         // Unload transformer
         if memoryOptimization.unloadAfterUse {
@@ -1552,9 +1399,9 @@ public actor LTXPipeline {
             LTXDebug.log("Transformer unloaded")
         }
 
-        // Phase 5: Decode + export
+        // Phase 3: Decode
         onProgress?(GenerationProgress(
-            currentStep: retakeTotalSteps, totalSteps: retakeTotalSteps, sigma: 0, phase: .decoding
+            currentStep: numSteps, totalSteps: numSteps, sigma: 0, phase: .decoding
         ))
         LTXMemoryManager.setPhase(.vaeDecode)
         let vaeStart = Date()

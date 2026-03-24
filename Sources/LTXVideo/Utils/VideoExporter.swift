@@ -458,24 +458,20 @@ public actor VideoExporter {
             at: .zero
         )
 
-        // Add audio track
-        guard let audioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first,
-              let compositionAudioTrack = composition.addMutableTrack(
-                  withMediaType: .audio,
-                  preferredTrackID: kCMPersistentTrackID_Invalid
-              )
-        else {
-            throw LTXError.exportFailed("Failed to create composition audio track")
+        // Add audio track (skip if source has no audio)
+        if let audioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first,
+           let compositionAudioTrack = composition.addMutableTrack(
+               withMediaType: .audio,
+               preferredTrackID: kCMPersistentTrackID_Invalid
+           ) {
+            let audioDuration = try await audioAsset.load(.duration)
+            let insertDuration = CMTimeMinimum(videoDuration, audioDuration)
+            try compositionAudioTrack.insertTimeRange(
+                CMTimeRange(start: .zero, duration: insertDuration),
+                of: audioTrack,
+                at: .zero
+            )
         }
-
-        let audioDuration = try await audioAsset.load(.duration)
-        // Use shorter of video/audio duration
-        let insertDuration = CMTimeMinimum(videoDuration, audioDuration)
-        try compositionAudioTrack.insertTimeRange(
-            CMTimeRange(start: .zero, duration: insertDuration),
-            of: audioTrack,
-            at: .zero
-        )
 
         // Export the composition
         guard let exportSession = AVAssetExportSession(

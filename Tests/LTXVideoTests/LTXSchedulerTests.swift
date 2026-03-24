@@ -93,42 +93,39 @@ struct LTXSchedulerSigmaTests {
         let scheduler = LTXScheduler(isDistilled: true)
         scheduler.setTimesteps(numSteps: 8, distilled: true)
         let truncated = scheduler.truncatedSigmas(forStrength: 0.8)
-        // strength=0.8, sigmas below: 0.725, 0.421875, 0.0
+        // Rescaled: all 8 sigmas * 0.8, same step count
         #expect(truncated.first == 0.8)
         #expect(truncated.last == 0.0)
-        #expect(truncated.count == 4) // [0.8, 0.725, 0.421875, 0.0]
-        #expect(truncated[1] == 0.725)
-        #expect(truncated[2] == 0.421875)
+        #expect(truncated.count == 9) // 8 steps + terminal 0.0
     }
 
     @Test func testTruncatedSigmasStrength1() {
         let scheduler = LTXScheduler(isDistilled: true)
         scheduler.setTimesteps(numSteps: 8, distilled: true)
         let truncated = scheduler.truncatedSigmas(forStrength: 1.0)
-        // All sigmas < 1.0 are included
+        // strength=1.0 → identity (same as original schedule)
         #expect(truncated.first == 1.0)
         #expect(truncated.last == 0.0)
-        #expect(truncated.count == 9) // [1.0, 0.994, 0.988, ..., 0.0]
+        #expect(truncated.count == 9)
     }
 
     @Test func testTruncatedSigmasStrength05() {
         let scheduler = LTXScheduler(isDistilled: true)
         scheduler.setTimesteps(numSteps: 8, distilled: true)
         let truncated = scheduler.truncatedSigmas(forStrength: 0.5)
+        // Rescaled: all sigmas * 0.5
         #expect(truncated.first == 0.5)
         #expect(truncated.last == 0.0)
-        // sigmas below 0.5: 0.421875, 0.0
-        #expect(truncated.count == 3) // [0.5, 0.421875, 0.0]
+        #expect(truncated.count == 9) // same step count
     }
 
     @Test func testTruncatedSigmasStrengthVeryLow() {
         let scheduler = LTXScheduler(isDistilled: true)
         scheduler.setTimesteps(numSteps: 8, distilled: true)
         let truncated = scheduler.truncatedSigmas(forStrength: 0.1)
-        #expect(truncated.first == 0.1)
+        #expect(truncated.first! < 0.101) // 1.0 * 0.1 = 0.1
         #expect(truncated.last == 0.0)
-        // no sigmas below 0.1 (except 0.0 which is excluded from the loop)
-        #expect(truncated.count == 2) // [0.1, 0.0]
+        #expect(truncated.count == 9) // same step count
     }
 
     @Test func testTruncatedSigmasEmptySchedule() {

@@ -368,11 +368,10 @@ struct Retake: AsyncParsableCommand {
             LTXDebug.enableDebugMode()
         }
 
-        print("LTX-2.3 Video Retake (Two-Stage Distilled)")
-        print("============================================")
+        print("LTX-2.3 Video Retake (Single-Stage)")
+        print("====================================")
         print("Source video: \(video)")
         print("Prompt: \(prompt)")
-        print("Strength: \(strength)")
         if let st = startTime, let et = endTime {
             print("Partial retake: \(st)s - \(et)s")
         } else if let st = startTime {
@@ -381,7 +380,7 @@ struct Retake: AsyncParsableCommand {
             print("Partial retake: start - \(et)s")
         }
         print("Output: \(output)")
-        print("Resolution: \(width)x\(height) (stage 1: \(width/2)x\(height/2))")
+        print("Resolution: \(width)x\(height)")
         print("Frames: \(frames)")
         if let seed = seed {
             print("Seed: \(seed)")
@@ -400,10 +399,6 @@ struct Retake: AsyncParsableCommand {
         guard FileManager.default.fileExists(atPath: video) else {
             throw ValidationError("Source video not found: \(video)")
         }
-        guard strength > 0.0 && strength <= 1.0 else {
-            throw ValidationError("Strength must be in (0.0, 1.0]. Got \(strength)")
-        }
-
         // Parse quantization
         guard let quantOption = TransformerQuantization(rawValue: transformerQuant) else {
             throw ValidationError("Invalid transformer quantization: \(transformerQuant). Use: bf16, qint8, or int4")
