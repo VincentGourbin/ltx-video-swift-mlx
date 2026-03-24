@@ -405,15 +405,15 @@ struct Retake: AsyncParsableCommand {
         }
         let quantConfig = LTXQuantizationConfig(transformer: quantOption)
 
-        // Create pipeline
+        // Create pipeline (dev model for retake: 30 steps + CFG, matching Lightricks)
         print("Creating pipeline...")
         fflush(stdout)
         let pipeline = LTXPipeline(
-            model: .distilled,
+            model: .dev,
             quantization: quantConfig,
             hfToken: hfToken
         )
-        print("Pipeline created")
+        print("Pipeline created (dev model)")
         fflush(stdout)
 
         // Load models
