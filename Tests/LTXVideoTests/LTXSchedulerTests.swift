@@ -134,6 +134,30 @@ struct LTXSchedulerSigmaTests {
         #expect(truncated == [0.5, 0.0])
     }
 
+    // MARK: - Dev Model Retake (30 steps)
+
+    @Test func testDevModelSchedule30Steps() {
+        let scheduler = LTXScheduler(isDistilled: false)
+        scheduler.setTimesteps(numSteps: 30, distilled: false)
+        let sigmas = scheduler.sigmas
+        #expect(sigmas.count == 31)  // 30 steps + terminal 0.0
+        #expect(sigmas.first == 1.0)
+        #expect(sigmas.last == 0.0)
+        // Dev schedule should be monotonically decreasing
+        for i in 1..<sigmas.count {
+            #expect(sigmas[i] <= sigmas[i - 1])
+        }
+    }
+
+    @Test func testDistilledRetakeFullSchedule() {
+        // Retake uses full schedule (no truncation) — 8 steps
+        let scheduler = LTXScheduler(isDistilled: true)
+        scheduler.setTimesteps(numSteps: 8, distilled: true)
+        #expect(scheduler.sigmas.count == 9)  // 8 steps + terminal
+        #expect(scheduler.sigmas.first == 1.0)
+        #expect(scheduler.sigmas.last == 0.0)
+    }
+
     // MARK: - Scheduler State
 
     @Test func testInitialState() {

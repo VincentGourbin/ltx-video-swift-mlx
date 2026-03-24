@@ -335,6 +335,9 @@ struct Retake: AsyncParsableCommand {
     @Flag(name: .long, help: "Enhance prompt using Gemma before generation")
     var enhancePrompt: Bool = false
 
+    @Flag(name: .long, help: "Use distilled model (8 steps, fast) instead of dev (30 steps + CFG)")
+    var distilled: Bool = false
+
     @Option(name: .long, help: "Transformer quantization: bf16 (default), qint8, or int4")
     var transformerQuant: String = "bf16"
 
@@ -405,15 +408,16 @@ struct Retake: AsyncParsableCommand {
         }
         let quantConfig = LTXQuantizationConfig(transformer: quantOption)
 
-        // Create pipeline (dev model for retake: 30 steps + CFG, matching Lightricks)
+        // Create pipeline
+        let retakeModel: LTXModel = distilled ? .distilled : .dev
         print("Creating pipeline...")
         fflush(stdout)
         let pipeline = LTXPipeline(
-            model: .dev,
+            model: retakeModel,
             quantization: quantConfig,
             hfToken: hfToken
         )
-        print("Pipeline created (dev model)")
+        print("Pipeline created (\(retakeModel.rawValue) model)")
         fflush(stdout)
 
         // Load models
@@ -430,12 +434,6 @@ struct Retake: AsyncParsableCommand {
         let loadTime = Date().timeIntervalSince(startLoad)
         print("Models loaded in \(String(format: "%.1f", loadTime))s")
 
-        // Download upscaler
-        print("Downloading upscaler weights (if needed)...")
-        fflush(stdout)
-        let upscalerPath = try await pipeline.downloadUpscalerWeights()
-        print("Upscaler weights ready")
-
         // Build config
         let config = LTXVideoGenerationConfig(
             width: width,
@@ -450,15 +448,15 @@ struct Retake: AsyncParsableCommand {
             retakeEndTime: endTime
         )
 
-        // Generate retake
-        print("\nGenerating retake (strength=\(strength))...")
+        // Generate retake (single-stage, no upscaler needed)
+        print("\nGenerating retake...")
         fflush(stdout)
         let startGen = Date()
 
         let result = try await pipeline.generateRetake(
             prompt: prompt,
             config: config,
-            upscalerWeightsPath: upscalerPath,
+            upscalerWeightsPath: "",  // unused in single-stage retake
             onProgress: { progress in
                 print("  \(progress.status)")
             },

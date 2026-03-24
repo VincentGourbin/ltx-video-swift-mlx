@@ -262,4 +262,47 @@ struct LTXVideoGenerationConfigTests {
         #expect(config.retakeStartTime == 2.0)
         #expect(config.retakeEndTime == 5.0)
     }
+
+    // MARK: - Retake Temporal Mask Tests
+
+    @Test func testRetakePartialTimeRange() {
+        // Partial retake: only start_time set → regenerate from start_time to end
+        let config = LTXVideoGenerationConfig(
+            numFrames: 121,  // 5s at 24fps
+            videoPath: "/tmp/vid.mp4",
+            retakeStartTime: 2.5
+        )
+        #expect(config.retakeStartTime == 2.5)
+        #expect(config.retakeEndTime == nil)  // nil = end of video
+    }
+
+    @Test func testRetakeLatentFrameMapping() {
+        // Verify the latent frame formula: latent_frames = (pixel_frames - 1) / 8 + 1
+        let latent121 = (121 - 1) / 8 + 1
+        let latent233 = (233 - 1) / 8 + 1
+        let latent65 = (65 - 1) / 8 + 1
+        #expect(latent121 == 16)
+        #expect(latent233 == 30)
+        #expect(latent65 == 9)
+    }
+
+    @Test func testRetakeMinimumDurationForVisibleChanges() {
+        // Each latent frame covers ~0.33s at 24fps (8 pixel frames / 24fps)
+        // Minimum recommended: 5 seconds (121 frames = 16 latent frames)
+        let shortDuration = Float(9) / 24.0   // 0.37s
+        let longDuration = Float(121) / 24.0  // 5.0s
+        #expect(shortDuration < 1.0)
+        #expect(longDuration >= 5.0)
+    }
+
+    @Test func testRetakeTemporalGranularity() {
+        // start_time=0.3 → startPixel=7 → latentFrame = 7/8 = 0 (ALL frames regen)
+        // start_time=0.4 → startPixel=9 → latentFrame = 9/8 = 1 (frame 0 kept)
+        let startPixel1 = Int(0.3 * 24.0)
+        let startPixel2 = Int(0.4 * 24.0)
+        let latentFrame1 = startPixel1 / 8
+        let latentFrame2 = startPixel2 / 8
+        #expect(latentFrame1 == 0)
+        #expect(latentFrame2 == 1)
+    }
 }

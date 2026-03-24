@@ -88,14 +88,27 @@ ltx-video generate "arc shot, camera orbiting the subject" \
 
 ### Retake (Video-to-Video)
 
+Retake regenerates a specific time region of a video from a text prompt while keeping the rest unchanged. It works best on videos **5 seconds or longer** — shorter videos don't give the model enough temporal context to produce visible changes.
+
+**Prompt guidelines** (from our testing, two styles work best):
+- **Full scene description**: describe the entire scene including your modification — *"A cute Groot character walking in a city street, a giant fireball with flames flies through the air, 3D Pixar style"*
+- **Replacement instruction**: tell the model what to replace — *"Replace the red ball with a fireball with blazing flames and sparks"*
+
+Avoid prompts that only describe the new element without context (e.g., just *"A fireball"*) — the model needs scene context to blend coherently.
+
 ```bash
 # Full retake: regenerate entire video with new prompt
 ltx-video retake "A cat building a dam in a forest stream" \
-    --video source.mp4 --strength 0.8 -w 768 -h 512 -f 121
+    --video source.mp4 -w 768 -h 512 -f 121
 
-# Partial retake: regenerate only seconds 7-10
+# Partial retake: regenerate seconds 5-7 of a 10s video
+ltx-video retake "Replace the red ball with a fireball with blazing flames and sparks" \
+    --video source.mp4 \
+    --start-time 5.0 --end-time 7.0 -w 512 -h 512 -f 233
+
+# Use distilled mode for faster inference (default: dev model with CFG)
 ltx-video retake "The vase explodes into colorful smoke" \
-    --video source.mp4 --strength 0.75 \
+    --video source.mp4 --distilled \
     --start-time 7.0 --end-time 10.0 -w 768 -h 512 -f 241
 ```
 
@@ -278,16 +291,16 @@ flowchart TD
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `<prompt>` | required | New text prompt |
+| `<prompt>` | required | New text prompt (describe full scene or replacement instruction) |
 | `--video` | required | Source video path |
-| `--strength` | `0.8` | How much to change (0.0 = keep, 1.0 = full regen) |
 | `--start-time` | none | Start of region to regenerate (seconds) |
 | `--end-time` | none | End of region to regenerate (seconds) |
 | `-o, --output` | `retake.mp4` | Output file path |
-| `-w, --width` | `768` | Video width (divisible by 64) |
-| `-h, --height` | `512` | Video height (divisible by 64) |
+| `-w, --width` | `768` | Video width (divisible by 32) |
+| `-h, --height` | `512` | Video height (divisible by 32) |
 | `-f, --frames` | `121` | Frame count (must be 8n+1) |
 | `--seed` | random | Random seed |
+| `--distilled` | off | Use distilled model (8 steps, fast). Default: dev (30 steps + CFG) |
 | `--enhance-prompt` | off | Enhance prompt with Gemma VLM |
 | `--transformer-quant` | `bf16` | Quantization: `bf16`, `qint8`, `int4` |
 
