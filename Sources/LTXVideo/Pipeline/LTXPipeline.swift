@@ -9,6 +9,8 @@ import MLXLMCommon
 import MLXRandom
 import MLXNN
 import MLXVLM
+import MLXHuggingFace
+import HuggingFace
 import Tokenizers
 import Hub
 
@@ -149,7 +151,7 @@ public actor LTXPipeline {
     private var gemmaModel: Gemma3TextModel?
 
     /// Tokenizer for Gemma
-    private var tokenizer: Tokenizer?
+    private var tokenizer: Tokenizers.Tokenizer?
 
     /// Text encoder (feature extractor + connector)
     private var textEncoder: VideoGemmaTextEncoderModel?
@@ -626,6 +628,8 @@ public actor LTXPipeline {
         }
 
         // 1. Text encoding
+        let profiler = LTXVideoProfiler.shared
+        profiler.start("Text Encoding")
         let textEncodingStart = Date()
         let (inputIds, attentionMask) = tokenizePrompt(effectivePrompt, maxLength: textMaxLength)
 
@@ -650,6 +654,7 @@ public actor LTXPipeline {
 
         LTXDebug.log("Video text: \(videoTextEmbeddings.shape), Audio text: \(audioTextEmbeddings.shape)")
         timings.textEncoding = Date().timeIntervalSince(textEncodingStart)
+        profiler.end("Text Encoding")
 
         // Unload Gemma
         self.gemmaModel = nil
@@ -719,6 +724,8 @@ public actor LTXPipeline {
         let stage2NumStepsForProgress = STAGE_2_DISTILLED_SIGMA_VALUES.count - 1
         let totalStepsForProgress = stage1NumSteps + stage2NumStepsForProgress
         LTXDebug.log("=== Stage 1: Half-resolution \(hasAudio ? "dual" : "video-only") denoising (\(stage1NumSteps) steps) ===")
+        profiler.start("Denoising Stage 1")
+        profiler.setTotalSteps(stage1NumSteps + stage2NumStepsForProgress)
         let stage1Start = Date()
 
         for step in 0..<stage1NumSteps {
@@ -816,10 +823,12 @@ public actor LTXPipeline {
             }
 
             if (step + 1) % 5 == 0 { Memory.clearCache() }
-            timings.denoiseSteps.append(Date().timeIntervalSince(stepStart))
+            let stepDur = Date().timeIntervalSince(stepStart)
+            timings.denoiseSteps.append(stepDur)
             timings.sampleMemory()
+            profiler.recordStep(duration: stepDur)
 
-            LTXDebug.log("Stage 1 step \(step)/\(stage1NumSteps): σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext)), time=\(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
+            LTXDebug.log("Stage 1 step \(step)/\(stage1NumSteps): σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext)), time=\(String(format: "%.1f", stepDur))s")
         }
         LTXDebug.log("Stage 1 complete: \(String(format: "%.1f", Date().timeIntervalSince(stage1Start)))s")
 
@@ -833,11 +842,14 @@ public actor LTXPipeline {
             LTXDebug.log("Dumped stage1_output: \(s1.shape)")
         }
 
+        profiler.end("Denoising Stage 1")
+
         // === UPSCALE VIDEO 2x (audio unchanged) ===
         onProgress?(GenerationProgress(
             currentStep: totalStepsForProgress, totalSteps: totalStepsForProgress, sigma: 0, phase: .upscaling
         ))
         LTXDebug.log("=== Upscaling video latent 2x ===")
+        profiler.start("Upscaler 2x")
         let upscaleStart = Date()
 
         let upscaler = try loadSpatialUpscaler(from: upscalerWeightsPath)
@@ -859,6 +871,7 @@ public actor LTXPipeline {
         MLX.eval(videoLatent)
 
         LTXDebug.log("Upscale time: \(String(format: "%.1f", Date().timeIntervalSince(upscaleStart)))s, shape: \(videoLatent.shape)")
+        profiler.end("Upscaler 2x")
 
         // Dump upscaled latent
         if LTXDebug.isEnabled {
@@ -871,6 +884,7 @@ public actor LTXPipeline {
 
         // === STAGE 2: Refine at full resolution ===
         LTXDebug.log("=== Stage 2: Full-resolution \(hasAudio ? "dual" : "video-only") refinement (3 steps) ===")
+        profiler.start("Denoising Stage 2")
         let stage2Start = Date()
 
         let stage2Shape = VideoLatentShape.fromPixelDimensions(
@@ -1001,12 +1015,15 @@ public actor LTXPipeline {
                 MLX.eval(videoLatent)
             }
 
-            timings.denoiseSteps.append(Date().timeIntervalSince(stepStart))
+            let stepDur2 = Date().timeIntervalSince(stepStart)
+            timings.denoiseSteps.append(stepDur2)
             timings.sampleMemory()
+            profiler.recordStep(duration: stepDur2)
 
-            LTXDebug.log("Stage 2 step \(step)/\(stage2NumSteps): σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext)), time=\(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
+            LTXDebug.log("Stage 2 step \(step)/\(stage2NumSteps): σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext)), time=\(String(format: "%.1f", stepDur2))s")
         }
         LTXDebug.log("Stage 2 complete: \(String(format: "%.1f", Date().timeIntervalSince(stage2Start)))s")
+        profiler.end("Denoising Stage 2")
 
         // Unload transformer
         if memoryOptimization.unloadAfterUse {
@@ -1031,6 +1048,7 @@ public actor LTXPipeline {
             currentStep: totalStepsForProgress, totalSteps: totalStepsForProgress, sigma: 0, phase: .decoding
         ))
         LTXMemoryManager.setPhase(.vaeDecode)
+        profiler.start("VAE Decode")
         let vaeStart = Date()
         let videoTensor = decodeVideo(
             latent: videoLatent, decoder: vaeDecoder, timestep: nil,
@@ -1039,6 +1057,7 @@ public actor LTXPipeline {
         )
         MLX.eval(videoTensor)
         timings.vaeDecode = Date().timeIntervalSince(vaeStart)
+        profiler.end("VAE Decode")
 
         let trimmedVideo: MLXArray
         if videoTensor.dim(0) > config.numFrames {
@@ -1175,6 +1194,8 @@ public actor LTXPipeline {
         }
 
         // Phase 1: Text encoding
+        let profiler = LTXVideoProfiler.shared
+        profiler.start("Text Encoding")
         let textEncodingStart = Date()
         let (inputIds, attentionMask) = tokenizePrompt(effectivePrompt, maxLength: textMaxLength)
 
@@ -1199,6 +1220,7 @@ public actor LTXPipeline {
 
         LTXDebug.log("Text encoding: video=\(videoTextEmbeddings.shape), audio=\(audioTextEmbeddings?.shape.description ?? "nil")")
         timings.textEncoding = Date().timeIntervalSince(textEncodingStart)
+        profiler.end("Text Encoding")
 
         // Unload Gemma
         self.gemmaModel = nil
@@ -1338,6 +1360,8 @@ public actor LTXPipeline {
         // Denoising loop (matching Lightricks euler_denoising_loop)
         let modeStr = isPartialRetake ? "partial" : "full"
         LTXDebug.log("=== Single-stage \(modeStr) retake denoising (\(numSteps) steps) ===")
+        profiler.start("Denoising")
+        profiler.setTotalSteps(numSteps)
         let denoiseStart = Date()
 
         for step in 0..<numSteps {
@@ -1451,12 +1475,15 @@ public actor LTXPipeline {
             MLX.eval(videoLatent)
 
             if (step + 1) % 5 == 0 { Memory.clearCache() }
-            timings.denoiseSteps.append(Date().timeIntervalSince(stepStart))
+            let stepDurR = Date().timeIntervalSince(stepStart)
+            timings.denoiseSteps.append(stepDurR)
             timings.sampleMemory()
+            profiler.recordStep(duration: stepDurR)
 
-            LTXDebug.log("Step \(step)/\(numSteps): σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext)), time=\(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
+            LTXDebug.log("Step \(step)/\(numSteps): σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext)), time=\(String(format: "%.1f", stepDurR))s")
         }
         LTXDebug.log("Denoising complete: \(String(format: "%.1f", Date().timeIntervalSince(denoiseStart)))s")
+        profiler.end("Denoising")
 
         // Unload transformer
         if memoryOptimization.unloadAfterUse {
@@ -1471,6 +1498,7 @@ public actor LTXPipeline {
             currentStep: numSteps, totalSteps: numSteps, sigma: 0, phase: .decoding
         ))
         LTXMemoryManager.setPhase(.vaeDecode)
+        profiler.start("VAE Decode")
         let vaeStart = Date()
         let videoTensor = decodeVideo(
             latent: videoLatent, decoder: vaeDecoder, timestep: nil,
@@ -1479,6 +1507,7 @@ public actor LTXPipeline {
         )
         MLX.eval(videoTensor)
         timings.vaeDecode = Date().timeIntervalSince(vaeStart)
+        profiler.end("VAE Decode")
 
         let trimmedVideo: MLXArray
         if videoTensor.dim(0) > config.numFrames {
@@ -1867,7 +1896,7 @@ public actor LTXPipeline {
             config = ModelConfiguration(id: Self.defaultVLMModelID, extraEOSTokens: ["<end_of_turn>"])
             LTXDebug.log("Loading VLM from HuggingFace: \(Self.defaultVLMModelID)")
         }
-        let modelContainer = try await VLMModelFactory.shared.loadContainer(
+        let modelContainer = try await #huggingFaceLoadModelContainer(
             configuration: config,
             progressHandler: { progress in
                 if progress.fractionCompleted < 1.0 {

@@ -2,6 +2,8 @@
 
 Swift implementation of [LTX-2.3](https://github.com/Lightricks/LTX-2) video generation, optimized for Apple Silicon using [MLX](https://github.com/ml-explore/mlx-swift). Runs entirely on-device.
 
+[![FluxForge Studio on the App Store](https://img.shields.io/badge/App_Store-FluxForge_Studio-0D96F6?logo=apple&logoColor=white)](https://apps.apple.com/us/app/fluxforge-studio/id6758351212) [![TestFlight Beta](https://img.shields.io/badge/TestFlight-Beta-0D96F6?logo=apple&logoColor=white)](https://testflight.apple.com/join/QpZY8A27) [![Website](https://img.shields.io/badge/Website-www.vinceforge.com-blue)](https://www.vinceforge.com)
+
 ## Features
 
 | Feature | Status | Notes |

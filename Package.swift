@@ -19,7 +19,7 @@ let package = Package(
             targets: ["LTXVideoCLI"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.30.6"),
+        .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.31.1"),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", branch: "main"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.1.6"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.2.0"),
@@ -35,7 +35,9 @@ let package = Package(
                 .product(name: "MLXFast", package: "mlx-swift"),
                 .product(name: "MLXVLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
-                .product(name: "Transformers", package: "swift-transformers"),
+                .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
+                .product(name: "Hub", package: "swift-transformers"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
                 .product(name: "MLXOptimizers", package: "mlx-swift"),
             ]
         ),

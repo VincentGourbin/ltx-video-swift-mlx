@@ -11,7 +11,7 @@ struct LTXVideoCLI: AsyncParsableCommand {
         commandName: "ltx-video",
         abstract: "LTX-2.3 video generation on Mac with MLX",
         version: "0.1.0",
-        subcommands: [Generate.self, Retake.self, Download.self, Train.self, TrainingControl.self, Models.self, Info.self],
+        subcommands: [Generate.self, Retake.self, Profile.self, Download.self, Train.self, TrainingControl.self, Models.self, Info.self],
         defaultSubcommand: Info.self
     )
 }
