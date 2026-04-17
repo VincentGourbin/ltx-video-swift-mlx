@@ -542,12 +542,12 @@ class Embeddings1DConnector: Module {
     private func replacePaddedWithLearnableRegisters(
         hiddenStates: MLXArray,
         attentionMask: MLXArray
-    ) -> (MLXArray, MLXArray) {
+    ) throws -> (MLXArray, MLXArray) {
         let seqLen = hiddenStates.dim(1)
         let batchSize = hiddenStates.dim(0)
 
         guard seqLen % numLearnableRegisters == 0 else {
-            fatalError("Sequence length \(seqLen) must be divisible by numLearnableRegisters \(numLearnableRegisters)")
+            throw LTXError.invalidConfiguration("Sequence length \(seqLen) must be divisible by numLearnableRegisters \(numLearnableRegisters)")
         }
 
         // Tile registers to match sequence length
@@ -589,14 +589,14 @@ class Embeddings1DConnector: Module {
     func callAsFunction(
         _ hiddenStates: MLXArray,
         attentionMask: MLXArray? = nil
-    ) -> (MLXArray, MLXArray) {
+    ) throws -> (MLXArray, MLXArray) {
         let inputDtype = hiddenStates.dtype
         var x = hiddenStates
         var mask = attentionMask
 
         // Replace padded positions with learnable registers (in original dtype)
         if let m = mask {
-            let (newX, _) = replacePaddedWithLearnableRegisters(
+            let (newX, _) = try replacePaddedWithLearnableRegisters(
                 hiddenStates: x,
                 attentionMask: m
             )
@@ -699,7 +699,7 @@ class VideoGemmaTextEncoderModel: Module {
         hiddenStates: [MLXArray],
         attentionMask: MLXArray,
         paddingSide: String = "left"
-    ) -> VideoGemmaEncoderOutput {
+    ) throws -> VideoGemmaEncoderOutput {
         // Debug: Log Gemma hidden state stats for comparison with Python
         if LTXDebug.isEnabled {
             LTXDebug.log("[TextEnc] Gemma hidden states: \(hiddenStates.count) layers")
@@ -734,7 +734,7 @@ class VideoGemmaTextEncoderModel: Module {
         let connectorMask = convertToAdditiveMask(attentionMask, dtype: encoded.dtype)
 
         // Step 3b: Connector (2-layer transformer with registers + RoPE)
-        let (processed, outputMask) = embeddingsConnector(encoded, attentionMask: connectorMask)
+        let (processed, outputMask) = try embeddingsConnector(encoded, attentionMask: connectorMask)
         MLX.eval(processed)
         if LTXDebug.isEnabled {
             let procF32 = processed.asType(.float32)
@@ -762,7 +762,7 @@ class VideoGemmaTextEncoderModel: Module {
             MLX.eval(audioFE)
             LTXDebug.log("[TextEnc] Audio FE output: \(audioFE.shape)")
             let audioConnectorMask = convertToAdditiveMask(attentionMask, dtype: audioFE.dtype)
-            let (audioProcessed, audioOutputMask) = audioConnector(audioFE, attentionMask: audioConnectorMask)
+            let (audioProcessed, audioOutputMask) = try audioConnector(audioFE, attentionMask: audioConnectorMask)
             MLX.eval(audioProcessed)
             let audioBinaryMask = (audioOutputMask.squeezed(axes: [1, 2]) .>= -0.5).asType(.int32)
             audioEncoded = audioProcessed * audioBinaryMask.expandedDimensions(axis: -1).asType(audioProcessed.dtype)
@@ -780,10 +780,10 @@ class VideoGemmaTextEncoderModel: Module {
     func encodeProjected(
         projectedFeatures: MLXArray,
         attentionMask: MLXArray
-    ) -> VideoGemmaEncoderOutput {
+    ) throws -> VideoGemmaEncoderOutput {
         let connectorMask = convertToAdditiveMask(attentionMask, dtype: projectedFeatures.dtype)
 
-        let (processed, outputMask) = embeddingsConnector(projectedFeatures, attentionMask: connectorMask)
+        let (processed, outputMask) = try embeddingsConnector(projectedFeatures, attentionMask: connectorMask)
 
         let binaryMask = (outputMask.squeezed(axes: [1, 2]) .>= -0.5).asType(.int32)
         let finalEncoded = processed * binaryMask.expandedDimensions(axis: -1).asType(processed.dtype)
@@ -791,7 +791,7 @@ class VideoGemmaTextEncoderModel: Module {
         // Process audio connector if available
         var audioEncoded: MLXArray? = nil
         if let audioConnector = audioEmbeddingsConnector {
-            let (audioProcessed, audioOutputMask) = audioConnector(projectedFeatures, attentionMask: connectorMask)
+            let (audioProcessed, audioOutputMask) = try audioConnector(projectedFeatures, attentionMask: connectorMask)
             let audioBinaryMask = (audioOutputMask.squeezed(axes: [1, 2]) .>= -0.5).asType(.int32)
             audioEncoded = audioProcessed * audioBinaryMask.expandedDimensions(axis: -1).asType(audioProcessed.dtype)
         }
@@ -807,8 +807,8 @@ class VideoGemmaTextEncoderModel: Module {
         hiddenStates: [MLXArray],
         attentionMask: MLXArray,
         paddingSide: String = "left"
-    ) -> VideoGemmaEncoderOutput {
-        return encodeFromHiddenStates(
+    ) throws -> VideoGemmaEncoderOutput {
+        return try encodeFromHiddenStates(
             hiddenStates: hiddenStates,
             attentionMask: attentionMask,
             paddingSide: paddingSide
@@ -884,8 +884,8 @@ class LTXTextEncoder: Module {
         hiddenStates: [MLXArray],
         attentionMask: MLXArray,
         paddingSide: String = "left"
-    ) -> VideoGemmaEncoderOutput {
-        return encoder(
+    ) throws -> VideoGemmaEncoderOutput {
+        return try encoder(
             hiddenStates: hiddenStates,
             attentionMask: attentionMask,
             paddingSide: paddingSide

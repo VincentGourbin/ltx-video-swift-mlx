@@ -355,7 +355,7 @@ public class LoRATrainer {
                 let target = (videoNoise - videoLatent).asType(predicted.dtype)
                 return [mseLoss(predictions: predicted, targets: target, reduction: .mean)]
             } else {
-                fatalError("Unknown transformer type: \(type(of: model))")
+                preconditionFailure("Unknown transformer type: \(type(of: model))")
             }
         }
 

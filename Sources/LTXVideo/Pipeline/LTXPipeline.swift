@@ -644,7 +644,7 @@ public actor LTXPipeline {
         profiler.start("Text Encoding")
 
         profiler.start("Tokenization")
-        let (inputIds, attentionMask) = tokenizePrompt(effectivePrompt, maxLength: textMaxLength)
+        let (inputIds, attentionMask) = try tokenizePrompt(effectivePrompt, maxLength: textMaxLength)
         MLX.eval(inputIds, attentionMask)
         profiler.end("Tokenization")
 
@@ -661,7 +661,7 @@ public actor LTXPipeline {
         profiler.end("Gemma Forward")
 
         profiler.start("Feature Extractor + Connector")
-        let encoderOutput = textEncoder.encodeFromHiddenStates(
+        let encoderOutput = try textEncoder.encodeFromHiddenStates(
             hiddenStates: states,
             attentionMask: attentionMask,
             paddingSide: "left"
@@ -721,8 +721,8 @@ public actor LTXPipeline {
 
         // Scale initial noise
         videoLatent = videoLatent * stage1Sigmas[0]
-        if hasAudio {
-            audioLatentPacked = audioLatentPacked! * stage1Sigmas[0]
+        if hasAudio, let ap = audioLatentPacked {
+            audioLatentPacked = ap * stage1Sigmas[0]
         }
 
         // I2V: condition frame 0 with per-token timestep masking
@@ -773,10 +773,10 @@ public actor LTXPipeline {
 
             let videoPatchified = patchify(videoLatent).asType(.bfloat16)
 
-            if hasAudio, let ltx2 = ltx2Transformer {
+            if hasAudio, let ltx2 = ltx2Transformer, let ap = audioLatentPacked {
                 // Dual video/audio denoising
                 let audioTimestep = MLXArray([sigma])
-                let audioPatchified = audioLatentPacked!.asType(.bfloat16)
+                let audioPatchified = ap.asType(.bfloat16)
 
                 let (videoVelPred, audioVelPred) = ltx2(
                     videoLatent: videoPatchified,
@@ -809,8 +809,9 @@ public actor LTXPipeline {
                         sigma: sigma, sigmaNext: sigmaNext
                     )
                 }
-                audioLatentPacked = audioLatentPacked! + (sigmaNext - sigma) * audioVelocity
-                MLX.eval(videoLatent, audioLatentPacked!)
+                let updatedAudio = ap + (sigmaNext - sigma) * audioVelocity
+                audioLatentPacked = updatedAudio
+                MLX.eval(videoLatent, updatedAudio)
             } else if let videoTransformer = transformer {
                 // Video-only denoising
                 let velocityPred = videoTransformer(
@@ -916,9 +917,9 @@ public actor LTXPipeline {
         let videoNoise = generateNoise(shape: stage2Shape)
         videoLatent = MLXArray(noiseScale) * videoNoise + MLXArray(1.0 - noiseScale) * videoLatent
 
-        if hasAudio {
-            let audioReNoise = MLXRandom.normal(audioLatentPacked!.shape).asType(.float32)
-            audioLatentPacked = MLXArray(noiseScale) * audioReNoise + MLXArray(1.0 - noiseScale) * audioLatentPacked!
+        if hasAudio, let ap = audioLatentPacked {
+            let audioReNoise = MLXRandom.normal(ap.shape).asType(.float32)
+            audioLatentPacked = MLXArray(noiseScale) * audioReNoise + MLXArray(1.0 - noiseScale) * ap
         }
 
         // I2V stage 2: encode image at full resolution and condition frame 0
@@ -937,7 +938,7 @@ public actor LTXPipeline {
             MLX.eval(stage2CondMask!)
         }
         MLX.eval(videoLatent)
-        if hasAudio { MLX.eval(audioLatentPacked!) }
+        if hasAudio, let ap = audioLatentPacked { MLX.eval(ap) }
 
         // Dump re-noised latent
         if LTXDebug.isEnabled {
@@ -975,9 +976,9 @@ public actor LTXPipeline {
 
             let videoPatchified = patchify(videoLatent).asType(.bfloat16)
 
-            if hasAudio, let ltx2 = ltx2Transformer {
+            if hasAudio, let ltx2 = ltx2Transformer, let ap = audioLatentPacked {
                 let audioTimestep = MLXArray([sigma])
-                let audioPatchified = audioLatentPacked!.asType(.bfloat16)
+                let audioPatchified = ap.asType(.bfloat16)
 
                 let (videoVelPred, audioVelPred) = ltx2(
                     videoLatent: videoPatchified,
@@ -1006,8 +1007,9 @@ public actor LTXPipeline {
                 } else {
                     videoLatent = videoLatent + MLXArray(dt) * videoVelocity
                 }
-                audioLatentPacked = audioLatentPacked! + MLXArray(dt) * audioVelocity
-                MLX.eval(videoLatent, audioLatentPacked!)
+                let updatedAudio = ap + MLXArray(dt) * audioVelocity
+                audioLatentPacked = updatedAudio
+                MLX.eval(videoLatent, updatedAudio)
             } else if let videoTransformer = transformer {
                 let velocityPred = videoTransformer(
                     latent: videoPatchified,
@@ -1086,17 +1088,18 @@ public actor LTXPipeline {
         // Decode audio if present
         var audioWaveform: MLXArray? = nil
         var audioSampleRate: Int? = nil
-        if hasAudio, let audioVAE = audioVAE, let vocoder = vocoder {
+        if hasAudio, let ap = audioLatentPacked, let audioVAE = audioVAE, let vocoder = vocoder {
             LTXDebug.log("Decoding audio latents...")
-            let audioLatentUnpacked = unpackAudioLatents(audioLatentPacked!, numFrames: audioNumFrames)
-            audioWaveform = decodeAudio(
+            let audioLatentUnpacked = unpackAudioLatents(ap, numFrames: audioNumFrames)
+            let waveform = decodeAudio(
                 latents: audioLatentUnpacked,
                 audioVAE: audioVAE,
                 vocoder: vocoder
             )
-            MLX.eval(audioWaveform!)
+            MLX.eval(waveform)
+            audioWaveform = waveform
             audioSampleRate = vocoder.outputSampleRate
-            LTXDebug.log("Audio waveform: \(audioWaveform!.shape)")
+            LTXDebug.log("Audio waveform: \(waveform.shape)")
         }
 
         // Signal export phase
@@ -1186,10 +1189,10 @@ public actor LTXPipeline {
         let regenerateAudio = config.regenerateAudio
         if ltx2Transformer != nil, let audioVAE = audioVAE, audioVAE.encoder != nil, let waveform = sourceAudioWaveform {
             LTXDebug.log("Encoding source audio for \(regenerateAudio ? "regeneration" : "cross-modal attention")...")
-            let melSpec = audioProcessor.melSpectrogram(waveform)
+            let melSpec = try audioProcessor.melSpectrogram(waveform)
             eval(melSpec)
 
-            let audioLatent = audioVAE.encode(melSpec)  // (1, 8, T_latent, 16)
+            let audioLatent = try audioVAE.encode(melSpec)  // (1, 8, T_latent, 16)
             eval(audioLatent)
 
             retakeAudioNumFrames = audioLatent.dim(2)
@@ -1210,7 +1213,7 @@ public actor LTXPipeline {
         // Phase 1: Text encoding
         let profiler = LTXVideoProfiler.shared
         profiler.start("Text Encoding")
-        let (inputIds, attentionMask) = tokenizePrompt(effectivePrompt, maxLength: textMaxLength)
+        let (inputIds, attentionMask) = try tokenizePrompt(effectivePrompt, maxLength: textMaxLength)
 
         guard let gemma = gemmaModel else {
             throw LTXError.modelNotLoaded("Gemma model not loaded")
@@ -1221,7 +1224,7 @@ public actor LTXPipeline {
             throw LTXError.generationFailed("Failed to extract Gemma hidden states")
         }
 
-        let encoderOutput = textEncoder.encodeFromHiddenStates(
+        let encoderOutput = try textEncoder.encodeFromHiddenStates(
             hiddenStates: states,
             attentionMask: attentionMask,
             paddingSide: "left"
@@ -1329,12 +1332,12 @@ public actor LTXPipeline {
                 throw LTXError.modelNotLoaded("Failed to reload Gemma for negative prompt")
             }
             let negPrompt = ""
-            let (negInputIds, negAttentionMask) = tokenizePrompt(negPrompt, maxLength: textMaxLength)
+            let (negInputIds, negAttentionMask) = try tokenizePrompt(negPrompt, maxLength: textMaxLength)
             let (_, negAllHidden) = gemma2(negInputIds, attentionMask: negAttentionMask, outputHiddenStates: true)
             guard let negStates = negAllHidden, negStates.count == gemma2.config.hiddenLayers + 1 else {
                 throw LTXError.generationFailed("Failed to extract Gemma hidden states for negative prompt")
             }
-            let negEncoderOutput = textEncoder.encodeFromHiddenStates(
+            let negEncoderOutput = try textEncoder.encodeFromHiddenStates(
                 hiddenStates: negStates,
                 attentionMask: negAttentionMask,
                 paddingSide: "left"
@@ -1414,7 +1417,7 @@ public actor LTXPipeline {
             }
 
             // Helper: run transformer and compute denoised x0
-            func runTransformer(context: MLXArray, audioContext: MLXArray) -> MLXArray {
+            func runTransformer(context: MLXArray, audioContext: MLXArray) throws -> MLXArray {
                 if let ltx2 = ltx2Transformer {
                     let audioInput = (audioLatentPacked ?? frozenAudioLatentPacked ?? MLXArray.zeros([videoPatchified.dim(0), 1, 128])).asType(DType.bfloat16)
                     let audioFrames = (audioLatentPacked != nil || frozenAudioLatentPacked != nil) ? retakeAudioNumFrames : 1
@@ -1450,19 +1453,19 @@ public actor LTXPipeline {
                     let vel = unpatchify(velPred, shape: latentShape).asType(.float32)
                     return videoLatent - sigma5d * vel
                 } else {
-                    fatalError("No transformer loaded")
+                    throw LTXError.modelNotLoaded("No transformer loaded")
                 }
             }
 
             // Positive pass (conditioned)
             let audioCtx = (audioTextEmbeddings ?? MLXArray.zeros([videoPatchified.dim(0), 1, ltx2Transformer?.config.audioInnerDim ?? 2048])).asType(.bfloat16)
-            let condDenoised = runTransformer(context: videoTextEmbeddings, audioContext: audioCtx)
+            let condDenoised = try runTransformer(context: videoTextEmbeddings, audioContext: audioCtx)
             var denoisedVideo = condDenoised
 
             // CFG: negative pass + guidance (dev model only)
             if cfgScale != 1.0, let negCtx = negVideoTextEmbeddings {
                 let negAudioCtx = (negAudioTextEmbeddings ?? audioCtx).asType(.bfloat16)
-                let negDenoised = runTransformer(context: negCtx, audioContext: negAudioCtx)
+                let negDenoised = try runTransformer(context: negCtx, audioContext: negAudioCtx)
 
                 // CFG: pred = cond + (cfg_scale - 1) * (cond - uncond)
                 denoisedVideo = denoisedVideo + MLXArray(cfgScale - 1.0) * (condDenoised - negDenoised)
@@ -1473,7 +1476,7 @@ public actor LTXPipeline {
                 if let ltx2 = ltx2Transformer { ltx2.setSTGBlocks(stgBlocks) }
                 if let t = transformer as? LTXTransformer { t.setSTGBlocks(stgBlocks) }
 
-                let stgDenoised = runTransformer(context: videoTextEmbeddings, audioContext: audioCtx)
+                let stgDenoised = try runTransformer(context: videoTextEmbeddings, audioContext: audioCtx)
 
                 if let ltx2 = ltx2Transformer { ltx2.clearSTG() }
                 if let t = transformer as? LTXTransformer { t.clearSTG() }
@@ -1548,14 +1551,15 @@ public actor LTXPipeline {
            let audioVAE = audioVAE, let vocoder = vocoder {
             LTXDebug.log("Decoding regenerated audio...")
             let audioLatentUnpacked = unpackAudioLatents(ap, numFrames: retakeAudioNumFrames)
-            audioWaveform = decodeAudio(
+            let waveform = decodeAudio(
                 latents: audioLatentUnpacked,
                 audioVAE: audioVAE,
                 vocoder: vocoder
             )
-            MLX.eval(audioWaveform!)
+            MLX.eval(waveform)
+            audioWaveform = waveform
             audioSampleRate = vocoder.outputSampleRate
-            LTXDebug.log("Regenerated audio: \(audioWaveform!.shape)")
+            LTXDebug.log("Regenerated audio: \(waveform.shape)")
         }
 
         LTXMemoryManager.resetCacheLimit()
@@ -2021,7 +2025,7 @@ public actor LTXPipeline {
         }
 
         // Encode
-        let (embeddings, mask) = encodePrompt(effectivePrompt, encoder: textEncoder)
+        let (embeddings, mask) = try encodePrompt(effectivePrompt, encoder: textEncoder)
         MLX.eval(embeddings, mask)
 
         // Stats
@@ -2222,7 +2226,7 @@ public actor LTXPipeline {
             throw LTXError.modelNotLoaded("Gemma model not loaded")
         }
 
-        let (embeddings, mask) = encodePrompt(prompt, encoder: textEncoder)
+        let (embeddings, mask) = try encodePrompt(prompt, encoder: textEncoder)
         eval(embeddings, mask)
 
         let mean = embeddings.mean().item(Float.self)
@@ -2306,7 +2310,7 @@ public actor LTXPipeline {
     private let textMaxLength = 1024
 
     /// 4. Return video encoding [1, textMaxLength, 3840] and attention mask [1, textMaxLength]
-    private func encodePrompt(_ prompt: String, encoder: VideoGemmaTextEncoderModel) -> (encoding: MLXArray, mask: MLXArray) {
+    private func encodePrompt(_ prompt: String, encoder: VideoGemmaTextEncoderModel) throws -> (encoding: MLXArray, mask: MLXArray) {
         guard let gemma = gemmaModel else {
             LTXDebug.log("Warning: Gemma model not loaded, using placeholder embeddings")
             let placeholder = createPlaceholderEmbeddings(prompt: prompt)
@@ -2315,7 +2319,7 @@ public actor LTXPipeline {
         }
 
         // Step 1: Tokenize with left-padding
-        let (inputIds, attentionMask) = tokenizePrompt(prompt, maxLength: textMaxLength)
+        let (inputIds, attentionMask) = try tokenizePrompt(prompt, maxLength: textMaxLength)
         let activeTokens = Int(attentionMask.sum().item(Int32.self))
         LTXDebug.log("Tokenized: \(inputIds.shape), padding=\(textMaxLength - activeTokens), active=\(activeTokens)")
         // Debug: show first and last tokens for comparison with Python
@@ -2341,7 +2345,7 @@ public actor LTXPipeline {
         LTXDebug.log("Got \(states.count) hidden states from Gemma")
 
         // Step 3: Pass through text encoder (feature extractor + connector)
-        let encoderOutput = encoder.encodeFromHiddenStates(
+        let encoderOutput = try encoder.encodeFromHiddenStates(
             hiddenStates: states,
             attentionMask: attentionMask,
             paddingSide: "left"
@@ -2356,9 +2360,9 @@ public actor LTXPipeline {
     }
 
     /// Tokenize prompt with left-padding (matching Python mlx-video max_length=1024)
-    private func tokenizePrompt(_ prompt: String, maxLength: Int = 1024) -> (inputIds: MLXArray, attentionMask: MLXArray) {
+    private func tokenizePrompt(_ prompt: String, maxLength: Int = 1024) throws -> (inputIds: MLXArray, attentionMask: MLXArray) {
         guard let tokenizer = tokenizer else {
-            fatalError("Tokenizer not loaded. Call loadModels() first.")
+            throw LTXError.modelNotLoaded("Tokenizer not loaded. Call loadModels() first.")
         }
 
         // Tokenize (Gemma tokenizer adds BOS=2 automatically)

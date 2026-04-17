@@ -665,9 +665,9 @@ class AudioVAE: Module {
     ///
     /// - Parameter melSpectrogram: Stereo mel spectrogram (B, 2, T_mel, 64)
     /// - Returns: Normalized audio latents (B, 8, T_latent, 16)
-    func encode(_ melSpectrogram: MLXArray) -> MLXArray {
+    func encode(_ melSpectrogram: MLXArray) throws -> MLXArray {
         guard let encoder = encoder else {
-            fatalError("AudioVAE encoder not initialized. Use includeEncoder: true in init.")
+            throw LTXError.modelNotLoaded("AudioVAE encoder not initialized. Use includeEncoder: true in init.")
         }
 
         // Run encoder: (B, 2, T_mel, 64) → (B, 16, T_latent, mel_bins/4)

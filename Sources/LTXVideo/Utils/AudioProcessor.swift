@@ -105,8 +105,10 @@ public class AudioProcessor {
                 CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: &data)
 
                 let floatCount = length / MemoryLayout<Float>.size
+                guard floatCount > 0 else { continue }
                 data.withUnsafeBufferPointer { ptr in
-                    ptr.baseAddress!.withMemoryRebound(to: Float.self, capacity: floatCount) { floatPtr in
+                    guard let base = ptr.baseAddress else { return }
+                    base.withMemoryRebound(to: Float.self, capacity: floatCount) { floatPtr in
                         allSamples.append(contentsOf: UnsafeBufferPointer(start: floatPtr, count: floatCount))
                     }
                 }
@@ -126,9 +128,9 @@ public class AudioProcessor {
     ///
     /// - Parameter waveform: Mono waveform `(samples,)` float32 at 16kHz
     /// - Returns: Stereo mel spectrogram `(1, 2, T_mel, 64)` for AudioVAE
-    public func melSpectrogram(_ waveform: MLXArray) -> MLXArray {
+    public func melSpectrogram(_ waveform: MLXArray) throws -> MLXArray {
         // Compute mel spectrogram for mono signal
-        let mel = computeMelSpectrogram(waveform)  // (T_mel, nMels)
+        let mel = try computeMelSpectrogram(waveform)  // (T_mel, nMels)
 
         // Duplicate mono → stereo: (1, 2, T_mel, nMels)
         let melBatched = mel.reshaped([1, 1, mel.dim(0), mel.dim(1)])
@@ -140,13 +142,13 @@ public class AudioProcessor {
     // MARK: - Internal
 
     /// Compute mel spectrogram: STFT → power spectrum → mel filterbank → log
-    func computeMelSpectrogram(_ waveform: MLXArray) -> MLXArray {
+    func computeMelSpectrogram(_ waveform: MLXArray) throws -> MLXArray {
         // Pad waveform to center the STFT frames (reflect padding)
         let padSize = nFFT / 2
         let padded = padReflect(waveform, padSize: padSize)
 
         // STFT via rfft on windowed frames
-        let frames = extractFrames(padded)  // (numFrames, nFFT)
+        let frames = try extractFrames(padded)  // (numFrames, nFFT)
         let windowed = frames * window      // Apply Hann window
 
         // rfft: (numFrames, nFFT) → (numFrames, nFFT/2+1) complex
@@ -167,9 +169,13 @@ public class AudioProcessor {
     }
 
     /// Extract overlapping frames from a 1D signal
-    private func extractFrames(_ signal: MLXArray) -> MLXArray {
+    private func extractFrames(_ signal: MLXArray) throws -> MLXArray {
         let signalLength = signal.dim(0)
         let numFrames = 1 + (signalLength - nFFT) / hopLength
+
+        guard numFrames > 0 else {
+            throw AudioProcessorError.audioTooShort(samples: signalLength, minimumSamples: nFFT)
+        }
 
         // Build frame indices using MLX operations
         var frameArrays: [MLXArray] = []
@@ -278,14 +284,16 @@ public class AudioProcessor {
 
 // MARK: - Errors
 
-enum AudioProcessorError: Error, LocalizedError {
+public enum AudioProcessorError: Error, LocalizedError, Sendable {
     case extractionFailed(String)
     case noAudioTrack(String)
+    case audioTooShort(samples: Int, minimumSamples: Int)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .extractionFailed(let path): return "Audio extraction failed for \(path)"
         case .noAudioTrack(let path): return "No audio track found in \(path)"
+        case .audioTooShort(let samples, let minimum): return "Audio too short (\(samples) samples, minimum \(minimum) required for STFT)"
         }
     }
 }

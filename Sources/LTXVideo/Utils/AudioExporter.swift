@@ -37,15 +37,20 @@ public enum AudioExporter {
         MLX.eval(clamped)
 
         // Interleave channels: [L0, R0, L1, R1, ...]
-        var interleavedData = Data(capacity: numSamples * numChannels * 2)
+        // Bulk extract all samples at once (avoids per-scalar MLX calls)
+        let scaled = (clamped * 32767.0).asType(.float32)
+        MLX.eval(scaled)
 
-        for i in 0..<numSamples {
-            for ch in 0..<numChannels {
-                let sample = clamped[ch, i].item(Float.self)
-                let int16Sample = Int16(max(-32768, min(32767, sample * 32767.0)))
-                var le = int16Sample.littleEndian
-                interleavedData.append(Data(bytes: &le, count: 2))
-            }
+        // Transpose to (samples, channels) for interleaved layout, then flatten
+        let interleaved = scaled.transposed(1, 0).reshaped([-1])  // [L0, R0, L1, R1, ...]
+        MLX.eval(interleaved)
+        let floatSamples: [Float] = interleaved.asArray(Float.self)
+
+        var interleavedData = Data(capacity: floatSamples.count * 2)
+        for sample in floatSamples {
+            let int16Sample = Int16(max(-32768, min(32767, sample)))
+            var le = int16Sample.littleEndian
+            interleavedData.append(Data(bytes: &le, count: 2))
         }
 
         // Build WAV header
