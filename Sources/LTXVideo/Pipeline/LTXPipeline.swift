@@ -1925,12 +1925,13 @@ public actor LTXPipeline {
         // Prepare and generate (seed matches Lightricks reference: seed=42)
         MLXRandom.seed(42)
         let lmInput = try await modelContainer.prepare(input: userInput)
+        // Note: repetitionPenalty disabled — mlx-swift-lm TokenRing.loadPrompt has a bug
+        // where prompt.dim(0) returns batch dim (1) instead of seq length for 2D prompts,
+        // causing a shape mismatch in the ring buffer. Tracked upstream.
         let generateParams = GenerateParameters(
             maxTokens: maxTokens,
             temperature: temperature,
-            topP: 0.95,
-            repetitionPenalty: 1.1,
-            repetitionContextSize: 64
+            topP: 0.95
         )
 
         var generatedText = ""
