@@ -32,16 +32,10 @@ public enum AudioExporter {
         let numSamples = audio.dim(1)
 
         // Convert to interleaved Int16 samples
-        // Clamp to [-1, 1] and scale to Int16 range
+        // Clamp to [-1, 1], scale to Int16 range, interleave channels
+        // Single eval materializes the full lazy graph at once
         let clamped = MLX.clip(audio, min: -1.0, max: 1.0).asType(.float32)
-        MLX.eval(clamped)
-
-        // Interleave channels: [L0, R0, L1, R1, ...]
-        // Bulk extract all samples at once (avoids per-scalar MLX calls)
-        let scaled = (clamped * 32767.0).asType(.float32)
-        MLX.eval(scaled)
-
-        // Transpose to (samples, channels) for interleaved layout, then flatten
+        let scaled = clamped * 32767.0
         let interleaved = scaled.transposed(1, 0).reshaped([-1])  // [L0, R0, L1, R1, ...]
         MLX.eval(interleaved)
         let floatSamples: [Float] = interleaved.asArray(Float.self)
