@@ -342,6 +342,12 @@ public struct LTXVideoGenerationConfig: Sendable {
     /// When true, audio is denoised alongside video using LTX2Transformer.
     public var regenerateAudio: Bool
 
+    /// Optional list of keyframes for multi-frame interpolation (first / middle / last frame).
+    /// When non-empty, generation is constrained to pass through each keyframe at its
+    /// specified pixel frame index. Mutually exclusive with `videoPath` (retake).
+    /// If both `imagePath` and `keyframes` are provided, `keyframes` takes precedence.
+    public var keyframes: [KeyframeInput]
+
     public init(
         width: Int = 704,
         height: Int = 480,
@@ -355,7 +361,8 @@ public struct LTXVideoGenerationConfig: Sendable {
         retakeStrength: Float = 0.8,
         retakeStartTime: Float? = nil,
         retakeEndTime: Float? = nil,
-        regenerateAudio: Bool = false
+        regenerateAudio: Bool = false,
+        keyframes: [KeyframeInput] = []
     ) {
         self.width = width
         self.height = height
@@ -370,6 +377,7 @@ public struct LTXVideoGenerationConfig: Sendable {
         self.retakeStartTime = retakeStartTime
         self.retakeEndTime = retakeEndTime
         self.regenerateAudio = regenerateAudio
+        self.keyframes = keyframes
     }
 
     /// Convenience initializer that applies model-specific defaults.
@@ -387,7 +395,8 @@ public struct LTXVideoGenerationConfig: Sendable {
         retakeStrength: Float = 0.8,
         retakeStartTime: Float? = nil,
         retakeEndTime: Float? = nil,
-        regenerateAudio: Bool = false
+        regenerateAudio: Bool = false,
+        keyframes: [KeyframeInput] = []
     ) {
         self.width = width
         self.height = height
@@ -402,6 +411,7 @@ public struct LTXVideoGenerationConfig: Sendable {
         self.retakeStartTime = retakeStartTime
         self.retakeEndTime = retakeEndTime
         self.regenerateAudio = regenerateAudio
+        self.keyframes = keyframes
     }
 
     /// Validate the configuration
@@ -453,6 +463,14 @@ public struct LTXVideoGenerationConfig: Sendable {
             guard retakeStrength > 0.0 && retakeStrength <= 1.0 else {
                 throw LTXError.invalidConfiguration("Retake strength must be in (0.0, 1.0], got \(retakeStrength)")
             }
+        }
+
+        // Validate keyframes
+        if !keyframes.isEmpty {
+            guard videoPath == nil else {
+                throw LTXError.invalidConfiguration("Keyframes cannot be combined with retake (videoPath)")
+            }
+            try validateKeyframes(keyframes, numFrames: numFrames)
         }
     }
 
