@@ -72,6 +72,32 @@ ltx-video generate "The car drives away into the sunset" \
     --image photo.png -w 768 -h 512 -f 121 --enhance-prompt
 ```
 
+### Keyframe Interpolation
+
+Pin generation to one or more reference images at chosen pixel positions —
+first frame, optional middle frame(s), and/or last frame, in any combination.
+`--keyframe PATH:FRAME_IDX` is repeatable; `--image PATH` is shorthand for
+`--keyframe PATH:0`.
+
+```bash
+# Last-frame anchor: free start, video ends on the reference image
+ltx-video generate "A car descends from the sky and lands softly on a road" \
+    --keyframe photo.png:120 -w 768 -h 512 -f 121 --audio
+
+# Loop: same image at start and end
+ltx-video generate "The car takes off into the sky, then returns to its parking spot" \
+    --keyframe photo.png:0 --keyframe photo.png:120 -w 768 -h 512 -f 121
+
+# Mid-anchor: free intro, fixed middle, free outro
+ltx-video generate "Descending through clouds, parks here, then takes off again" \
+    --keyframe photo.png:120 -w 768 -h 512 -f 241 --audio
+```
+
+Latent stride is 8 — two keyframes within the same 8-pixel-frame group
+(e.g. pixel 1 and pixel 8) collide on the same latent slot and are rejected.
+See [docs/examples/keyframe-interpolation/](docs/examples/keyframe-interpolation/)
+for validated end-to-end examples and timings.
+
 ### LoRA
 
 ```bash
@@ -190,6 +216,42 @@ try await VideoExporter.exportVideo(
 )
 ```
 
+#### Keyframe Interpolation
+
+Constrain generation to pass through one or more reference images at chosen
+pixel positions. The legacy `imagePath` field is preserved as a single keyframe
+at pixel 0 (mathematically equivalent to before for the default
+`imageCondNoiseScale = 0`).
+
+```swift
+import LTXVideo
+
+let config = LTXVideoGenerationConfig(
+    width: 768, height: 512, numFrames: 241,
+    seed: 42,
+    keyframes: [
+        KeyframeInput(path: "/abs/path/start.png", pixelFrameIndex: 0),
+        KeyframeInput(path: "/abs/path/end.png",   pixelFrameIndex: 240)
+    ]
+)
+try config.validate()  // throws on missing file, range, slot collision, strength != 1.0
+
+let result = try await pipeline.generateVideo(
+    prompt: "Smooth transition between two scenes",
+    config: config,
+    upscalerWeightsPath: upscalerPath
+)
+```
+
+`KeyframeInput` fields:
+- `path: String` — image file path (any format `loadImage` accepts).
+- `pixelFrameIndex: Int` — target pixel position, in `[0, numFrames - 1]`.
+- `strength: Float` — must be `1.0` (hard injection); soft conditioning not yet wired.
+
+Helpers exposed for advanced use:
+- `pixelFrameToLatentFrame(_:)` — maps pixel index to latent slot (stride 8).
+- `validateKeyframes(_:numFrames:)` — same checks as `LTXVideoGenerationConfig.validate()` runs.
+
 ### LoRA Training (Beta)
 
 ```swift
@@ -276,7 +338,8 @@ flowchart TD
 | `-h, --height` | `512` | Video height (divisible by 64) |
 | `-f, --frames` | `121` | Frame count (must be 8n+1) |
 | `--seed` | random | Random seed |
-| `--image` | none | Input image for I2V |
+| `--image` | none | Input image for I2V (shorthand for `--keyframe PATH:0`) |
+| `--keyframe` | none | Repeatable keyframe spec `PATH:FRAME_IDX[:STRENGTH]` (mutually exclusive with `--image`) |
 | `--lora` | none | Path to LoRA .safetensors file |
 | `--lora-scale` | `1.0` | LoRA strength (0.0–1.0) |
 | `--audio` | off | Enable audio generation |

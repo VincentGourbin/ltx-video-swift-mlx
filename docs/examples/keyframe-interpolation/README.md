@@ -38,9 +38,22 @@ for `--keyframe PATH:0` (the two flags are mutually exclusive).
 - Pixel `FRAME_IDX` must be in `[0, numFrames - 1]`.
 - Two keyframes within the same 8-pixel-frame group share the same latent slot
   and are rejected (e.g. `pixel 1` and `pixel 8` both map to latent slot 1).
-- `STRENGTH` is currently clamped to 1.0 (hard injection); soft conditioning is
-  reserved for a future PR.
+- `STRENGTH` must be exactly `1.0` (hard injection). Values `!= 1.0` are
+  rejected by the validator until soft conditioning is wired through in a
+  future PR.
 - Multi-keyframe combined with `--video` (retake) is not supported.
+
+### Behavioral note vs. legacy `--image`
+
+When `imageCondNoiseScale == 0` (the default), the new keyframe path is
+mathematically equivalent to the previous frame-0-only frame-skip Euler step.
+
+When `imageCondNoiseScale > 0`, there is one subtle divergence: the new code
+unconditionally re-injects the **clean** keyframe latent at the end of every
+denoising step, whereas the previous code left the noised pre-step injection
+in place at the end of stage 1. The new behavior produces a cleaner final
+keyframe slot — arguably more correct, but a possible visible difference for
+users who relied on the old behavior with non-zero noise scale.
 
 ---
 

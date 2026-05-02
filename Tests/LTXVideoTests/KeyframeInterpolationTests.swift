@@ -108,6 +108,16 @@ struct ValidateKeyframesTests {
         }
     }
 
+    @Test func testStrengthBelowOneFails() throws {
+        // Soft conditioning is not yet implemented — values in (0, 1) must be rejected
+        // explicitly so users don't silently get hard injection when expecting blending.
+        let path = try makeTempImage()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        #expect(throws: LTXError.self) {
+            try validateKeyframes([KeyframeInput(path: path, pixelFrameIndex: 0, strength: 0.5)], numFrames: 9)
+        }
+    }
+
     @Test func testDuplicatePixelIndexFails() throws {
         let path = try makeTempImage()
         defer { try? FileManager.default.removeItem(atPath: path) }

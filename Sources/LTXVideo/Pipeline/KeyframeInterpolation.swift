@@ -29,8 +29,9 @@ public struct KeyframeInput: Sendable, Equatable {
     /// Pixel-space frame index where this keyframe applies (0-based, < numFrames).
     public let pixelFrameIndex: Int
 
-    /// Conditioning strength in `[0, 1]`. 1.0 = hard injection (the latent is forced to
-    /// the encoded image), values < 1.0 reserved for future soft-conditioning support.
+    /// Conditioning strength. Currently must be `1.0` (hard injection — the latent
+    /// is forced to the encoded image). Values `!= 1.0` are rejected by
+    /// `validateKeyframes()` until soft conditioning is wired through.
     public let strength: Float
 
     public init(path: String, pixelFrameIndex: Int, strength: Float = 1.0) {
@@ -74,9 +75,10 @@ public func validateKeyframes(_ keyframes: [KeyframeInput], numFrames: Int) thro
                 "Keyframe pixelFrameIndex \(kf.pixelFrameIndex) out of range [0, \(numFrames - 1)]"
             )
         }
-        guard kf.strength > 0 && kf.strength <= 1.0 else {
+        guard kf.strength == 1.0 else {
             throw LTXError.invalidConfiguration(
-                "Keyframe strength must be in (0.0, 1.0], got \(kf.strength) for \(kf.path)"
+                "Keyframe strength must be 1.0 (got \(kf.strength) for \(kf.path)). " +
+                "Soft conditioning (strength < 1.0) is not yet implemented; injection is hard."
             )
         }
         guard seenPixelIndices.insert(kf.pixelFrameIndex).inserted else {
