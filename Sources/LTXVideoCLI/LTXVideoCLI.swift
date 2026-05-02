@@ -16,6 +16,39 @@ struct LTXVideoCLI: AsyncParsableCommand {
     )
 }
 
+// MARK: - Keyframe Spec Parsing
+
+/// Parse a `--keyframe` argument of the form `PATH:FRAME_IDX[:STRENGTH]`.
+///
+/// The path may contain colons (e.g. on Windows-style paths) — only the last one
+/// or two colon-separated tokens are interpreted as numeric. We rsplit at most
+/// twice and try to parse the trailing 1–2 tokens as `FRAME_IDX[, STRENGTH]`.
+func parseKeyframeSpec(_ raw: String) throws -> KeyframeInput {
+    let parts = raw.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+    guard parts.count >= 2 else {
+        throw ValidationError("Invalid --keyframe spec '\(raw)'. Expected PATH:FRAME_IDX[:STRENGTH]")
+    }
+
+    // Try 3-token form first (path may contain ':' so we also try a fallback)
+    if parts.count >= 3,
+       let frameIdx = Int(parts[parts.count - 2]),
+       let strength = Float(parts[parts.count - 1]) {
+        let path = parts[0..<(parts.count - 2)].joined(separator: ":")
+        return KeyframeInput(path: path, pixelFrameIndex: frameIdx, strength: strength)
+    }
+
+    // 2-token form: PATH:FRAME_IDX
+    if let frameIdx = Int(parts[parts.count - 1]) {
+        let path = parts[0..<(parts.count - 1)].joined(separator: ":")
+        return KeyframeInput(path: path, pixelFrameIndex: frameIdx)
+    }
+
+    throw ValidationError(
+        "Invalid --keyframe spec '\(raw)'. Could not parse FRAME_IDX (and optional STRENGTH). " +
+        "Expected PATH:FRAME_IDX[:STRENGTH], e.g. first.png:0 or last.png:120:1.0"
+    )
+}
+
 // MARK: - Generate Command
 
 struct Generate: AsyncParsableCommand {
@@ -41,8 +74,12 @@ struct Generate: AsyncParsableCommand {
     @Option(name: .long, help: "Random seed for reproducibility")
     var seed: UInt64?
 
-    @Option(name: .long, help: "Input image for image-to-video generation")
+    @Option(name: .long, help: "Input image for image-to-video generation (shorthand for --keyframe PATH:0)")
     var image: String?
+
+    @Option(name: .long, parsing: .singleValue,
+            help: "Keyframe constraint, format PATH:FRAME_IDX[:STRENGTH]. Repeatable. Example: --keyframe first.png:0 --keyframe last.png:120. Latent stride is 8, so two keyframes within the same 8-frame group cannot coexist.")
+    var keyframe: [String] = []
 
     @Flag(name: .long, help: "Generate audio alongside video (dual video/audio denoising)")
     var audio: Bool = false
@@ -118,13 +155,25 @@ struct Generate: AsyncParsableCommand {
             }
         }
 
-        let isI2V = image != nil
+        // Parse keyframe specs from CLI strings (PATH:FRAME_IDX[:STRENGTH])
+        let parsedKeyframes = try keyframe.map { try parseKeyframeSpec($0) }
+        if !parsedKeyframes.isEmpty && image != nil {
+            throw ValidationError("--image and --keyframe are mutually exclusive (use --keyframe PATH:0 for first-frame conditioning)")
+        }
+        let isI2V = image != nil || !parsedKeyframes.isEmpty
 
         print("LTX-2.3 Video Generation (Two-Stage Distilled)")
         print("================================================")
-        print("Mode: \(isI2V ? "image-to-video" : "text-to-video")")
-        if let imagePath = image {
-            print("Input image: \(imagePath)")
+        if !parsedKeyframes.isEmpty {
+            print("Mode: keyframe interpolation (\(parsedKeyframes.count) keyframe\(parsedKeyframes.count == 1 ? "" : "s"))")
+            for kf in parsedKeyframes {
+                print("  Keyframe @ pixel frame \(kf.pixelFrameIndex): \(kf.path)")
+            }
+        } else {
+            print("Mode: \(isI2V ? "image-to-video" : "text-to-video")")
+            if let imagePath = image {
+                print("Input image: \(imagePath)")
+            }
         }
         print("Prompt: \(prompt)")
         print("Output: \(output)")
@@ -226,7 +275,8 @@ struct Generate: AsyncParsableCommand {
             numSteps: 8,
             seed: seed,
             enhancePrompt: enhancePrompt,
-            imagePath: image
+            imagePath: parsedKeyframes.isEmpty ? image : nil,
+            keyframes: parsedKeyframes
         )
 
         // Generate — ONE API call
