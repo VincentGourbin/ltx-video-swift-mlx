@@ -618,23 +618,34 @@ public actor LTXPipeline {
 
         let halfWidth = config.width / 2
         let halfHeight = config.height / 2
-        let isI2V = config.imagePath != nil
 
-        LTXDebug.log("Two-stage generation: \(halfWidth)x\(halfHeight) → \(config.width)x\(config.height), audio=\(hasAudio)")
+        // Resolve keyframes: explicit list takes priority, --image is sugar for [(image, 0)]
+        let effectiveKeyframes: [KeyframeInput]
+        if !config.keyframes.isEmpty {
+            effectiveKeyframes = config.keyframes
+        } else if let imagePath = config.imagePath {
+            effectiveKeyframes = [KeyframeInput(path: imagePath, pixelFrameIndex: 0)]
+        } else {
+            effectiveKeyframes = []
+        }
+        let isI2V = !effectiveKeyframes.isEmpty
 
-        // 0. Encode image at half-res if I2V
-        var halfResImageLatent: MLXArray? = nil
-        if let imagePath = config.imagePath {
-            LTXDebug.log("Two-stage I2V: encoding image at \(halfWidth)x\(halfHeight)")
-            halfResImageLatent = try await encodeImage(path: imagePath, width: halfWidth, height: halfHeight)
+        LTXDebug.log("Two-stage generation: \(halfWidth)x\(halfHeight) → \(config.width)x\(config.height), audio=\(hasAudio), keyframes=\(effectiveKeyframes.count)")
+
+        // 0. Encode keyframes at half-res
+        var halfResKeyframes: [EncodedKeyframe] = []
+        if isI2V {
+            LTXDebug.log("Two-stage: encoding \(effectiveKeyframes.count) keyframe(s) at \(halfWidth)x\(halfHeight)")
+            halfResKeyframes = try await encodeKeyframes(effectiveKeyframes, width: halfWidth, height: halfHeight)
             unloadVAEEncoder()
         }
 
-        // 0b. Optionally enhance prompt
+        // 0b. Optionally enhance prompt (uses first keyframe's image when available)
         let effectivePrompt: String
         if config.enhancePrompt {
-            LTXDebug.log("Enhancing prompt with VLM (\(config.imagePath != nil ? "I2V" : "T2V"))...")
-            effectivePrompt = try await enhancePromptWithVLM(prompt, imagePath: config.imagePath)
+            let promptImage = effectiveKeyframes.first?.path
+            LTXDebug.log("Enhancing prompt with VLM (\(promptImage != nil ? "I2V" : "T2V"))...")
+            effectivePrompt = try await enhancePromptWithVLM(prompt, imagePath: promptImage)
         } else {
             effectivePrompt = prompt
         }
@@ -725,16 +736,14 @@ public actor LTXPipeline {
             audioLatentPacked = ap * stage1Sigmas[0]
         }
 
-        // I2V: condition frame 0 with per-token timestep masking
+        // I2V: inject keyframe latents and build per-token conditioning mask
         var stage1CondMask: MLXArray? = nil
-        if let imgLatent = halfResImageLatent {
-            videoLatent[0..., 0..., 0..<1, 0..., 0...] = imgLatent
-
-            let tokensPerFrame = stage1Shape.height * stage1Shape.width
-            let frame0Mask = MLXArray.ones([1, tokensPerFrame])
-            let otherMask = MLXArray.zeros([1, stage1Shape.tokenCount - tokensPerFrame])
-            stage1CondMask = MLX.concatenated([frame0Mask, otherMask], axis: 1)
-            MLX.eval(stage1CondMask!)
+        if !halfResKeyframes.isEmpty {
+            injectKeyframeLatents(into: &videoLatent, encoded: halfResKeyframes)
+            let slots = halfResKeyframes.map { $0.latentIdx }
+            let mask = buildKeyframeMask(latentIndices: slots, shape: stage1Shape)
+            MLX.eval(mask)
+            stage1CondMask = mask
         }
         MLX.eval(videoLatent)
 
@@ -756,14 +765,16 @@ public actor LTXPipeline {
                 currentStep: step, totalSteps: totalStepsForProgress, sigma: sigma, phase: .denoising
             ))
 
-            // I2V: inject noise to conditioned frame
-            if let condLatent = halfResImageLatent, config.imageCondNoiseScale > 0, sigma > 0 {
-                let injectionNoise = MLXRandom.normal(condLatent.shape)
-                let noisedFrame0 = condLatent + MLXArray(config.imageCondNoiseScale) * injectionNoise * MLXArray(sigma * sigma)
-                videoLatent[0..., 0..., 0..<1, 0..., 0...] = noisedFrame0
+            // Pre-step: re-inject keyframes (with optional noise scaled by current sigma)
+            // so the transformer sees them at the right schedule level.
+            if !halfResKeyframes.isEmpty && config.imageCondNoiseScale > 0 && sigma > 0 {
+                injectKeyframeLatents(
+                    into: &videoLatent, encoded: halfResKeyframes,
+                    sigma: sigma, noiseScale: config.imageCondNoiseScale
+                )
             }
 
-            // Per-token timestep for I2V: frame 0 gets σ=0, others get σ
+            // Per-token timestep: keyframe slots get σ=0, others get σ
             let videoTimestep: MLXArray
             if let mask = stage1CondMask {
                 videoTimestep = MLXArray(sigma) * (1 - mask)
@@ -794,20 +805,14 @@ public actor LTXPipeline {
                 let videoVelocity = unpatchify(videoVelPred, shape: stage1Shape).asType(.float32)
                 let audioVelocity = audioVelPred.asType(.float32)
 
-                if halfResImageLatent != nil {
-                    let velocitySlice = videoVelocity[0..., 0..., 1..., 0..., 0...]
-                    let latentSlice = videoLatent[0..., 0..., 1..., 0..., 0...]
-                    let steppedSlice = stage1Scheduler.step(
-                        latent: latentSlice, velocity: velocitySlice,
-                        sigma: sigma, sigmaNext: sigmaNext
-                    )
-                    let frame0 = videoLatent[0..., 0..., 0..<1, 0..., 0...]
-                    videoLatent = MLX.concatenated([frame0, steppedSlice], axis: 2)
-                } else {
-                    videoLatent = stage1Scheduler.step(
-                        latent: videoLatent, velocity: videoVelocity,
-                        sigma: sigma, sigmaNext: sigmaNext
-                    )
+                videoLatent = stage1Scheduler.step(
+                    latent: videoLatent, velocity: videoVelocity,
+                    sigma: sigma, sigmaNext: sigmaNext
+                )
+                // Restore keyframe slots (clean references) — overwrites the wrong update
+                // applied by the scalar-sigma scheduler at those positions.
+                if !halfResKeyframes.isEmpty {
+                    injectKeyframeLatents(into: &videoLatent, encoded: halfResKeyframes)
                 }
                 let updatedAudio = ap + (sigmaNext - sigma) * audioVelocity
                 audioLatentPacked = updatedAudio
@@ -824,20 +829,12 @@ public actor LTXPipeline {
 
                 let videoVelocity = unpatchify(velocityPred, shape: stage1Shape).asType(.float32)
 
-                if halfResImageLatent != nil {
-                    let velocitySlice = videoVelocity[0..., 0..., 1..., 0..., 0...]
-                    let latentSlice = videoLatent[0..., 0..., 1..., 0..., 0...]
-                    let steppedSlice = stage1Scheduler.step(
-                        latent: latentSlice, velocity: velocitySlice,
-                        sigma: sigma, sigmaNext: sigmaNext
-                    )
-                    let frame0 = videoLatent[0..., 0..., 0..<1, 0..., 0...]
-                    videoLatent = MLX.concatenated([frame0, steppedSlice], axis: 2)
-                } else {
-                    videoLatent = stage1Scheduler.step(
-                        latent: videoLatent, velocity: videoVelocity,
-                        sigma: sigma, sigmaNext: sigmaNext
-                    )
+                videoLatent = stage1Scheduler.step(
+                    latent: videoLatent, velocity: videoVelocity,
+                    sigma: sigma, sigmaNext: sigmaNext
+                )
+                if !halfResKeyframes.isEmpty {
+                    injectKeyframeLatents(into: &videoLatent, encoded: halfResKeyframes)
                 }
                 MLX.eval(videoLatent)
             }
@@ -922,20 +919,19 @@ public actor LTXPipeline {
             audioLatentPacked = MLXArray(noiseScale) * audioReNoise + MLXArray(1.0 - noiseScale) * ap
         }
 
-        // I2V stage 2: encode image at full resolution and condition frame 0
-        var fullResImageLatent: MLXArray? = nil
+        // I2V stage 2: encode keyframes at full resolution and inject
+        var fullResKeyframes: [EncodedKeyframe] = []
         var stage2CondMask: MLXArray? = nil
-        if isI2V, let imagePath = config.imagePath {
-            LTXDebug.log("Stage 2 I2V: encoding image at \(config.width)x\(config.height)")
-            fullResImageLatent = try await encodeImage(path: imagePath, width: config.width, height: config.height)
+        if isI2V {
+            LTXDebug.log("Stage 2: encoding \(effectiveKeyframes.count) keyframe(s) at \(config.width)x\(config.height)")
+            fullResKeyframes = try await encodeKeyframes(effectiveKeyframes, width: config.width, height: config.height)
             unloadVAEEncoder()
-            videoLatent[0..., 0..., 0..<1, 0..., 0...] = fullResImageLatent!
+            injectKeyframeLatents(into: &videoLatent, encoded: fullResKeyframes)
 
-            let tokensPerFrame = stage2Shape.height * stage2Shape.width
-            let frame0Mask = MLXArray.ones([1, tokensPerFrame])
-            let otherMask = MLXArray.zeros([1, stage2Shape.tokenCount - tokensPerFrame])
-            stage2CondMask = MLX.concatenated([frame0Mask, otherMask], axis: 1)
-            MLX.eval(stage2CondMask!)
+            let slots = fullResKeyframes.map { $0.latentIdx }
+            let mask = buildKeyframeMask(latentIndices: slots, shape: stage2Shape)
+            MLX.eval(mask)
+            stage2CondMask = mask
         }
         MLX.eval(videoLatent)
         if hasAudio, let ap = audioLatentPacked { MLX.eval(ap) }
@@ -959,14 +955,15 @@ public actor LTXPipeline {
                 currentStep: stage1NumSteps + step, totalSteps: totalStepsForProgress, sigma: sigma, phase: .refinement
             ))
 
-            // I2V: inject noise to conditioned frame
-            if let condLatent = fullResImageLatent, config.imageCondNoiseScale > 0, sigma > 0 {
-                let injectionNoise = MLXRandom.normal(condLatent.shape)
-                let noisedFrame0 = condLatent + MLXArray(config.imageCondNoiseScale) * injectionNoise * MLXArray(sigma * sigma)
-                videoLatent[0..., 0..., 0..<1, 0..., 0...] = noisedFrame0
+            // Pre-step: re-inject keyframes with noise scaled by current sigma
+            if !fullResKeyframes.isEmpty && config.imageCondNoiseScale > 0 && sigma > 0 {
+                injectKeyframeLatents(
+                    into: &videoLatent, encoded: fullResKeyframes,
+                    sigma: sigma, noiseScale: config.imageCondNoiseScale
+                )
             }
 
-            // Per-token timestep for I2V: frame 0 gets σ=0, others get σ
+            // Per-token timestep: keyframe slots get σ=0, others get σ
             let videoTimestep: MLXArray
             if let mask = stage2CondMask {
                 videoTimestep = MLXArray(sigma) * (1 - mask)
@@ -996,16 +993,10 @@ public actor LTXPipeline {
                 let videoVelocity = unpatchify(videoVelPred, shape: stage2Shape).asType(.float32)
                 let audioVelocity = audioVelPred.asType(.float32)
 
-                // Euler step
                 let dt = sigmaNext - sigma
-                if fullResImageLatent != nil {
-                    let velocitySlice = videoVelocity[0..., 0..., 1..., 0..., 0...]
-                    let latentSlice = videoLatent[0..., 0..., 1..., 0..., 0...]
-                    let steppedSlice = latentSlice + MLXArray(dt) * velocitySlice
-                    let frame0 = videoLatent[0..., 0..., 0..<1, 0..., 0...]
-                    videoLatent = MLX.concatenated([frame0, steppedSlice], axis: 2)
-                } else {
-                    videoLatent = videoLatent + MLXArray(dt) * videoVelocity
+                videoLatent = videoLatent + MLXArray(dt) * videoVelocity
+                if !fullResKeyframes.isEmpty {
+                    injectKeyframeLatents(into: &videoLatent, encoded: fullResKeyframes)
                 }
                 let updatedAudio = ap + MLXArray(dt) * audioVelocity
                 audioLatentPacked = updatedAudio
@@ -1022,14 +1013,9 @@ public actor LTXPipeline {
                 let videoVelocity = unpatchify(velocityPred, shape: stage2Shape).asType(.float32)
 
                 let dt = sigmaNext - sigma
-                if fullResImageLatent != nil {
-                    let velocitySlice = videoVelocity[0..., 0..., 1..., 0..., 0...]
-                    let latentSlice = videoLatent[0..., 0..., 1..., 0..., 0...]
-                    let steppedSlice = latentSlice + MLXArray(dt) * velocitySlice
-                    let frame0 = videoLatent[0..., 0..., 0..<1, 0..., 0...]
-                    videoLatent = MLX.concatenated([frame0, steppedSlice], axis: 2)
-                } else {
-                    videoLatent = videoLatent + MLXArray(dt) * videoVelocity
+                videoLatent = videoLatent + MLXArray(dt) * videoVelocity
+                if !fullResKeyframes.isEmpty {
+                    injectKeyframeLatents(into: &videoLatent, encoded: fullResKeyframes)
                 }
                 MLX.eval(videoLatent)
             }
@@ -1644,6 +1630,43 @@ public actor LTXPipeline {
         LTXDebug.log("VAE encoder loaded (\(encoderWeights.count) weights)")
     }
 
+
+    /// Encode a list of keyframes into latent space, returning each one tagged with
+    /// its target latent slot. The VAE encoder is loaded once and reused.
+    ///
+    /// Each keyframe is encoded independently (single-frame input) so the result is
+    /// always a `(1, 128, 1, H/32, W/32)` latent that can be placed at any latent slot.
+    private func encodeKeyframes(
+        _ keyframes: [KeyframeInput],
+        width: Int,
+        height: Int
+    ) async throws -> [EncodedKeyframe] {
+        guard !keyframes.isEmpty else { return [] }
+
+        try await loadVAEEncoder()
+        guard let encoder = vaeEncoder else {
+            throw LTXError.modelNotLoaded("VAE encoder failed to load")
+        }
+        guard let vaeDecoder = vaeDecoder else {
+            throw LTXError.modelNotLoaded("VAE decoder not loaded (needed for latent statistics)")
+        }
+        let mean5d = vaeDecoder.meanOfMeans.asType(.float32).reshaped([1, -1, 1, 1, 1])
+        let std5d = vaeDecoder.stdOfMeans.asType(.float32).reshaped([1, -1, 1, 1, 1])
+
+        var encoded: [EncodedKeyframe] = []
+        encoded.reserveCapacity(keyframes.count)
+        for kf in keyframes {
+            let imageTensor = try loadImage(from: kf.path, width: width, height: height)
+            MLX.eval(imageTensor)
+            let latent = encoder(imageTensor)
+            let normalized = (latent.asType(.float32) - mean5d) / std5d
+            MLX.eval(normalized)
+            let slot = pixelFrameToLatentFrame(kf.pixelFrameIndex)
+            LTXDebug.log("Keyframe \(kf.path) → pixel \(kf.pixelFrameIndex) → latent slot \(slot), shape=\(normalized.shape)")
+            encoded.append(EncodedKeyframe(latentIdx: slot, latent: normalized))
+        }
+        return encoded
+    }
 
     /// Encode an image into latent space using the VAE encoder
     ///

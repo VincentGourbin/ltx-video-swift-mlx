@@ -3,6 +3,16 @@
 
 import Foundation
 @preconcurrency import MLX
+import MLXRandom
+
+// MARK: - Internal Types
+
+/// One keyframe after VAE encoding: its latent slot index plus the encoded tensor
+/// (shape `(1, 128, 1, latentH, latentW)`).
+struct EncodedKeyframe {
+    let latentIdx: Int
+    let latent: MLXArray
+}
 
 // MARK: - Public Types
 
@@ -80,6 +90,55 @@ public func validateKeyframes(_ keyframes: [KeyframeInput], numFrames: Int) thro
                 "Multiple keyframes collide on latent frame \(latentIdx). " +
                 "Latent stride is 8 — keyframes within the same 8-frame group cannot coexist."
             )
+        }
+    }
+}
+
+// MARK: - Mask & Injection Helpers
+
+/// Build a per-token conditioning mask. Tokens belonging to a keyframe latent frame
+/// get value `1.0`, all others get `0.0`. Output shape: `[1, shape.tokenCount]`.
+///
+/// The mask is consumed by the per-token timestep formula
+/// `videoTimestep = sigma * (1 - mask)` so that keyframe tokens are denoised with
+/// `σ = 0` (i.e. treated as clean references) while the rest follow the schedule.
+func buildKeyframeMask(latentIndices: [Int], shape: VideoLatentShape) -> MLXArray {
+    let tokensPerFrame = shape.height * shape.width
+    var maskValues = [Float](repeating: 0.0, count: shape.tokenCount)
+    for idx in latentIndices {
+        guard idx >= 0 && idx < shape.frames else { continue }
+        let start = idx * tokensPerFrame
+        for t in start..<(start + tokensPerFrame) {
+            maskValues[t] = 1.0
+        }
+    }
+    return MLXArray(maskValues, [1, shape.tokenCount])
+}
+
+/// Overwrite latent slots at each keyframe position with the encoded keyframe tensor.
+///
+/// When `sigma > 0` and `noiseScale > 0`, noise is added so the conditioned slot
+/// looks "realistic at the current schedule level" before the transformer pass.
+/// With defaults (`sigma = 0`, `noiseScale = 0`) the clean reference is restored —
+/// useful as a post-step re-injection that keeps keyframe slots pristine across
+/// the loop and into the final latent.
+///
+/// `latent` must have shape `(1, C, F, H, W)` and each `EncodedKeyframe.latent`
+/// must have shape `(1, C, 1, H, W)`.
+func injectKeyframeLatents(
+    into latent: inout MLXArray,
+    encoded: [EncodedKeyframe],
+    sigma: Float = 0.0,
+    noiseScale: Float = 0.0
+) {
+    for kf in encoded {
+        let slot = kf.latentIdx
+        if sigma > 0 && noiseScale > 0 {
+            let noise = MLXRandom.normal(kf.latent.shape)
+            let noised = kf.latent + MLXArray(noiseScale) * noise * MLXArray(sigma * sigma)
+            latent[0..., 0..., slot..<(slot + 1), 0..., 0...] = noised
+        } else {
+            latent[0..., 0..., slot..<(slot + 1), 0..., 0...] = kf.latent
         }
     }
 }
