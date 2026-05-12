@@ -6,20 +6,23 @@ frame conditioning, in any combination.
 
 ## How It Works
 
-Each keyframe is VAE-encoded into a single latent slot, then placed at the latent
-frame matching its pixel index (latent stride = 8, so pixel 0 → slot 0, pixels
-1–8 → slot 1, …, pixels 113–120 → slot 15, etc.). At every denoising step:
+Each keyframe is VAE-encoded then **appended** as extra tokens to the video
+sequence inside the transformer, with RoPE positions set to
+`(pixelFrameIndex + 0.5) / fps` (the pixel-space midpoint of a 1-frame range
+at the target). Their timestep is hardcoded to `σ = 0` so the model treats
+them as clean references; the rest of the video tokens are denoised normally
+at the schedule's current σ.
 
-1. The per-token timestep mask sets `σ = 0` at every keyframe slot, `σ = sigma`
-   elsewhere — so the transformer sees keyframe slots as already-clean references
-   while denoising the rest.
-2. The full latent is stepped by the scheduler.
-3. Keyframe slots are re-injected with the clean encoded latent, overwriting
-   the wrong update applied by the scalar-sigma scheduler at those positions.
+After each forward pass, the predicted velocity for the appended tokens is
+**cropped** away — only the original video tokens go through the scheduler
+step. The appended guide tokens are re-supplied at every step, never drift,
+and never enter the final latent.
 
-This is mathematically equivalent to the previous frame-0-only I2V path when a
-single keyframe is placed at pixel 0, so the existing `--image` flag is preserved
-as syntactic sugar.
+This matches Lightricks `VideoConditionByKeyframeIndex`. It replaces the
+previous "overwrite the latent slot" approach which produced grainy artifacts
+at non-zero keyframe positions (issue #21): a single-frame VAE encoding placed
+at a slot representing 8 pixel frames is structurally incompatible with what
+the decoder expects.
 
 ## CLI
 
@@ -36,24 +39,30 @@ for `--keyframe PATH:0` (the two flags are mutually exclusive).
 ### Constraints
 
 - Pixel `FRAME_IDX` must be in `[0, numFrames - 1]`.
-- Two keyframes within the same 8-pixel-frame group share the same latent slot
-  and are rejected (e.g. `pixel 1` and `pixel 8` both map to latent slot 1).
-- `STRENGTH` must be exactly `1.0` (hard injection). Values `!= 1.0` are
-  rejected by the validator until soft conditioning is wired through in a
-  future PR.
+- `STRENGTH` must be exactly `1.0`. Values `!= 1.0` are rejected until soft
+  conditioning is wired through in a future PR.
 - Multi-keyframe combined with `--video` (retake) is not supported.
 
-### Behavioral note vs. legacy `--image`
+Multiple keyframes within the same 8-pixel-frame latent stride group **are**
+allowed since each appended guide token carries its own RoPE temporal position
+independent of the underlying latent slot.
 
-When `imageCondNoiseScale == 0` (the default), the new keyframe path is
-mathematically equivalent to the previous frame-0-only frame-skip Euler step.
+### Performance
 
-When `imageCondNoiseScale > 0`, there is one subtle divergence: the new code
-unconditionally re-injects the **clean** keyframe latent at the end of every
-denoising step, whereas the previous code left the noised pre-step injection
-in place at the end of stage 1. The new behavior produces a cleaner final
-keyframe slot — arguably more correct, but a possible visible difference for
-users who relied on the old behavior with non-zero noise scale.
+The append path adds ~50% to generation time at small frame counts (more
+attention tokens, no RoPE cache reuse). The cost is roughly constant in
+keyframe count for a fixed video size — each keyframe contributes
+`latentH × latentW` extra tokens.
+
+### Issue #21 — noise reduction at non-zero keyframes
+
+Measured on 33-frame 768×512 with 3 keyframes (pixels 0/16/32), seed 42:
+
+| Metric | Legacy hard-inject | This append path | Improvement |
+|---|---|---|---|
+| hf_energy at keyframes | 0.149 | 0.126 | **−15.5%** |
+| hf_energy elsewhere | 0.148 | 0.130 | **−12.2%** |
+| L1 vs ref at keyframes | 0.059 | 0.059 | equivalent |
 
 ---
 
