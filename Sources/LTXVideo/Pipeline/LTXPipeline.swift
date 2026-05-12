@@ -1047,19 +1047,60 @@ public actor LTXPipeline {
         // I2V stage 2: encode keyframes at full resolution and inject
         var fullResKeyframes: [EncodedKeyframe] = []
         var stage2CondMask: MLXArray? = nil
+        let useAppendKeyframesS2 = useAppendKeyframes  // same env-var gate
         if isI2V {
             LTXDebug.log("Stage 2: encoding \(effectiveKeyframes.count) keyframe(s) at \(config.width)x\(config.height)")
             fullResKeyframes = try await encodeKeyframes(effectiveKeyframes, width: config.width, height: config.height)
             unloadVAEEncoder()
-            injectKeyframeLatents(into: &videoLatent, encoded: fullResKeyframes)
-
-            let slots = fullResKeyframes.map { $0.latentIdx }
-            let mask = buildKeyframeMask(latentIndices: slots, shape: stage2Shape)
-            MLX.eval(mask)
-            stage2CondMask = mask
+            if !useAppendKeyframesS2 {
+                injectKeyframeLatents(into: &videoLatent, encoded: fullResKeyframes)
+                let slots = fullResKeyframes.map { $0.latentIdx }
+                let mask = buildKeyframeMask(latentIndices: slots, shape: stage2Shape)
+                MLX.eval(mask)
+                stage2CondMask = mask
+            }
         }
         MLX.eval(videoLatent)
         if hasAudio, let ap = audioLatentPacked { MLX.eval(ap) }
+
+        // [PROTOTYPE] Stage 2 append: pre-build guides + extended positions + RoPE
+        var appendGuideTokensS2: MLXArray? = nil
+        var appendExtRoPES2: (cos: MLXArray, sin: MLXArray)? = nil
+        var appendOriginalCountS2: Int = 0
+        var appendGuideCountS2: Int = 0
+        if useAppendKeyframesS2, let videoTransformer = transformer, !fullResKeyframes.isEmpty {
+            let basePos = buildBaseVideoPositions(
+                batchSize: 1,
+                frames: stage2Shape.frames,
+                height: stage2Shape.height,
+                width: stage2Shape.width
+            )
+            let guides = fullResKeyframes.map { kf -> AppendedGuideTokens in
+                buildKeyframeGuideToken(
+                    encodedLatent: kf.latent,
+                    pixelFrameIndex: kf.pixelFrameIndex,
+                    fps: 24.0
+                )
+            }
+            let allGuideTokens = MLX.concatenated(guides.map { $0.tokens }, axis: 1)
+            let allGuidePositions = MLX.concatenated(guides.map { $0.positions }, axis: 2)
+            appendGuideTokensS2 = allGuideTokens
+            appendGuideCountS2 = allGuideTokens.dim(1)
+            appendOriginalCountS2 = stage2Shape.tokenCount
+            let extPositions = MLX.concatenated([basePos, allGuidePositions], axis: 2)
+            let pe = precomputeFreqsCis(
+                indicesGrid: extPositions,
+                dim: videoTransformer.config.innerDim,
+                theta: videoTransformer.config.ropeTheta,
+                maxPos: videoTransformer.config.maxPos,
+                numAttentionHeads: videoTransformer.config.numAttentionHeads,
+                ropeType: .split,
+                doublePrecision: true
+            )
+            MLX.eval(pe.cos, pe.sin)
+            appendExtRoPES2 = pe
+            LTXDebug.log("[PROTO Stage 2] extended sequence: \(appendOriginalCountS2) video + \(appendGuideCountS2) guide = \(appendOriginalCountS2 + appendGuideCountS2) tokens")
+        }
 
         // Dump re-noised latent
         if LTXDebug.isEnabled {
@@ -1127,22 +1168,46 @@ public actor LTXPipeline {
                 audioLatentPacked = updatedAudio
                 MLX.eval(videoLatent, updatedAudio)
             } else if let videoTransformer = transformer {
-                let velocityPred = videoTransformer(
-                    latent: videoPatchified,
-                    context: videoTextEmbeddings.asType(.bfloat16),
-                    timesteps: videoTimestep,
-                    contextMask: nil,
-                    latentShape: (frames: stage2Shape.frames, height: stage2Shape.height, width: stage2Shape.width)
-                )
+                if useAppendKeyframesS2,
+                   let guideTokens = appendGuideTokensS2,
+                   let extRoPE = appendExtRoPES2 {
+                    let extTokens = MLX.concatenated([videoPatchified, guideTokens], axis: 1)
+                    let extTimestep = buildExtendedTimestep(
+                        sigma: sigma,
+                        originalCount: appendOriginalCountS2,
+                        guideCount: appendGuideCountS2
+                    )
+                    let velocityPredExt = videoTransformer(
+                        latent: extTokens,
+                        context: videoTextEmbeddings.asType(.bfloat16),
+                        timesteps: extTimestep,
+                        contextMask: nil,
+                        latentShape: (frames: stage2Shape.frames, height: stage2Shape.height, width: stage2Shape.width),
+                        precomputedRoPE: extRoPE
+                    )
+                    let velocityPred = cropToOriginal(velocity: velocityPredExt, originalCount: appendOriginalCountS2)
+                    let videoVelocity = unpatchify(velocityPred, shape: stage2Shape).asType(.float32)
+                    let dt = sigmaNext - sigma
+                    videoLatent = videoLatent + MLXArray(dt) * videoVelocity
+                    MLX.eval(videoLatent)
+                } else {
+                    let velocityPred = videoTransformer(
+                        latent: videoPatchified,
+                        context: videoTextEmbeddings.asType(.bfloat16),
+                        timesteps: videoTimestep,
+                        contextMask: nil,
+                        latentShape: (frames: stage2Shape.frames, height: stage2Shape.height, width: stage2Shape.width)
+                    )
 
-                let videoVelocity = unpatchify(velocityPred, shape: stage2Shape).asType(.float32)
+                    let videoVelocity = unpatchify(velocityPred, shape: stage2Shape).asType(.float32)
 
-                let dt = sigmaNext - sigma
-                videoLatent = videoLatent + MLXArray(dt) * videoVelocity
-                if !fullResKeyframes.isEmpty {
-                    injectKeyframeLatents(into: &videoLatent, encoded: fullResKeyframes)
+                    let dt = sigmaNext - sigma
+                    videoLatent = videoLatent + MLXArray(dt) * videoVelocity
+                    if !fullResKeyframes.isEmpty {
+                        injectKeyframeLatents(into: &videoLatent, encoded: fullResKeyframes)
+                    }
+                    MLX.eval(videoLatent)
                 }
-                MLX.eval(videoLatent)
             }
 
             let stepDur2 = Date().timeIntervalSince(stepStart)
