@@ -2,7 +2,9 @@
 //  KeyframeInterpolationTests.swift
 //  ltx-video-swift-mlx
 //
-//  Tests for multi-keyframe interpolation helpers.
+//  Tests for multi-keyframe interpolation public API (KeyframeInput, validation,
+//  pixel→latent index mapping). The append-based conditioning math is covered in
+//  AppendedGuideTokensTests.
 //
 
 import Testing
@@ -67,11 +69,24 @@ struct ValidateKeyframesTests {
     @Test func testValidMultiKeyframe() throws {
         let path = try makeTempImage()
         defer { try? FileManager.default.removeItem(atPath: path) }
-        // Slots 0 and 15 — different latent groups, no collision
         try validateKeyframes([
             KeyframeInput(path: path, pixelFrameIndex: 0),
+            KeyframeInput(path: path, pixelFrameIndex: 60),
             KeyframeInput(path: path, pixelFrameIndex: 120)
         ], numFrames: 121)
+    }
+
+    /// With the append-based conditioning, two keyframes within the same 8-frame
+    /// latent stride group are allowed — each appended guide token has its own
+    /// RoPE temporal position derived from `pixelFrameIndex`, not the latent slot.
+    @Test func testSameLatentStrideGroupIsAllowed() throws {
+        let path = try makeTempImage()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        // Pixel 1 and pixel 8 both map to latent slot 1 — now permitted.
+        try validateKeyframes([
+            KeyframeInput(path: path, pixelFrameIndex: 1),
+            KeyframeInput(path: path, pixelFrameIndex: 8)
+        ], numFrames: 17)
     }
 
     @Test func testMissingFileFails() {
@@ -109,8 +124,7 @@ struct ValidateKeyframesTests {
     }
 
     @Test func testStrengthBelowOneFails() throws {
-        // Soft conditioning is not yet implemented — values in (0, 1) must be rejected
-        // explicitly so users don't silently get hard injection when expecting blending.
+        // Soft conditioning is not yet implemented — values in (0, 1) must be rejected.
         let path = try makeTempImage()
         defer { try? FileManager.default.removeItem(atPath: path) }
         #expect(throws: LTXError.self) {
@@ -127,70 +141,6 @@ struct ValidateKeyframesTests {
                 KeyframeInput(path: path, pixelFrameIndex: 8)
             ], numFrames: 17)
         }
-    }
-
-    @Test func testCollidingLatentSlotsFails() throws {
-        // Pixel 1 and pixel 8 both map to latent slot 1 — must be rejected.
-        let path = try makeTempImage()
-        defer { try? FileManager.default.removeItem(atPath: path) }
-        #expect(throws: LTXError.self) {
-            try validateKeyframes([
-                KeyframeInput(path: path, pixelFrameIndex: 1),
-                KeyframeInput(path: path, pixelFrameIndex: 8)
-            ], numFrames: 17)
-        }
-    }
-}
-
-// MARK: - buildKeyframeMask
-
-@Suite("buildKeyframeMask")
-struct BuildKeyframeMaskTests {
-    /// Latent shape: 4 frames × 3 height × 2 width = 24 tokens (12 tokens per latent frame? no — 6 per frame)
-    /// Tokens per frame = height × width = 3 × 2 = 6. Total = 4 × 6 = 24.
-    private let shape = VideoLatentShape(batch: 1, channels: 128, frames: 4, height: 3, width: 2)
-
-    @Test func testEmptyMaskIsAllZeros() {
-        let mask = buildKeyframeMask(latentIndices: [], shape: shape)
-        #expect(mask.shape == [1, 24])
-        let arr = mask.asArray(Float.self)
-        #expect(arr.allSatisfy { $0 == 0.0 })
-    }
-
-    @Test func testSingleKeyframeAtFrameZero() {
-        let mask = buildKeyframeMask(latentIndices: [0], shape: shape)
-        let arr = mask.asArray(Float.self)
-        #expect(arr.count == 24)
-        // Tokens 0..5 should be 1.0, the rest 0.0
-        for t in 0..<6 { #expect(arr[t] == 1.0) }
-        for t in 6..<24 { #expect(arr[t] == 0.0) }
-    }
-
-    @Test func testKeyframeAtMiddleSlot() {
-        let mask = buildKeyframeMask(latentIndices: [2], shape: shape)
-        let arr = mask.asArray(Float.self)
-        // Tokens 12..17 (slot 2) should be 1.0
-        for t in 0..<12 { #expect(arr[t] == 0.0) }
-        for t in 12..<18 { #expect(arr[t] == 1.0) }
-        for t in 18..<24 { #expect(arr[t] == 0.0) }
-    }
-
-    @Test func testMultipleKeyframes() {
-        let mask = buildKeyframeMask(latentIndices: [0, 3], shape: shape)
-        let arr = mask.asArray(Float.self)
-        // Slot 0: tokens 0..5 → 1.0
-        // Slot 3: tokens 18..23 → 1.0
-        // Slots 1,2: tokens 6..17 → 0.0
-        for t in 0..<6 { #expect(arr[t] == 1.0) }
-        for t in 6..<18 { #expect(arr[t] == 0.0) }
-        for t in 18..<24 { #expect(arr[t] == 1.0) }
-    }
-
-    @Test func testOutOfRangeIndexIsIgnored() {
-        // Index 99 is way outside the 4-frame shape — should be silently dropped.
-        let mask = buildKeyframeMask(latentIndices: [99], shape: shape)
-        let arr = mask.asArray(Float.self)
-        #expect(arr.allSatisfy { $0 == 0.0 })
     }
 }
 

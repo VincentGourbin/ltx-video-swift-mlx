@@ -285,7 +285,9 @@ class LTX2Transformer: Module {
         videoContextMask: MLXArray? = nil,
         audioContextMask: MLXArray? = nil,
         videoLatentShape: (frames: Int, height: Int, width: Int),
-        audioNumFrames: Int
+        audioNumFrames: Int,
+        precomputedVideoRoPE: (cos: MLXArray, sin: MLXArray)? = nil,
+        precomputedCrossVideoRoPE: (cos: MLXArray, sin: MLXArray)? = nil
     ) -> (video: MLXArray, audio: MLXArray) {
         let batchSize = videoLatent.dim(0)
         let videoDim = config.innerDim
@@ -380,21 +382,49 @@ class LTX2Transformer: Module {
         let preparedAudioMask = prepareAttentionMask(audioContextMask)
 
         // --- Prepare RoPE ---
-        let videoRoPE = prepareVideoRoPE(
-            batchSize: batchSize,
-            frames: videoLatentShape.frames,
-            height: videoLatentShape.height,
-            width: videoLatentShape.width
-        )
+        // When precomputed video RoPE is provided (appended-guide-tokens path),
+        // use it directly — the caller computed positions for an extended sequence
+        // that includes guide tokens beyond the (frames, height, width) shape.
+        let videoRoPE: (cos: MLXArray, sin: MLXArray)
+        if let custom = precomputedVideoRoPE {
+            videoRoPE = custom
+        } else {
+            videoRoPE = prepareVideoRoPE(
+                batchSize: batchSize,
+                frames: videoLatentShape.frames,
+                height: videoLatentShape.height,
+                width: videoLatentShape.width
+            )
+        }
         let audioRoPE = prepareAudioRoPE(batchSize: batchSize, audioFrames: audioNumFrames)
 
-        let (crossVideoRoPE, crossAudioRoPE) = prepareCrossModalRoPE(
-            batchSize: batchSize,
-            videoFrames: videoLatentShape.frames,
-            videoHeight: videoLatentShape.height,
-            videoWidth: videoLatentShape.width,
-            audioFrames: audioNumFrames
-        )
+        // Cross-modal RoPE: video side uses temporal-only positions, audio side likewise.
+        // For appended-guide tokens, the cross-modal video RoPE must also be extended
+        // so that the appended video tokens have a temporal coordinate when attending to audio.
+        let crossVideoRoPE: (cos: MLXArray, sin: MLXArray)
+        let crossAudioRoPE: (cos: MLXArray, sin: MLXArray)
+        if let customCV = precomputedCrossVideoRoPE {
+            crossVideoRoPE = customCV
+            // Compute audio cross-modal RoPE the normal way
+            let audioPositions = createAudioPositionGrid(batchSize: batchSize, audioFrames: audioNumFrames)
+            crossAudioRoPE = precomputeFreqsCis(
+                indicesGrid: audioPositions,
+                dim: config.audioCrossAttentionDim,
+                theta: config.ropeTheta,
+                maxPos: config.audioMaxPos,
+                numAttentionHeads: config.audioNumAttentionHeads,
+                ropeType: ropeType,
+                doublePrecision: true
+            )
+        } else {
+            (crossVideoRoPE, crossAudioRoPE) = prepareCrossModalRoPE(
+                batchSize: batchSize,
+                videoFrames: videoLatentShape.frames,
+                videoHeight: videoLatentShape.height,
+                videoWidth: videoLatentShape.width,
+                audioFrames: audioNumFrames
+            )
+        }
 
         eval(videoX, audioX, videoTembReshaped, audioTembReshaped)
 

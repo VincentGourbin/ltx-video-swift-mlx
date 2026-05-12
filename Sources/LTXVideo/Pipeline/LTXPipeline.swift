@@ -736,41 +736,28 @@ public actor LTXPipeline {
             audioLatentPacked = ap * stage1Sigmas[0]
         }
 
-        // [PROTOTYPE issue #21] Env-var gate to switch keyframe handling from
-        // hard-injection to appended guide tokens with shifted RoPE positions.
-        // When LTX_KEYFRAME_APPEND=1, the keyframe latents stay separate from the
-        // main video sequence; they're concatenated as extra tokens with their own
-        // temporal/spatial positions and σ=0 timestep. The model "sees" them via
-        // attention, and we crop the predicted velocity to the original token count
-        // before the scheduler step. This matches Lightricks `VideoConditionByKeyframeIndex`.
+        // Keyframe conditioning (issue #21 fix): appended guide tokens with shifted RoPE
+        // positions, matching Lightricks `VideoConditionByKeyframeIndex` semantics.
+        //
+        // The keyframe latents stay separate from the main video sequence; they're
+        // concatenated as extra tokens with their own temporal/spatial positions and
+        // σ=0 timestep. The model "sees" them via attention, and we crop the predicted
+        // velocity to the original token count before the scheduler step. This is the
+        // only keyframe code path — the previous "inject into latent slot" approach
+        // produced grainy artifacts at non-zero keyframe positions (issue #21) because
+        // a 1-frame VAE encoding placed at a slot representing 8 pixel frames is
+        // structurally incompatible with what the decoder expects.
         let useAppendKeyframes = !halfResKeyframes.isEmpty
-            && ProcessInfo.processInfo.environment["LTX_KEYFRAME_APPEND"] == "1"
-            && transformer != nil
-            && !hasAudio
-        let stopAfterStage1 = ProcessInfo.processInfo.environment["LTX_STOP_AFTER_STAGE1"] == "1"
-        if useAppendKeyframes {
-            LTXDebug.log("[PROTO] Using APPEND keyframe mode (\(halfResKeyframes.count) keyframes)")
-        }
-
-        // I2V: inject keyframe latents and build per-token conditioning mask
-        // (legacy path — skipped when useAppendKeyframes is true)
-        var stage1CondMask: MLXArray? = nil
-        if !halfResKeyframes.isEmpty && !useAppendKeyframes {
-            injectKeyframeLatents(into: &videoLatent, encoded: halfResKeyframes)
-            let slots = halfResKeyframes.map { $0.latentIdx }
-            let mask = buildKeyframeMask(latentIndices: slots, shape: stage1Shape)
-            MLX.eval(mask)
-            stage1CondMask = mask
-        }
         MLX.eval(videoLatent)
 
         // [PROTOTYPE] Pre-build guide tokens, extended positions, and RoPE for append path.
         // These are constant across denoising steps, so compute once.
         var appendGuideTokens: MLXArray? = nil
         var appendExtRoPE: (cos: MLXArray, sin: MLXArray)? = nil
+        var appendExtCrossVideoRoPE: (cos: MLXArray, sin: MLXArray)? = nil
         var appendOriginalCount: Int = 0
         var appendGuideCount: Int = 0
-        if useAppendKeyframes, let videoTransformer = transformer {
+        if useAppendKeyframes {
             let basePos = buildBaseVideoPositions(
                 batchSize: 1,
                 frames: stage1Shape.frames,
@@ -784,8 +771,6 @@ public actor LTXPipeline {
                     fps: 24.0
                 )
             }
-
-            // Sanity: collect guide token count & build dummy guide-only token block for shape only
             let allGuideTokens = MLX.concatenated(guides.map { $0.tokens }, axis: 1)
             let allGuidePositions = MLX.concatenated(guides.map { $0.positions }, axis: 2)
             appendGuideTokens = allGuideTokens
@@ -794,20 +779,46 @@ public actor LTXPipeline {
 
             let extPositions = MLX.concatenated([basePos, allGuidePositions], axis: 2)
 
-            // Pre-compute RoPE for extended positions
+            // Pick the relevant transformer config (video-only or dual stream)
+            let refConfig: LTXTransformerConfig
+            if let videoTransformer = transformer {
+                refConfig = videoTransformer.config
+            } else if let dual = ltx2Transformer {
+                refConfig = dual.config
+            } else {
+                refConfig = .default
+            }
+
+            // Pre-compute RoPE for extended positions (used by both LTXTransformer and
+            // LTX2Transformer's video stream)
             let pe = precomputeFreqsCis(
                 indicesGrid: extPositions,
-                dim: videoTransformer.config.innerDim,
-                theta: videoTransformer.config.ropeTheta,
-                maxPos: videoTransformer.config.maxPos,
-                numAttentionHeads: videoTransformer.config.numAttentionHeads,
+                dim: refConfig.innerDim,
+                theta: refConfig.ropeTheta,
+                maxPos: refConfig.maxPos,
+                numAttentionHeads: refConfig.numAttentionHeads,
                 ropeType: .split,
                 doublePrecision: true
             )
             MLX.eval(pe.cos, pe.sin)
             appendExtRoPE = pe
-            LTXDebug.log("[PROTO] extended sequence: \(appendOriginalCount) video + \(appendGuideCount) guide = \(appendOriginalCount + appendGuideCount) tokens")
-            LTXDebug.log("[PROTO] extended RoPE shape: cos=\(pe.cos.shape) sin=\(pe.sin.shape)")
+
+            // Cross-modal video RoPE (audio path only): temporal-only coords from extPositions
+            if hasAudio {
+                let temporalOnly = extPositions[0..., 0..<1, 0...]
+                let crossPE = precomputeFreqsCis(
+                    indicesGrid: temporalOnly,
+                    dim: refConfig.audioCrossAttentionDim,
+                    theta: refConfig.ropeTheta,
+                    maxPos: refConfig.audioMaxPos,
+                    numAttentionHeads: refConfig.audioNumAttentionHeads,
+                    ropeType: .split,
+                    doublePrecision: true
+                )
+                MLX.eval(crossPE.cos, crossPE.sin)
+                appendExtCrossVideoRoPE = crossPE
+            }
+            LTXDebug.log("[append] Stage 1 extended sequence: \(appendOriginalCount) video + \(appendGuideCount) guide tokens")
         }
 
         // === STAGE 1: Denoise at half resolution ===
@@ -828,22 +839,9 @@ public actor LTXPipeline {
                 currentStep: step, totalSteps: totalStepsForProgress, sigma: sigma, phase: .denoising
             ))
 
-            // Pre-step: re-inject keyframes (with optional noise scaled by current sigma)
-            // so the transformer sees them at the right schedule level.
-            if !halfResKeyframes.isEmpty && config.imageCondNoiseScale > 0 && sigma > 0 {
-                injectKeyframeLatents(
-                    into: &videoLatent, encoded: halfResKeyframes,
-                    sigma: sigma, noiseScale: config.imageCondNoiseScale
-                )
-            }
-
-            // Per-token timestep: keyframe slots get σ=0, others get σ
-            let videoTimestep: MLXArray
-            if let mask = stage1CondMask {
-                videoTimestep = MLXArray(sigma) * (1 - mask)
-            } else {
-                videoTimestep = MLXArray([sigma])
-            }
+            // Scalar timestep — keyframe conditioning is handled by appended guide
+            // tokens (per-token timestep extension built inside the append branch below).
+            let videoTimestep = MLXArray([sigma])
 
             let videoPatchified = patchify(videoLatent).asType(.bfloat16)
 
@@ -852,39 +850,70 @@ public actor LTXPipeline {
                 let audioTimestep = MLXArray([sigma])
                 let audioPatchified = ap.asType(.bfloat16)
 
-                let (videoVelPred, audioVelPred) = ltx2(
-                    videoLatent: videoPatchified,
-                    audioLatent: audioPatchified,
-                    videoContext: videoTextEmbeddings.asType(.bfloat16),
-                    audioContext: audioTextEmbeddings.asType(.bfloat16),
-                    videoTimesteps: videoTimestep,
-                    audioTimesteps: audioTimestep,
-                    videoContextMask: textMask,
-                    audioContextMask: nil,
-                    videoLatentShape: (frames: stage1Shape.frames, height: stage1Shape.height, width: stage1Shape.width),
-                    audioNumFrames: audioNumFrames
-                )
+                if useAppendKeyframes,
+                   let guideTokens = appendGuideTokens,
+                   let extRoPE = appendExtRoPE,
+                   let extCrossRoPE = appendExtCrossVideoRoPE {
+                    let extTokens = MLX.concatenated([videoPatchified, guideTokens], axis: 1)
+                    let extTimestep = buildExtendedTimestep(
+                        sigma: sigma,
+                        originalCount: appendOriginalCount,
+                        guideCount: appendGuideCount
+                    )
+                    let (videoVelPredExt, audioVelPred) = ltx2(
+                        videoLatent: extTokens,
+                        audioLatent: audioPatchified,
+                        videoContext: videoTextEmbeddings.asType(.bfloat16),
+                        audioContext: audioTextEmbeddings.asType(.bfloat16),
+                        videoTimesteps: extTimestep,
+                        audioTimesteps: audioTimestep,
+                        videoContextMask: textMask,
+                        audioContextMask: nil,
+                        videoLatentShape: (frames: stage1Shape.frames, height: stage1Shape.height, width: stage1Shape.width),
+                        audioNumFrames: audioNumFrames,
+                        precomputedVideoRoPE: extRoPE,
+                        precomputedCrossVideoRoPE: extCrossRoPE
+                    )
+                    let videoVelPred = cropToOriginal(velocity: videoVelPredExt, originalCount: appendOriginalCount)
+                    let videoVelocity = unpatchify(videoVelPred, shape: stage1Shape).asType(.float32)
+                    let audioVelocity = audioVelPred.asType(.float32)
+                    videoLatent = stage1Scheduler.step(
+                        latent: videoLatent, velocity: videoVelocity,
+                        sigma: sigma, sigmaNext: sigmaNext
+                    )
+                    let updatedAudio = ap + (sigmaNext - sigma) * audioVelocity
+                    audioLatentPacked = updatedAudio
+                    MLX.eval(videoLatent, updatedAudio)
+                } else {
+                    let (videoVelPred, audioVelPred) = ltx2(
+                        videoLatent: videoPatchified,
+                        audioLatent: audioPatchified,
+                        videoContext: videoTextEmbeddings.asType(.bfloat16),
+                        audioContext: audioTextEmbeddings.asType(.bfloat16),
+                        videoTimesteps: videoTimestep,
+                        audioTimesteps: audioTimestep,
+                        videoContextMask: textMask,
+                        audioContextMask: nil,
+                        videoLatentShape: (frames: stage1Shape.frames, height: stage1Shape.height, width: stage1Shape.width),
+                        audioNumFrames: audioNumFrames
+                    )
 
-                let videoVelocity = unpatchify(videoVelPred, shape: stage1Shape).asType(.float32)
-                let audioVelocity = audioVelPred.asType(.float32)
+                    let videoVelocity = unpatchify(videoVelPred, shape: stage1Shape).asType(.float32)
+                    let audioVelocity = audioVelPred.asType(.float32)
 
-                videoLatent = stage1Scheduler.step(
-                    latent: videoLatent, velocity: videoVelocity,
-                    sigma: sigma, sigmaNext: sigmaNext
-                )
-                // Restore keyframe slots (clean references) — overwrites the wrong update
-                // applied by the scalar-sigma scheduler at those positions.
-                if !halfResKeyframes.isEmpty {
-                    injectKeyframeLatents(into: &videoLatent, encoded: halfResKeyframes)
+                    videoLatent = stage1Scheduler.step(
+                        latent: videoLatent, velocity: videoVelocity,
+                        sigma: sigma, sigmaNext: sigmaNext
+                    )
+                    let updatedAudio = ap + (sigmaNext - sigma) * audioVelocity
+                    audioLatentPacked = updatedAudio
+                    MLX.eval(videoLatent, updatedAudio)
                 }
-                let updatedAudio = ap + (sigmaNext - sigma) * audioVelocity
-                audioLatentPacked = updatedAudio
-                MLX.eval(videoLatent, updatedAudio)
             } else if let videoTransformer = transformer {
                 if useAppendKeyframes,
                    let guideTokens = appendGuideTokens,
                    let extRoPE = appendExtRoPE {
-                    // [PROTOTYPE] Append guide tokens for keyframe conditioning.
+                    // Append guide tokens for keyframe conditioning (issue #21 fix).
                     let extTokens = MLX.concatenated([videoPatchified, guideTokens], axis: 1)
                     let extTimestep = buildExtendedTimestep(
                         sigma: sigma,
@@ -908,7 +937,7 @@ public actor LTXPipeline {
                     // No re-injection: guide tokens carry the keyframe info via attention.
                     MLX.eval(videoLatent)
                 } else {
-                    // Video-only denoising (legacy path)
+                    // T2V (no keyframes) — standard denoising
                     let velocityPred = videoTransformer(
                         latent: videoPatchified,
                         context: videoTextEmbeddings.asType(.bfloat16),
@@ -923,9 +952,6 @@ public actor LTXPipeline {
                         latent: videoLatent, velocity: videoVelocity,
                         sigma: sigma, sigmaNext: sigmaNext
                     )
-                    if !halfResKeyframes.isEmpty {
-                        injectKeyframeLatents(into: &videoLatent, encoded: halfResKeyframes)
-                    }
                     MLX.eval(videoLatent)
                 }
             }
@@ -949,40 +975,6 @@ public actor LTXPipeline {
         }
 
         profiler.end("Denoising Stage 1")
-
-        // [PROTOTYPE] Early-exit hook for M1/M2/M3 measurement. Decodes the Stage 1
-        // half-res latent and returns it as the video result, bypassing upscale + Stage 2.
-        if stopAfterStage1 {
-            LTXDebug.log("[PROTO] LTX_STOP_AFTER_STAGE1=1 — decoding Stage 1 latent and exiting")
-            if let dumpPath = ProcessInfo.processInfo.environment["LTX_DUMP_FINAL_LATENT"] {
-                let l32 = videoLatent.asType(.float32)
-                MLX.eval(l32)
-                try? MLX.save(arrays: ["data": l32], url: URL(fileURLWithPath: dumpPath))
-                LTXDebug.log("[PROTO] dumped stage-1 latent to \(dumpPath): \(l32.shape)")
-            }
-            LTXMemoryManager.setPhase(.vaeDecode)
-            let stage1Decoded = decodeVideo(
-                latent: videoLatent, decoder: vaeDecoder, timestep: nil,
-                temporalTileSize: memoryOptimization.vaeTemporalTileSize,
-                temporalTileOverlap: memoryOptimization.vaeTemporalTileOverlap
-            )
-            MLX.eval(stage1Decoded)
-            let trimmed: MLXArray
-            if stage1Decoded.dim(0) > config.numFrames {
-                trimmed = stage1Decoded[0..<config.numFrames]
-            } else {
-                trimmed = stage1Decoded
-            }
-            let gen = Date().timeIntervalSince(generationStart)
-            return VideoGenerationResult(
-                frames: trimmed,
-                seed: config.seed ?? 0,
-                generationTime: gen,
-                audioWaveform: nil,
-                audioSampleRate: nil,
-                effectivePrompt: effectivePrompt
-            )
-        }
 
         // === UPSCALE VIDEO 2x (audio unchanged) ===
         onProgress?(GenerationProgress(
@@ -1044,31 +1036,24 @@ public actor LTXPipeline {
             audioLatentPacked = MLXArray(noiseScale) * audioReNoise + MLXArray(1.0 - noiseScale) * ap
         }
 
-        // I2V stage 2: encode keyframes at full resolution and inject
+        // I2V stage 2: encode keyframes at full resolution
         var fullResKeyframes: [EncodedKeyframe] = []
-        var stage2CondMask: MLXArray? = nil
-        let useAppendKeyframesS2 = useAppendKeyframes  // same env-var gate
         if isI2V {
             LTXDebug.log("Stage 2: encoding \(effectiveKeyframes.count) keyframe(s) at \(config.width)x\(config.height)")
             fullResKeyframes = try await encodeKeyframes(effectiveKeyframes, width: config.width, height: config.height)
             unloadVAEEncoder()
-            if !useAppendKeyframesS2 {
-                injectKeyframeLatents(into: &videoLatent, encoded: fullResKeyframes)
-                let slots = fullResKeyframes.map { $0.latentIdx }
-                let mask = buildKeyframeMask(latentIndices: slots, shape: stage2Shape)
-                MLX.eval(mask)
-                stage2CondMask = mask
-            }
         }
+        let useAppendKeyframesS2 = !fullResKeyframes.isEmpty
         MLX.eval(videoLatent)
         if hasAudio, let ap = audioLatentPacked { MLX.eval(ap) }
 
-        // [PROTOTYPE] Stage 2 append: pre-build guides + extended positions + RoPE
+        // [append] Stage 2 append: pre-build guides + extended positions + RoPE
         var appendGuideTokensS2: MLXArray? = nil
         var appendExtRoPES2: (cos: MLXArray, sin: MLXArray)? = nil
+        var appendExtCrossVideoRoPES2: (cos: MLXArray, sin: MLXArray)? = nil
         var appendOriginalCountS2: Int = 0
         var appendGuideCountS2: Int = 0
-        if useAppendKeyframesS2, let videoTransformer = transformer, !fullResKeyframes.isEmpty {
+        if useAppendKeyframesS2, !fullResKeyframes.isEmpty {
             let basePos = buildBaseVideoPositions(
                 batchSize: 1,
                 frames: stage2Shape.frames,
@@ -1088,18 +1073,43 @@ public actor LTXPipeline {
             appendGuideCountS2 = allGuideTokens.dim(1)
             appendOriginalCountS2 = stage2Shape.tokenCount
             let extPositions = MLX.concatenated([basePos, allGuidePositions], axis: 2)
+
+            let refConfig: LTXTransformerConfig
+            if let videoTransformer = transformer {
+                refConfig = videoTransformer.config
+            } else if let dual = ltx2Transformer {
+                refConfig = dual.config
+            } else {
+                refConfig = .default
+            }
+
             let pe = precomputeFreqsCis(
                 indicesGrid: extPositions,
-                dim: videoTransformer.config.innerDim,
-                theta: videoTransformer.config.ropeTheta,
-                maxPos: videoTransformer.config.maxPos,
-                numAttentionHeads: videoTransformer.config.numAttentionHeads,
+                dim: refConfig.innerDim,
+                theta: refConfig.ropeTheta,
+                maxPos: refConfig.maxPos,
+                numAttentionHeads: refConfig.numAttentionHeads,
                 ropeType: .split,
                 doublePrecision: true
             )
             MLX.eval(pe.cos, pe.sin)
             appendExtRoPES2 = pe
-            LTXDebug.log("[PROTO Stage 2] extended sequence: \(appendOriginalCountS2) video + \(appendGuideCountS2) guide = \(appendOriginalCountS2 + appendGuideCountS2) tokens")
+
+            if hasAudio {
+                let temporalOnly = extPositions[0..., 0..<1, 0...]
+                let crossPE = precomputeFreqsCis(
+                    indicesGrid: temporalOnly,
+                    dim: refConfig.audioCrossAttentionDim,
+                    theta: refConfig.ropeTheta,
+                    maxPos: refConfig.audioMaxPos,
+                    numAttentionHeads: refConfig.audioNumAttentionHeads,
+                    ropeType: .split,
+                    doublePrecision: true
+                )
+                MLX.eval(crossPE.cos, crossPE.sin)
+                appendExtCrossVideoRoPES2 = crossPE
+            }
+            LTXDebug.log("[append] Stage 2 extended sequence: \(appendOriginalCountS2) video + \(appendGuideCountS2) guide tokens")
         }
 
         // Dump re-noised latent
@@ -1121,21 +1131,8 @@ public actor LTXPipeline {
                 currentStep: stage1NumSteps + step, totalSteps: totalStepsForProgress, sigma: sigma, phase: .refinement
             ))
 
-            // Pre-step: re-inject keyframes with noise scaled by current sigma
-            if !fullResKeyframes.isEmpty && config.imageCondNoiseScale > 0 && sigma > 0 {
-                injectKeyframeLatents(
-                    into: &videoLatent, encoded: fullResKeyframes,
-                    sigma: sigma, noiseScale: config.imageCondNoiseScale
-                )
-            }
-
-            // Per-token timestep: keyframe slots get σ=0, others get σ
-            let videoTimestep: MLXArray
-            if let mask = stage2CondMask {
-                videoTimestep = MLXArray(sigma) * (1 - mask)
-            } else {
-                videoTimestep = MLXArray([sigma])
-            }
+            // Scalar timestep — keyframe conditioning is handled by appended guide tokens
+            let videoTimestep = MLXArray([sigma])
 
             let videoPatchified = patchify(videoLatent).asType(.bfloat16)
 
@@ -1143,30 +1140,61 @@ public actor LTXPipeline {
                 let audioTimestep = MLXArray([sigma])
                 let audioPatchified = ap.asType(.bfloat16)
 
-                let (videoVelPred, audioVelPred) = ltx2(
-                    videoLatent: videoPatchified,
-                    audioLatent: audioPatchified,
-                    videoContext: videoTextEmbeddings.asType(.bfloat16),
-                    audioContext: audioTextEmbeddings.asType(.bfloat16),
-                    videoTimesteps: videoTimestep,
-                    audioTimesteps: audioTimestep,
-                    videoContextMask: textMask,
-                    audioContextMask: nil,
-                    videoLatentShape: (frames: stage2Shape.frames, height: stage2Shape.height, width: stage2Shape.width),
-                    audioNumFrames: audioNumFrames
-                )
+                if useAppendKeyframesS2,
+                   let guideTokens = appendGuideTokensS2,
+                   let extRoPE = appendExtRoPES2,
+                   let extCrossRoPE = appendExtCrossVideoRoPES2 {
+                    let extTokens = MLX.concatenated([videoPatchified, guideTokens], axis: 1)
+                    let extTimestep = buildExtendedTimestep(
+                        sigma: sigma,
+                        originalCount: appendOriginalCountS2,
+                        guideCount: appendGuideCountS2
+                    )
+                    let (videoVelPredExt, audioVelPred) = ltx2(
+                        videoLatent: extTokens,
+                        audioLatent: audioPatchified,
+                        videoContext: videoTextEmbeddings.asType(.bfloat16),
+                        audioContext: audioTextEmbeddings.asType(.bfloat16),
+                        videoTimesteps: extTimestep,
+                        audioTimesteps: audioTimestep,
+                        videoContextMask: textMask,
+                        audioContextMask: nil,
+                        videoLatentShape: (frames: stage2Shape.frames, height: stage2Shape.height, width: stage2Shape.width),
+                        audioNumFrames: audioNumFrames,
+                        precomputedVideoRoPE: extRoPE,
+                        precomputedCrossVideoRoPE: extCrossRoPE
+                    )
+                    let videoVelPred = cropToOriginal(velocity: videoVelPredExt, originalCount: appendOriginalCountS2)
+                    let videoVelocity = unpatchify(videoVelPred, shape: stage2Shape).asType(.float32)
+                    let audioVelocity = audioVelPred.asType(.float32)
+                    let dt = sigmaNext - sigma
+                    videoLatent = videoLatent + MLXArray(dt) * videoVelocity
+                    let updatedAudio = ap + MLXArray(dt) * audioVelocity
+                    audioLatentPacked = updatedAudio
+                    MLX.eval(videoLatent, updatedAudio)
+                } else {
+                    let (videoVelPred, audioVelPred) = ltx2(
+                        videoLatent: videoPatchified,
+                        audioLatent: audioPatchified,
+                        videoContext: videoTextEmbeddings.asType(.bfloat16),
+                        audioContext: audioTextEmbeddings.asType(.bfloat16),
+                        videoTimesteps: videoTimestep,
+                        audioTimesteps: audioTimestep,
+                        videoContextMask: textMask,
+                        audioContextMask: nil,
+                        videoLatentShape: (frames: stage2Shape.frames, height: stage2Shape.height, width: stage2Shape.width),
+                        audioNumFrames: audioNumFrames
+                    )
 
-                let videoVelocity = unpatchify(videoVelPred, shape: stage2Shape).asType(.float32)
-                let audioVelocity = audioVelPred.asType(.float32)
+                    let videoVelocity = unpatchify(videoVelPred, shape: stage2Shape).asType(.float32)
+                    let audioVelocity = audioVelPred.asType(.float32)
 
-                let dt = sigmaNext - sigma
-                videoLatent = videoLatent + MLXArray(dt) * videoVelocity
-                if !fullResKeyframes.isEmpty {
-                    injectKeyframeLatents(into: &videoLatent, encoded: fullResKeyframes)
+                    let dt = sigmaNext - sigma
+                    videoLatent = videoLatent + MLXArray(dt) * videoVelocity
+                    let updatedAudio = ap + MLXArray(dt) * audioVelocity
+                    audioLatentPacked = updatedAudio
+                    MLX.eval(videoLatent, updatedAudio)
                 }
-                let updatedAudio = ap + MLXArray(dt) * audioVelocity
-                audioLatentPacked = updatedAudio
-                MLX.eval(videoLatent, updatedAudio)
             } else if let videoTransformer = transformer {
                 if useAppendKeyframesS2,
                    let guideTokens = appendGuideTokensS2,
@@ -1203,9 +1231,6 @@ public actor LTXPipeline {
 
                     let dt = sigmaNext - sigma
                     videoLatent = videoLatent + MLXArray(dt) * videoVelocity
-                    if !fullResKeyframes.isEmpty {
-                        injectKeyframeLatents(into: &videoLatent, encoded: fullResKeyframes)
-                    }
                     MLX.eval(videoLatent)
                 }
             }
