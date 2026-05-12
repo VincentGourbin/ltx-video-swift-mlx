@@ -12,6 +12,7 @@ import MLXRandom
 struct EncodedKeyframe {
     let latentIdx: Int
     let latent: MLXArray
+    let pixelFrameIndex: Int
 }
 
 // MARK: - Public Types

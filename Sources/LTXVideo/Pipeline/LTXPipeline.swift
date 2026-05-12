@@ -736,9 +736,26 @@ public actor LTXPipeline {
             audioLatentPacked = ap * stage1Sigmas[0]
         }
 
+        // [PROTOTYPE issue #21] Env-var gate to switch keyframe handling from
+        // hard-injection to appended guide tokens with shifted RoPE positions.
+        // When LTX_KEYFRAME_APPEND=1, the keyframe latents stay separate from the
+        // main video sequence; they're concatenated as extra tokens with their own
+        // temporal/spatial positions and σ=0 timestep. The model "sees" them via
+        // attention, and we crop the predicted velocity to the original token count
+        // before the scheduler step. This matches Lightricks `VideoConditionByKeyframeIndex`.
+        let useAppendKeyframes = !halfResKeyframes.isEmpty
+            && ProcessInfo.processInfo.environment["LTX_KEYFRAME_APPEND"] == "1"
+            && transformer != nil
+            && !hasAudio
+        let stopAfterStage1 = ProcessInfo.processInfo.environment["LTX_STOP_AFTER_STAGE1"] == "1"
+        if useAppendKeyframes {
+            LTXDebug.log("[PROTO] Using APPEND keyframe mode (\(halfResKeyframes.count) keyframes)")
+        }
+
         // I2V: inject keyframe latents and build per-token conditioning mask
+        // (legacy path — skipped when useAppendKeyframes is true)
         var stage1CondMask: MLXArray? = nil
-        if !halfResKeyframes.isEmpty {
+        if !halfResKeyframes.isEmpty && !useAppendKeyframes {
             injectKeyframeLatents(into: &videoLatent, encoded: halfResKeyframes)
             let slots = halfResKeyframes.map { $0.latentIdx }
             let mask = buildKeyframeMask(latentIndices: slots, shape: stage1Shape)
@@ -746,6 +763,52 @@ public actor LTXPipeline {
             stage1CondMask = mask
         }
         MLX.eval(videoLatent)
+
+        // [PROTOTYPE] Pre-build guide tokens, extended positions, and RoPE for append path.
+        // These are constant across denoising steps, so compute once.
+        var appendGuideTokens: MLXArray? = nil
+        var appendExtRoPE: (cos: MLXArray, sin: MLXArray)? = nil
+        var appendOriginalCount: Int = 0
+        var appendGuideCount: Int = 0
+        if useAppendKeyframes, let videoTransformer = transformer {
+            let basePos = buildBaseVideoPositions(
+                batchSize: 1,
+                frames: stage1Shape.frames,
+                height: stage1Shape.height,
+                width: stage1Shape.width
+            )
+            let guides = halfResKeyframes.map { kf -> AppendedGuideTokens in
+                buildKeyframeGuideToken(
+                    encodedLatent: kf.latent,
+                    pixelFrameIndex: kf.pixelFrameIndex,
+                    fps: 24.0
+                )
+            }
+
+            // Sanity: collect guide token count & build dummy guide-only token block for shape only
+            let allGuideTokens = MLX.concatenated(guides.map { $0.tokens }, axis: 1)
+            let allGuidePositions = MLX.concatenated(guides.map { $0.positions }, axis: 2)
+            appendGuideTokens = allGuideTokens
+            appendGuideCount = allGuideTokens.dim(1)
+            appendOriginalCount = stage1Shape.tokenCount
+
+            let extPositions = MLX.concatenated([basePos, allGuidePositions], axis: 2)
+
+            // Pre-compute RoPE for extended positions
+            let pe = precomputeFreqsCis(
+                indicesGrid: extPositions,
+                dim: videoTransformer.config.innerDim,
+                theta: videoTransformer.config.ropeTheta,
+                maxPos: videoTransformer.config.maxPos,
+                numAttentionHeads: videoTransformer.config.numAttentionHeads,
+                ropeType: .split,
+                doublePrecision: true
+            )
+            MLX.eval(pe.cos, pe.sin)
+            appendExtRoPE = pe
+            LTXDebug.log("[PROTO] extended sequence: \(appendOriginalCount) video + \(appendGuideCount) guide = \(appendOriginalCount + appendGuideCount) tokens")
+            LTXDebug.log("[PROTO] extended RoPE shape: cos=\(pe.cos.shape) sin=\(pe.sin.shape)")
+        }
 
         // === STAGE 1: Denoise at half resolution ===
         let stage1NumSteps = stage1Sigmas.count - 1
@@ -818,25 +881,53 @@ public actor LTXPipeline {
                 audioLatentPacked = updatedAudio
                 MLX.eval(videoLatent, updatedAudio)
             } else if let videoTransformer = transformer {
-                // Video-only denoising
-                let velocityPred = videoTransformer(
-                    latent: videoPatchified,
-                    context: videoTextEmbeddings.asType(.bfloat16),
-                    timesteps: videoTimestep,
-                    contextMask: nil,
-                    latentShape: (frames: stage1Shape.frames, height: stage1Shape.height, width: stage1Shape.width)
-                )
+                if useAppendKeyframes,
+                   let guideTokens = appendGuideTokens,
+                   let extRoPE = appendExtRoPE {
+                    // [PROTOTYPE] Append guide tokens for keyframe conditioning.
+                    let extTokens = MLX.concatenated([videoPatchified, guideTokens], axis: 1)
+                    let extTimestep = buildExtendedTimestep(
+                        sigma: sigma,
+                        originalCount: appendOriginalCount,
+                        guideCount: appendGuideCount
+                    )
+                    let velocityPredExt = videoTransformer(
+                        latent: extTokens,
+                        context: videoTextEmbeddings.asType(.bfloat16),
+                        timesteps: extTimestep,
+                        contextMask: nil,
+                        latentShape: (frames: stage1Shape.frames, height: stage1Shape.height, width: stage1Shape.width),
+                        precomputedRoPE: extRoPE
+                    )
+                    let velocityPred = cropToOriginal(velocity: velocityPredExt, originalCount: appendOriginalCount)
+                    let videoVelocity = unpatchify(velocityPred, shape: stage1Shape).asType(.float32)
+                    videoLatent = stage1Scheduler.step(
+                        latent: videoLatent, velocity: videoVelocity,
+                        sigma: sigma, sigmaNext: sigmaNext
+                    )
+                    // No re-injection: guide tokens carry the keyframe info via attention.
+                    MLX.eval(videoLatent)
+                } else {
+                    // Video-only denoising (legacy path)
+                    let velocityPred = videoTransformer(
+                        latent: videoPatchified,
+                        context: videoTextEmbeddings.asType(.bfloat16),
+                        timesteps: videoTimestep,
+                        contextMask: nil,
+                        latentShape: (frames: stage1Shape.frames, height: stage1Shape.height, width: stage1Shape.width)
+                    )
 
-                let videoVelocity = unpatchify(velocityPred, shape: stage1Shape).asType(.float32)
+                    let videoVelocity = unpatchify(velocityPred, shape: stage1Shape).asType(.float32)
 
-                videoLatent = stage1Scheduler.step(
-                    latent: videoLatent, velocity: videoVelocity,
-                    sigma: sigma, sigmaNext: sigmaNext
-                )
-                if !halfResKeyframes.isEmpty {
-                    injectKeyframeLatents(into: &videoLatent, encoded: halfResKeyframes)
+                    videoLatent = stage1Scheduler.step(
+                        latent: videoLatent, velocity: videoVelocity,
+                        sigma: sigma, sigmaNext: sigmaNext
+                    )
+                    if !halfResKeyframes.isEmpty {
+                        injectKeyframeLatents(into: &videoLatent, encoded: halfResKeyframes)
+                    }
+                    MLX.eval(videoLatent)
                 }
-                MLX.eval(videoLatent)
             }
 
             if (step + 1) % 5 == 0 { Memory.clearCache() }
@@ -858,6 +949,40 @@ public actor LTXPipeline {
         }
 
         profiler.end("Denoising Stage 1")
+
+        // [PROTOTYPE] Early-exit hook for M1/M2/M3 measurement. Decodes the Stage 1
+        // half-res latent and returns it as the video result, bypassing upscale + Stage 2.
+        if stopAfterStage1 {
+            LTXDebug.log("[PROTO] LTX_STOP_AFTER_STAGE1=1 — decoding Stage 1 latent and exiting")
+            if let dumpPath = ProcessInfo.processInfo.environment["LTX_DUMP_FINAL_LATENT"] {
+                let l32 = videoLatent.asType(.float32)
+                MLX.eval(l32)
+                try? MLX.save(arrays: ["data": l32], url: URL(fileURLWithPath: dumpPath))
+                LTXDebug.log("[PROTO] dumped stage-1 latent to \(dumpPath): \(l32.shape)")
+            }
+            LTXMemoryManager.setPhase(.vaeDecode)
+            let stage1Decoded = decodeVideo(
+                latent: videoLatent, decoder: vaeDecoder, timestep: nil,
+                temporalTileSize: memoryOptimization.vaeTemporalTileSize,
+                temporalTileOverlap: memoryOptimization.vaeTemporalTileOverlap
+            )
+            MLX.eval(stage1Decoded)
+            let trimmed: MLXArray
+            if stage1Decoded.dim(0) > config.numFrames {
+                trimmed = stage1Decoded[0..<config.numFrames]
+            } else {
+                trimmed = stage1Decoded
+            }
+            let gen = Date().timeIntervalSince(generationStart)
+            return VideoGenerationResult(
+                frames: trimmed,
+                seed: config.seed ?? 0,
+                generationTime: gen,
+                audioWaveform: nil,
+                audioSampleRate: nil,
+                effectivePrompt: effectivePrompt
+            )
+        }
 
         // === UPSCALE VIDEO 2x (audio unchanged) ===
         onProgress?(GenerationProgress(
@@ -1663,7 +1788,7 @@ public actor LTXPipeline {
             MLX.eval(normalized)
             let slot = pixelFrameToLatentFrame(kf.pixelFrameIndex)
             LTXDebug.log("Keyframe \(kf.path) → pixel \(kf.pixelFrameIndex) → latent slot \(slot), shape=\(normalized.shape)")
-            encoded.append(EncodedKeyframe(latentIdx: slot, latent: normalized))
+            encoded.append(EncodedKeyframe(latentIdx: slot, latent: normalized, pixelFrameIndex: kf.pixelFrameIndex))
         }
         return encoded
     }

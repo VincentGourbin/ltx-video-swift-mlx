@@ -261,7 +261,8 @@ class LTXTransformer: Module {
         context: MLXArray,
         timesteps: MLXArray,
         contextMask: MLXArray? = nil,
-        latentShape: (frames: Int, height: Int, width: Int)
+        latentShape: (frames: Int, height: Int, width: Int),
+        precomputedRoPE: (cos: MLXArray, sin: MLXArray)? = nil
     ) -> MLXArray {
         let startTime = Date()
         var lastTime = startTime
@@ -343,12 +344,21 @@ class LTXTransformer: Module {
         let preparedMask = prepareAttentionMask(contextMask)
 
         // Prepare positional embeddings (RoPE)
-        let pe = preparePositionalEmbeddings(
-            batchSize: batchSize,
-            frames: latentShape.frames,
-            height: latentShape.height,
-            width: latentShape.width
-        )
+        // When precomputedRoPE is provided (prototype: appended guide tokens with
+        // custom positions), use it directly and skip the cached derivation from
+        // latentShape. The caller is responsible for matching pe.cos/sin token count
+        // with latent.dim(1).
+        let pe: (cos: MLXArray, sin: MLXArray)
+        if let custom = precomputedRoPE {
+            pe = custom
+        } else {
+            pe = preparePositionalEmbeddings(
+                batchSize: batchSize,
+                frames: latentShape.frames,
+                height: latentShape.height,
+                width: latentShape.width
+            )
+        }
         eval(pe.cos, pe.sin)
         now = Date()
         LTXDebug.log("  [TIME] preparePositionalEmbeddings (RoPE): \(String(format: "%.3f", now.timeIntervalSince(lastTime)))s")
