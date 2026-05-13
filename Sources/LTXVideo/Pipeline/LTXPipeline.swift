@@ -752,74 +752,15 @@ public actor LTXPipeline {
 
         // Pre-build guide tokens, extended positions, and RoPE for the append path.
         // These are constant across denoising steps, so compute once.
-        var appendGuideTokens: MLXArray? = nil
-        var appendExtRoPE: (cos: MLXArray, sin: MLXArray)? = nil
-        var appendExtCrossVideoRoPE: (cos: MLXArray, sin: MLXArray)? = nil
-        var appendOriginalCount: Int = 0
-        var appendGuideCount: Int = 0
-        if useAppendKeyframes {
-            let basePos = createPositionGrid(
-                batchSize: 1,
-                frames: stage1Shape.frames,
-                height: stage1Shape.height,
-                width: stage1Shape.width
+        let stage1AppendCtx: AppendKeyframeContext? = useAppendKeyframes
+            ? prepareKeyframeAppend(
+                encoded: halfResKeyframes,
+                shape: stage1Shape,
+                hasAudio: hasAudio,
+                refConfig: transformer?.config ?? ltx2Transformer?.config ?? .default,
+                stageLabel: "Stage 1"
             )
-            let guides = halfResKeyframes.map { kf -> AppendedGuideTokens in
-                buildKeyframeGuideToken(
-                    encodedLatent: kf.latent,
-                    pixelFrameIndex: kf.pixelFrameIndex,
-                    fps: 24.0
-                )
-            }
-            let allGuideTokens = MLX.concatenated(guides.map { $0.tokens }, axis: 1)
-            let allGuidePositions = MLX.concatenated(guides.map { $0.positions }, axis: 2)
-            appendGuideTokens = allGuideTokens
-            appendGuideCount = allGuideTokens.dim(1)
-            appendOriginalCount = stage1Shape.tokenCount
-
-            let extPositions = MLX.concatenated([basePos, allGuidePositions], axis: 2)
-
-            // Pick the relevant transformer config (video-only or dual stream)
-            let refConfig: LTXTransformerConfig
-            if let videoTransformer = transformer {
-                refConfig = videoTransformer.config
-            } else if let dual = ltx2Transformer {
-                refConfig = dual.config
-            } else {
-                refConfig = .default
-            }
-
-            // Pre-compute RoPE for extended positions (used by both LTXTransformer and
-            // LTX2Transformer's video stream)
-            let pe = precomputeFreqsCis(
-                indicesGrid: extPositions,
-                dim: refConfig.innerDim,
-                theta: refConfig.ropeTheta,
-                maxPos: refConfig.maxPos,
-                numAttentionHeads: refConfig.numAttentionHeads,
-                ropeType: .split,
-                doublePrecision: true
-            )
-            MLX.eval(pe.cos, pe.sin)
-            appendExtRoPE = pe
-
-            // Cross-modal video RoPE (audio path only): temporal-only coords from extPositions
-            if hasAudio {
-                let temporalOnly = extPositions[0..., 0..<1, 0...]
-                let crossPE = precomputeFreqsCis(
-                    indicesGrid: temporalOnly,
-                    dim: refConfig.audioCrossAttentionDim,
-                    theta: refConfig.ropeTheta,
-                    maxPos: refConfig.audioMaxPos,
-                    numAttentionHeads: refConfig.audioNumAttentionHeads,
-                    ropeType: .split,
-                    doublePrecision: true
-                )
-                MLX.eval(crossPE.cos, crossPE.sin)
-                appendExtCrossVideoRoPE = crossPE
-            }
-            LTXDebug.log("[append] Stage 1 extended sequence: \(appendOriginalCount) video + \(appendGuideCount) guide tokens")
-        }
+            : nil
 
         // === STAGE 1: Denoise at half resolution ===
         let stage1NumSteps = stage1Sigmas.count - 1
@@ -850,15 +791,12 @@ public actor LTXPipeline {
                 let audioTimestep = MLXArray([sigma])
                 let audioPatchified = ap.asType(.bfloat16)
 
-                if useAppendKeyframes,
-                   let guideTokens = appendGuideTokens,
-                   let extRoPE = appendExtRoPE,
-                   let extCrossRoPE = appendExtCrossVideoRoPE {
-                    let extTokens = MLX.concatenated([videoPatchified, guideTokens], axis: 1)
+                if let ctx = stage1AppendCtx, let extCrossRoPE = ctx.extCrossVideoRoPE {
+                    let extTokens = MLX.concatenated([videoPatchified, ctx.guideTokens], axis: 1)
                     let extTimestep = buildExtendedTimestep(
                         sigma: sigma,
-                        originalCount: appendOriginalCount,
-                        guideCount: appendGuideCount
+                        originalCount: ctx.originalCount,
+                        guideCount: ctx.guideCount
                     )
                     let (videoVelPredExt, audioVelPred) = ltx2(
                         videoLatent: extTokens,
@@ -871,10 +809,10 @@ public actor LTXPipeline {
                         audioContextMask: nil,
                         videoLatentShape: (frames: stage1Shape.frames, height: stage1Shape.height, width: stage1Shape.width),
                         audioNumFrames: audioNumFrames,
-                        precomputedVideoRoPE: extRoPE,
+                        precomputedVideoRoPE: ctx.extRoPE,
                         precomputedCrossVideoRoPE: extCrossRoPE
                     )
-                    let videoVelPred = cropToOriginal(velocity: videoVelPredExt, originalCount: appendOriginalCount)
+                    let videoVelPred = cropToOriginal(velocity: videoVelPredExt, originalCount: ctx.originalCount)
                     let videoVelocity = unpatchify(videoVelPred, shape: stage1Shape).asType(.float32)
                     let audioVelocity = audioVelPred.asType(.float32)
                     videoLatent = stage1Scheduler.step(
@@ -910,15 +848,13 @@ public actor LTXPipeline {
                     MLX.eval(videoLatent, updatedAudio)
                 }
             } else if let videoTransformer = transformer {
-                if useAppendKeyframes,
-                   let guideTokens = appendGuideTokens,
-                   let extRoPE = appendExtRoPE {
+                if let ctx = stage1AppendCtx {
                     // Append guide tokens for keyframe conditioning (issue #21 fix).
-                    let extTokens = MLX.concatenated([videoPatchified, guideTokens], axis: 1)
+                    let extTokens = MLX.concatenated([videoPatchified, ctx.guideTokens], axis: 1)
                     let extTimestep = buildExtendedTimestep(
                         sigma: sigma,
-                        originalCount: appendOriginalCount,
-                        guideCount: appendGuideCount
+                        originalCount: ctx.originalCount,
+                        guideCount: ctx.guideCount
                     )
                     let velocityPredExt = videoTransformer(
                         latent: extTokens,
@@ -926,9 +862,9 @@ public actor LTXPipeline {
                         timesteps: extTimestep,
                         contextMask: nil,
                         latentShape: (frames: stage1Shape.frames, height: stage1Shape.height, width: stage1Shape.width),
-                        precomputedRoPE: extRoPE
+                        precomputedRoPE: ctx.extRoPE
                     )
-                    let velocityPred = cropToOriginal(velocity: velocityPredExt, originalCount: appendOriginalCount)
+                    let velocityPred = cropToOriginal(velocity: velocityPredExt, originalCount: ctx.originalCount)
                     let videoVelocity = unpatchify(velocityPred, shape: stage1Shape).asType(.float32)
                     videoLatent = stage1Scheduler.step(
                         latent: videoLatent, velocity: videoVelocity,
@@ -1047,70 +983,16 @@ public actor LTXPipeline {
         MLX.eval(videoLatent)
         if hasAudio, let ap = audioLatentPacked { MLX.eval(ap) }
 
-        // [append] Stage 2 append: pre-build guides + extended positions + RoPE
-        var appendGuideTokensS2: MLXArray? = nil
-        var appendExtRoPES2: (cos: MLXArray, sin: MLXArray)? = nil
-        var appendExtCrossVideoRoPES2: (cos: MLXArray, sin: MLXArray)? = nil
-        var appendOriginalCountS2: Int = 0
-        var appendGuideCountS2: Int = 0
-        if useAppendKeyframesS2, !fullResKeyframes.isEmpty {
-            let basePos = createPositionGrid(
-                batchSize: 1,
-                frames: stage2Shape.frames,
-                height: stage2Shape.height,
-                width: stage2Shape.width
+        // Pre-build guide tokens, extended positions, and RoPE for the Stage 2 append path.
+        let stage2AppendCtx: AppendKeyframeContext? = useAppendKeyframesS2
+            ? prepareKeyframeAppend(
+                encoded: fullResKeyframes,
+                shape: stage2Shape,
+                hasAudio: hasAudio,
+                refConfig: transformer?.config ?? ltx2Transformer?.config ?? .default,
+                stageLabel: "Stage 2"
             )
-            let guides = fullResKeyframes.map { kf -> AppendedGuideTokens in
-                buildKeyframeGuideToken(
-                    encodedLatent: kf.latent,
-                    pixelFrameIndex: kf.pixelFrameIndex,
-                    fps: 24.0
-                )
-            }
-            let allGuideTokens = MLX.concatenated(guides.map { $0.tokens }, axis: 1)
-            let allGuidePositions = MLX.concatenated(guides.map { $0.positions }, axis: 2)
-            appendGuideTokensS2 = allGuideTokens
-            appendGuideCountS2 = allGuideTokens.dim(1)
-            appendOriginalCountS2 = stage2Shape.tokenCount
-            let extPositions = MLX.concatenated([basePos, allGuidePositions], axis: 2)
-
-            let refConfig: LTXTransformerConfig
-            if let videoTransformer = transformer {
-                refConfig = videoTransformer.config
-            } else if let dual = ltx2Transformer {
-                refConfig = dual.config
-            } else {
-                refConfig = .default
-            }
-
-            let pe = precomputeFreqsCis(
-                indicesGrid: extPositions,
-                dim: refConfig.innerDim,
-                theta: refConfig.ropeTheta,
-                maxPos: refConfig.maxPos,
-                numAttentionHeads: refConfig.numAttentionHeads,
-                ropeType: .split,
-                doublePrecision: true
-            )
-            MLX.eval(pe.cos, pe.sin)
-            appendExtRoPES2 = pe
-
-            if hasAudio {
-                let temporalOnly = extPositions[0..., 0..<1, 0...]
-                let crossPE = precomputeFreqsCis(
-                    indicesGrid: temporalOnly,
-                    dim: refConfig.audioCrossAttentionDim,
-                    theta: refConfig.ropeTheta,
-                    maxPos: refConfig.audioMaxPos,
-                    numAttentionHeads: refConfig.audioNumAttentionHeads,
-                    ropeType: .split,
-                    doublePrecision: true
-                )
-                MLX.eval(crossPE.cos, crossPE.sin)
-                appendExtCrossVideoRoPES2 = crossPE
-            }
-            LTXDebug.log("[append] Stage 2 extended sequence: \(appendOriginalCountS2) video + \(appendGuideCountS2) guide tokens")
-        }
+            : nil
 
         // Dump re-noised latent
         if LTXDebug.isEnabled {
@@ -1140,15 +1022,12 @@ public actor LTXPipeline {
                 let audioTimestep = MLXArray([sigma])
                 let audioPatchified = ap.asType(.bfloat16)
 
-                if useAppendKeyframesS2,
-                   let guideTokens = appendGuideTokensS2,
-                   let extRoPE = appendExtRoPES2,
-                   let extCrossRoPE = appendExtCrossVideoRoPES2 {
-                    let extTokens = MLX.concatenated([videoPatchified, guideTokens], axis: 1)
+                if let ctx = stage2AppendCtx, let extCrossRoPE = ctx.extCrossVideoRoPE {
+                    let extTokens = MLX.concatenated([videoPatchified, ctx.guideTokens], axis: 1)
                     let extTimestep = buildExtendedTimestep(
                         sigma: sigma,
-                        originalCount: appendOriginalCountS2,
-                        guideCount: appendGuideCountS2
+                        originalCount: ctx.originalCount,
+                        guideCount: ctx.guideCount
                     )
                     let (videoVelPredExt, audioVelPred) = ltx2(
                         videoLatent: extTokens,
@@ -1161,10 +1040,10 @@ public actor LTXPipeline {
                         audioContextMask: nil,
                         videoLatentShape: (frames: stage2Shape.frames, height: stage2Shape.height, width: stage2Shape.width),
                         audioNumFrames: audioNumFrames,
-                        precomputedVideoRoPE: extRoPE,
+                        precomputedVideoRoPE: ctx.extRoPE,
                         precomputedCrossVideoRoPE: extCrossRoPE
                     )
-                    let videoVelPred = cropToOriginal(velocity: videoVelPredExt, originalCount: appendOriginalCountS2)
+                    let videoVelPred = cropToOriginal(velocity: videoVelPredExt, originalCount: ctx.originalCount)
                     let videoVelocity = unpatchify(videoVelPred, shape: stage2Shape).asType(.float32)
                     let audioVelocity = audioVelPred.asType(.float32)
                     let dt = sigmaNext - sigma
@@ -1196,14 +1075,12 @@ public actor LTXPipeline {
                     MLX.eval(videoLatent, updatedAudio)
                 }
             } else if let videoTransformer = transformer {
-                if useAppendKeyframesS2,
-                   let guideTokens = appendGuideTokensS2,
-                   let extRoPE = appendExtRoPES2 {
-                    let extTokens = MLX.concatenated([videoPatchified, guideTokens], axis: 1)
+                if let ctx = stage2AppendCtx {
+                    let extTokens = MLX.concatenated([videoPatchified, ctx.guideTokens], axis: 1)
                     let extTimestep = buildExtendedTimestep(
                         sigma: sigma,
-                        originalCount: appendOriginalCountS2,
-                        guideCount: appendGuideCountS2
+                        originalCount: ctx.originalCount,
+                        guideCount: ctx.guideCount
                     )
                     let velocityPredExt = videoTransformer(
                         latent: extTokens,
@@ -1211,9 +1088,9 @@ public actor LTXPipeline {
                         timesteps: extTimestep,
                         contextMask: nil,
                         latentShape: (frames: stage2Shape.frames, height: stage2Shape.height, width: stage2Shape.width),
-                        precomputedRoPE: extRoPE
+                        precomputedRoPE: ctx.extRoPE
                     )
-                    let velocityPred = cropToOriginal(velocity: velocityPredExt, originalCount: appendOriginalCountS2)
+                    let velocityPred = cropToOriginal(velocity: velocityPredExt, originalCount: ctx.originalCount)
                     let videoVelocity = unpatchify(velocityPred, shape: stage2Shape).asType(.float32)
                     let dt = sigmaNext - sigma
                     videoLatent = videoLatent + MLXArray(dt) * videoVelocity

@@ -18,6 +18,107 @@ struct AppendedGuideTokens {
     let positions: MLXArray
 }
 
+/// All the constant-across-denoising-steps state needed to run a stage with
+/// appended keyframe guide tokens. Built once per stage by `prepareKeyframeAppend`,
+/// consumed each step by the transformer call site.
+///
+/// - `guideTokens`: concatenated keyframe tokens, shape `(1, K_total, C)`.
+/// - `extRoPE`: RoPE for the full extended sequence (video + guides), one
+///   `(cos, sin)` pair shared by `LTXTransformer.precomputedRoPE` and
+///   `LTX2Transformer.precomputedVideoRoPE`.
+/// - `extCrossVideoRoPE`: cross-modal video RoPE (temporal-only) for the
+///   extended sequence — only set when audio is enabled, used by
+///   `LTX2Transformer.precomputedCrossVideoRoPE`.
+/// - `originalCount`: token count of the un-extended video latent — what the
+///   scheduler step operates on after `cropToOriginal`.
+/// - `guideCount`: total appended guide token count (sum over all keyframes).
+struct AppendKeyframeContext {
+    let guideTokens: MLXArray
+    let extRoPE: (cos: MLXArray, sin: MLXArray)
+    let extCrossVideoRoPE: (cos: MLXArray, sin: MLXArray)?
+    let originalCount: Int
+    let guideCount: Int
+}
+
+/// Build the constant-across-steps `AppendKeyframeContext` for one stage.
+///
+/// Encodes each keyframe into a guide token group, concatenates them, computes
+/// the extended RoPE (and the cross-modal video RoPE when audio is enabled).
+/// Returns `nil` when there are no keyframes.
+///
+/// - Parameters:
+///   - encoded: VAE-encoded keyframes (output of `encodeKeyframes`).
+///   - shape: latent shape of the stage (used for `originalCount` and base positions).
+///   - hasAudio: when `true`, also computes `extCrossVideoRoPE` for the LTX2 audio path.
+///   - refConfig: transformer config providing RoPE dimensions / theta / maxPos.
+///   - stageLabel: human-readable tag (e.g. "Stage 1") used in debug logs.
+func prepareKeyframeAppend(
+    encoded: [EncodedKeyframe],
+    shape: VideoLatentShape,
+    hasAudio: Bool,
+    refConfig: LTXTransformerConfig,
+    stageLabel: String
+) -> AppendKeyframeContext? {
+    guard !encoded.isEmpty else { return nil }
+
+    let basePos = createPositionGrid(
+        batchSize: 1,
+        frames: shape.frames,
+        height: shape.height,
+        width: shape.width
+    )
+    let guides = encoded.map { kf in
+        buildKeyframeGuideToken(
+            encodedLatent: kf.latent,
+            pixelFrameIndex: kf.pixelFrameIndex,
+            fps: 24.0
+        )
+    }
+    let allGuideTokens = MLX.concatenated(guides.map { $0.tokens }, axis: 1)
+    let allGuidePositions = MLX.concatenated(guides.map { $0.positions }, axis: 2)
+    let originalCount = shape.tokenCount
+    let guideCount = allGuideTokens.dim(1)
+
+    let extPositions = MLX.concatenated([basePos, allGuidePositions], axis: 2)
+
+    let pe = precomputeFreqsCis(
+        indicesGrid: extPositions,
+        dim: refConfig.innerDim,
+        theta: refConfig.ropeTheta,
+        maxPos: refConfig.maxPos,
+        numAttentionHeads: refConfig.numAttentionHeads,
+        ropeType: .split,
+        doublePrecision: true
+    )
+    MLX.eval(pe.cos, pe.sin)
+
+    var crossPE: (cos: MLXArray, sin: MLXArray)? = nil
+    if hasAudio {
+        let temporalOnly = extPositions[0..., 0..<1, 0...]
+        let crossRoPE = precomputeFreqsCis(
+            indicesGrid: temporalOnly,
+            dim: refConfig.audioCrossAttentionDim,
+            theta: refConfig.ropeTheta,
+            maxPos: refConfig.audioMaxPos,
+            numAttentionHeads: refConfig.audioNumAttentionHeads,
+            ropeType: .split,
+            doublePrecision: true
+        )
+        MLX.eval(crossRoPE.cos, crossRoPE.sin)
+        crossPE = crossRoPE
+    }
+
+    LTXDebug.log("[append] \(stageLabel) extended sequence: \(originalCount) video + \(guideCount) guide tokens")
+
+    return AppendKeyframeContext(
+        guideTokens: allGuideTokens,
+        extRoPE: pe,
+        extCrossVideoRoPE: crossPE,
+        originalCount: originalCount,
+        guideCount: guideCount
+    )
+}
+
 /// Build a per-token timestep tensor of shape `(B, originalCount + guideCount)` where
 /// the first `originalCount` tokens hold the schedule's current `sigma` and the
 /// trailing `guideCount` tokens hold `0` (clean reference, no denoising).
