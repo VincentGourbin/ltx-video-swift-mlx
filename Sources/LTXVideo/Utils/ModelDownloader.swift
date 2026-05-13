@@ -60,7 +60,7 @@ public actor ModelDownloader {
     private let session: URLSession
 
     public init(hfToken: String? = nil, cacheDir: URL? = nil) {
-        self.hfToken = hfToken
+        self.hfToken = hfToken ?? Self.resolveHFToken()
 
         // Use explicit cache directory, or fall back to LTXModelRegistry.modelsDirectory
         self.cacheDirectory = cacheDir ?? LTXModelRegistry.modelsDirectory
@@ -69,6 +69,36 @@ public actor ModelDownloader {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForResource = 3600  // 1 hour timeout for large files
         self.session = URLSession(configuration: config)
+    }
+
+    /// Resolve an HF token from environment / on-disk credentials when one wasn't passed
+    /// at construction time. Mirrors what `huggingface-cli login` writes:
+    ///   1. `$HF_TOKEN` (preferred — explicit, scoped to the process)
+    ///   2. `$HUGGING_FACE_HUB_TOKEN` (alternate name some tools use)
+    ///   3. `~/.cache/huggingface/token` (written by `huggingface-cli login`)
+    ///   4. `~/.huggingface/token` (legacy location)
+    /// Returns nil if none are found — gated downloads will then fail explicitly.
+    private static func resolveHFToken() -> String? {
+        let env = ProcessInfo.processInfo.environment
+        if let t = env["HF_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
+            return t
+        }
+        if let t = env["HUGGING_FACE_HUB_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
+            return t
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates = [
+            home.appendingPathComponent(".cache/huggingface/token"),
+            home.appendingPathComponent(".huggingface/token"),
+        ]
+        for url in candidates {
+            if let data = try? Data(contentsOf: url),
+               let raw = String(data: data, encoding: .utf8) {
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+        }
+        return nil
     }
 
     // MARK: - HuggingFace API
