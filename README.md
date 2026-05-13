@@ -145,6 +145,20 @@ ltx-video generate "A car engine starting" \
     --image car.png --audio -w 768 -h 512 -f 121
 ```
 
+### LipDub (Reference-Video Lip-Sync)
+
+Lip-sync a reference video to a new prompt using Lightricks' [LipDub IC-LoRA](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-LipDub). Both the video reference (frames) and the audio reference (track) condition the generation; the final audio is decoded from the Stage 1 denoised latent (matches Python `lipdub.py`).
+
+The LipDub LoRA is gated on HF — accept the license and run `huggingface-cli login` once (or pass `--hf-token`).
+
+```bash
+ltx-video lipdub "a person speaking the dialogue" \
+    --reference-video source.mp4 \
+    -w 768 -h 512 -f 121 --seed 42
+```
+
+See [docs/examples/lipdub/README.md](docs/examples/lipdub/README.md) for pipeline details and constraints.
+
 ### LoRA Training (Beta)
 
 > **Status**: Theoretically functional, currently under validation. The full training pipeline runs end-to-end (dataset loading, latent caching, gradient computation, checkpoint saving, LoRA export). Validation is in progress with the [Cakeify dataset](https://huggingface.co/datasets/Lightricks/Cakeify-Dataset).

@@ -1013,6 +1013,10 @@ struct Info: ParsableCommand {
               ltx-video retake "A cat playing in a forest stream" \
                 --video beaver.mp4 --strength 0.8 -w 768 -h 512 -f 121
 
+              # LipDub: lip-sync a reference video to a new prompt
+              ltx-video lipdub "a person speaking the dialogue" \
+                --reference-video source.mp4 -w 768 -h 512 -f 121
+
               # With prompt enhancement
               ltx-video generate "A beaver" -w 768 -h 512 -f 121 --enhance-prompt
 
