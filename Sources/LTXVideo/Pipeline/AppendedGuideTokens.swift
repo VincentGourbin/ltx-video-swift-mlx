@@ -1,35 +1,26 @@
-// AppendedGuideTokens.swift — Prototype primitive for keyframe append fix (issue #21)
+// AppendedGuideTokens.swift — Keyframe conditioning via appended guide tokens (issue #21 fix)
 // Copyright 2025
 
 import Foundation
 @preconcurrency import MLX
 
+/// A group of "guide tokens" that get concatenated to the video token sequence
+/// inside the transformer to condition generation on a keyframe image.
+///
+/// - `tokens`: patchified VAE-encoded keyframe, shape `(1, K, C)` where
+///   `K = latentH * latentW` and `C` is the VAE channel count (128 for LTX-2.3).
+/// - `positions`: 3D RoPE positions for those tokens, shape `(1, 3, K)`. The
+///   temporal coord points to `(pixelFrameIndex + 0.5) / fps` (single-frame
+///   narrowing per Lightricks `keyframe_cond.py`); spatial coords are the same
+///   pixel-space midpoints used by the base video sequence.
 struct AppendedGuideTokens {
     let tokens: MLXArray
     let positions: MLXArray
 }
 
-func appendVideoGuides(
-    videoTokens: MLXArray,
-    basePositions: MLXArray,
-    guides: [AppendedGuideTokens]
-) -> (tokens: MLXArray, positions: MLXArray, originalCount: Int) {
-    let originalCount = videoTokens.dim(1)
-    guard !guides.isEmpty else {
-        return (videoTokens, basePositions, originalCount)
-    }
-
-    var allTokens: [MLXArray] = [videoTokens]
-    var allPositions: [MLXArray] = [basePositions]
-    for g in guides {
-        allTokens.append(g.tokens)
-        allPositions.append(g.positions)
-    }
-    let tokens = MLX.concatenated(allTokens, axis: 1)
-    let positions = MLX.concatenated(allPositions, axis: 2)
-    return (tokens, positions, originalCount)
-}
-
+/// Build a per-token timestep tensor of shape `(B, originalCount + guideCount)` where
+/// the first `originalCount` tokens hold the schedule's current `sigma` and the
+/// trailing `guideCount` tokens hold `0` (clean reference, no denoising).
 func buildExtendedTimestep(
     sigma: Float,
     originalCount: Int,
@@ -48,6 +39,9 @@ func buildExtendedTimestep(
     return MLX.broadcast(arr, to: [batchSize, totalCount])
 }
 
+/// Slice `velocity` (shape `(B, T_total, C)`) down to the first `originalCount`
+/// tokens — the appended guide tokens' predicted velocity is discarded since the
+/// guides never enter the denoised latent.
 func cropToOriginal(velocity: MLXArray, originalCount: Int) -> MLXArray {
     return velocity[0..., 0..<originalCount, 0...]
 }
@@ -65,7 +59,9 @@ func cropToOriginal(velocity: MLXArray, originalCount: Int) -> MLXArray {
 ///   - pixelFrameIndex: Target pixel frame index where this keyframe should sit (0-based).
 ///   - fps: Pixel frame rate, default 24.0 (matches createPositionGrid default).
 ///   - spatialScale: VAE spatial compression factor, default 32.
-///   - dtype: Output dtype for the token tensor; positions stay float32.
+///   - dtype: Output dtype for the token tensor — must match the dtype the
+///            transformer expects for its patchified video latent input
+///            (bfloat16 today). Positions stay float32 for RoPE precision.
 func buildKeyframeGuideToken(
     encodedLatent: MLXArray,
     pixelFrameIndex: Int,
@@ -103,29 +99,4 @@ func buildKeyframeGuideToken(
     let positions = stacked.expandedDimensions(axis: 0).asType(.float32)
 
     return AppendedGuideTokens(tokens: patched, positions: positions)
-}
-
-/// Construct the base position grid for a video latent (same as createPositionGrid)
-/// but exposed here so the pipeline can extend it with guide positions before
-/// calling precomputeFreqsCis.
-func buildBaseVideoPositions(
-    batchSize: Int,
-    frames: Int,
-    height: Int,
-    width: Int,
-    temporalScale: Int = 8,
-    spatialScale: Int = 32,
-    fps: Float = 24.0,
-    causalFix: Bool = true
-) -> MLXArray {
-    return createPositionGrid(
-        batchSize: batchSize,
-        frames: frames,
-        height: height,
-        width: width,
-        temporalScale: temporalScale,
-        spatialScale: spatialScale,
-        fps: fps,
-        causalFix: causalFix
-    )
 }

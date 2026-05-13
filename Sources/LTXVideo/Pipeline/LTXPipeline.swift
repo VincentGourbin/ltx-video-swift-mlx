@@ -750,7 +750,7 @@ public actor LTXPipeline {
         let useAppendKeyframes = !halfResKeyframes.isEmpty
         MLX.eval(videoLatent)
 
-        // [PROTOTYPE] Pre-build guide tokens, extended positions, and RoPE for append path.
+        // Pre-build guide tokens, extended positions, and RoPE for the append path.
         // These are constant across denoising steps, so compute once.
         var appendGuideTokens: MLXArray? = nil
         var appendExtRoPE: (cos: MLXArray, sin: MLXArray)? = nil
@@ -758,7 +758,7 @@ public actor LTXPipeline {
         var appendOriginalCount: Int = 0
         var appendGuideCount: Int = 0
         if useAppendKeyframes {
-            let basePos = buildBaseVideoPositions(
+            let basePos = createPositionGrid(
                 batchSize: 1,
                 frames: stage1Shape.frames,
                 height: stage1Shape.height,
@@ -1054,7 +1054,7 @@ public actor LTXPipeline {
         var appendOriginalCountS2: Int = 0
         var appendGuideCountS2: Int = 0
         if useAppendKeyframesS2, !fullResKeyframes.isEmpty {
-            let basePos = buildBaseVideoPositions(
+            let basePos = createPositionGrid(
                 batchSize: 1,
                 frames: stage2Shape.frames,
                 height: stage2Shape.height,

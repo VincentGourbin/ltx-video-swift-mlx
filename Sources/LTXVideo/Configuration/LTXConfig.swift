@@ -317,10 +317,17 @@ public struct LTXVideoGenerationConfig: Sendable {
     /// nil = text-to-video (default), non-nil = image-to-video.
     public var imagePath: String?
 
-    /// Noise scale for image conditioning. Adds quadratically-decreasing noise to the
-    /// conditioned frame to allow smoother motion transitions. 0.0 = disabled (matches Diffusers default),
-    /// 0.15 = optional for natural motion.
-    public var imageCondNoiseScale: Float
+    /// **Deprecated, no-op.** Used by the legacy hard-injection keyframe path which
+    /// re-injected the keyframe slot pre-step with σ-scaled noise. The current append-based
+    /// keyframe path keeps guide tokens at σ=0 throughout, so this value is ignored.
+    /// Field kept to preserve source-compat for SPM consumers.
+    @available(*, deprecated, message: "No-op since the keyframe-append fix (issue #21). Will be removed in a future major release.")
+    public var imageCondNoiseScale: Float {
+        get { _imageCondNoiseScale }
+        set { _imageCondNoiseScale = newValue }
+    }
+    // Backing storage so internal init assignments don't trip the deprecation warning.
+    private var _imageCondNoiseScale: Float
 
     /// Source video path for retake (video-to-video) mode. nil = generate from scratch.
     public var videoPath: String?
@@ -371,7 +378,7 @@ public struct LTXVideoGenerationConfig: Sendable {
         self.seed = seed
         self.enhancePrompt = enhancePrompt
         self.imagePath = imagePath
-        self.imageCondNoiseScale = imageCondNoiseScale
+        self._imageCondNoiseScale = imageCondNoiseScale
         self.videoPath = videoPath
         self.retakeStrength = retakeStrength
         self.retakeStartTime = retakeStartTime
@@ -405,7 +412,7 @@ public struct LTXVideoGenerationConfig: Sendable {
         self.seed = seed
         self.enhancePrompt = enhancePrompt
         self.imagePath = imagePath
-        self.imageCondNoiseScale = imageCondNoiseScale
+        self._imageCondNoiseScale = imageCondNoiseScale
         self.videoPath = videoPath
         self.retakeStrength = retakeStrength
         self.retakeStartTime = retakeStartTime

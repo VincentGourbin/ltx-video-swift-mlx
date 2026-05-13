@@ -344,10 +344,10 @@ class LTXTransformer: Module {
         let preparedMask = prepareAttentionMask(contextMask)
 
         // Prepare positional embeddings (RoPE)
-        // When precomputedRoPE is provided (prototype: appended guide tokens with
-        // custom positions), use it directly and skip the cached derivation from
-        // latentShape. The caller is responsible for matching pe.cos/sin token count
-        // with latent.dim(1).
+        // When precomputedRoPE is provided (e.g. appended keyframe guide tokens
+        // with custom RoPE positions), use it directly and skip the cached
+        // derivation from latentShape. The caller is responsible for matching the
+        // pe.cos/sin token count with latent.dim(1).
         let pe: (cos: MLXArray, sin: MLXArray)
         if let custom = precomputedRoPE {
             pe = custom
