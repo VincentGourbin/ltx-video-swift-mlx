@@ -514,6 +514,38 @@ public actor ModelDownloader {
         return FileManager.default.fileExists(atPath: destination.path)
     }
 
+    /// LipDub IC-LoRA filename on HuggingFace
+    public static let lipDubLoRAFilename = "ltx-2.3-22b-ic-lora-lipdub-0.9.safetensors"
+
+    /// Download the LipDub IC-LoRA from `Lightricks/LTX-2.3-22b-IC-LoRA-LipDub`.
+    /// Repo is gated; the user must have accepted the license on HF and provided
+    /// `hfToken` at downloader construction time.
+    public func downloadLipDubLoRA(
+        progress: DownloadProgressCallback? = nil
+    ) async throws -> URL {
+        let repoId = "Lightricks/LTX-2.3-22b-IC-LoRA-LipDub"
+        let filename = Self.lipDubLoRAFilename
+
+        let weightsDir = cacheDirectory.appendingPathComponent("ltx-lora-lipdub")
+        let destination = weightsDir.appendingPathComponent(filename)
+
+        if FileManager.default.fileExists(atPath: destination.path) {
+            progress?(DownloadProgress(progress: 1.0, message: "LipDub IC-LoRA already downloaded"))
+            return destination
+        }
+
+        progress?(DownloadProgress(progress: 0.1, message: "Downloading LipDub IC-LoRA weights..."))
+        try await downloadFile(repoId: repoId, filename: filename, to: destination)
+        progress?(DownloadProgress(progress: 1.0, message: "LipDub IC-LoRA download complete"))
+        return destination
+    }
+
+    /// Check if LipDub IC-LoRA weights are downloaded
+    public func isLipDubLoRADownloaded() -> Bool {
+        let destination = cacheDirectory.appendingPathComponent("ltx-lora-lipdub/\(Self.lipDubLoRAFilename)")
+        return FileManager.default.fileExists(atPath: destination.path)
+    }
+
     /// Clear downloaded models
     public func clearCache() throws {
         if FileManager.default.fileExists(atPath: cacheDirectory.path) {

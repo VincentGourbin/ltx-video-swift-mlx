@@ -11,7 +11,7 @@ struct LTXVideoCLI: AsyncParsableCommand {
         commandName: "ltx-video",
         abstract: "LTX-2.3 video generation on Mac with MLX",
         version: "0.1.0",
-        subcommands: [Generate.self, Retake.self, Profile.self, ExportQuantized.self, Download.self, Train.self, TrainingControl.self, Models.self, Info.self],
+        subcommands: [Generate.self, Retake.self, LipDub.self, Profile.self, ExportQuantized.self, Download.self, Train.self, TrainingControl.self, Models.self, Info.self],
         defaultSubcommand: Info.self
     )
 }
@@ -641,6 +641,204 @@ struct Retake: AsyncParsableCommand {
             try traceData.write(to: URL(fileURLWithPath: tracePath))
             print("Chrome Trace: \(tracePath)  (open in https://ui.perfetto.dev/)")
         }
+    }
+}
+
+// MARK: - LipDub Command
+
+struct LipDub: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "lipdub",
+        abstract: "Lip-sync a reference video to a new prompt using the LipDub IC-LoRA"
+    )
+
+    @Argument(help: "The text prompt describing what is being said / shown")
+    var prompt: String
+
+    @Option(name: .long, help: "Reference video path (.mp4) — frames AND audio are extracted from this file")
+    var referenceVideo: String
+
+    @Option(name: .shortAndLong, help: "Output file path (default: lipdub.mp4)")
+    var output: String = "lipdub.mp4"
+
+    @Option(name: .shortAndLong, help: "Video width in pixels (must be divisible by 64)")
+    var width: Int = 768
+
+    @Option(name: .shortAndLong, help: "Video height in pixels (must be divisible by 64)")
+    var height: Int = 512
+
+    @Option(name: .shortAndLong, help: "Number of frames (must be 8n+1, e.g., 121, 241). Should match the reference video length.")
+    var frames: Int = 121
+
+    @Option(name: .long, help: "Random seed for reproducibility")
+    var seed: UInt64?
+
+    @Option(name: .long, help: "Reference video conditioning strength (default: 1.0)")
+    var referenceStrength: Float = 1.0
+
+    @Option(name: .long, help: "Path to LipDub IC-LoRA .safetensors (default: auto-download from HuggingFace)")
+    var lora: String?
+
+    @Option(name: .long, help: "Video bitrate in kbps (e.g., 1000 for 1 Mbps). Default: quality-based encoding")
+    var bitrate: Int?
+
+    @Flag(name: .long, help: "Enable debug output")
+    var debug: Bool = false
+
+    @Option(name: .long, help: "HuggingFace token for gated models (LipDub LoRA + LTX-2.3 are gated)")
+    var hfToken: String?
+
+    @Option(name: .long, help: "Custom directory for model storage")
+    var modelsDir: String?
+
+    @Option(name: .long, help: "Path to local Gemma model directory")
+    var gemmaPath: String?
+
+    @Option(name: .long, help: "Path to local LTX unified weights file")
+    var ltxWeights: String?
+
+    mutating func run() async throws {
+        if let dir = modelsDir {
+            LTXModelRegistry.customModelsDirectory = URL(fileURLWithPath: dir)
+        }
+        if debug { LTXDebug.enableDebugMode() }
+
+        print("LTX-2.3 LipDub")
+        print("==============")
+        print("Reference video: \(referenceVideo)")
+        print("Prompt: \(prompt)")
+        print("Output: \(output)")
+        print("Resolution: \(width)x\(height) (stage 1: \(width / 2)x\(height / 2))")
+        print("Frames: \(frames)")
+        if let seed = seed { print("Seed: \(seed)") }
+        if referenceStrength != 1.0 { print("Reference strength: \(referenceStrength)") }
+        print()
+
+        // Validate
+        guard (frames - 1) % 8 == 0 else {
+            throw ValidationError("Frame count must be 8n+1 (e.g., 9, 17, 25, 33, 121, 241). Got \(frames)")
+        }
+        guard width % 64 == 0 && height % 64 == 0 else {
+            throw ValidationError("Width and height must be divisible by 64. Got \(width)x\(height)")
+        }
+        guard FileManager.default.fileExists(atPath: referenceVideo) else {
+            throw ValidationError("Reference video not found: \(referenceVideo)")
+        }
+
+        // LipDub always uses distilled (8-step Stage 1) + audio
+        print("Creating pipeline (distilled, audio enabled)...")
+        fflush(stdout)
+        let pipeline = LTXPipeline(
+            model: .distilled,
+            quantization: LTXQuantizationConfig(transformer: .bf16),
+            hfToken: hfToken
+        )
+        print("Pipeline created")
+
+        print("Loading models (this may take a while)...")
+        fflush(stdout)
+        let startLoad = Date()
+        try await pipeline.loadModels(
+            progressCallback: { progress in
+                print("  \(progress.message) (\(Int(progress.progress * 100))%)")
+            },
+            gemmaModelPath: gemmaPath,
+            ltxWeightsPath: ltxWeights
+        )
+
+        // LipDub needs the AudioVAE encoder to encode the reference audio.
+        print("Loading audio models (with encoder)...")
+        fflush(stdout)
+        try await pipeline.loadAudioModels(includeEncoder: true) { progress in
+            print("  \(progress.message) (\(Int(progress.progress * 100))%)")
+        }
+        let loadTime = Date().timeIntervalSince(startLoad)
+        print("Models loaded in \(String(format: "%.1f", loadTime))s")
+
+        // Resolve LoRA path: --lora overrides; otherwise auto-download.
+        let loraPath: String
+        if let provided = lora {
+            guard FileManager.default.fileExists(atPath: provided) else {
+                throw ValidationError("LipDub LoRA not found: \(provided)")
+            }
+            loraPath = provided
+            print("Using LipDub LoRA: \(provided)")
+        } else {
+            print("Downloading LipDub IC-LoRA (gated, requires HF token)...")
+            let downloader = ModelDownloader(hfToken: hfToken)
+            let url = try await downloader.downloadLipDubLoRA { progress in
+                print("  \(progress.message) (\(Int(progress.progress * 100))%)")
+            }
+            loraPath = url.path
+        }
+
+        // Download upscaler (always needed for two-stage)
+        print("Downloading upscaler weights (if needed)...")
+        let upscalerPath = try await pipeline.downloadUpscalerWeights()
+        print("Upscaler weights ready")
+
+        let config = LTXVideoGenerationConfig(
+            width: width,
+            height: height,
+            numFrames: frames,
+            numSteps: 8,
+            seed: seed
+        )
+
+        print("\nGenerating LipDub...")
+        fflush(stdout)
+        let startGen = Date()
+        let result = try await pipeline.generateLipDub(
+            prompt: prompt,
+            referenceVideoPath: referenceVideo,
+            lipdubLoraPath: loraPath,
+            config: config,
+            upscalerWeightsPath: upscalerPath,
+            referenceStrength: referenceStrength,
+            onProgress: { progress in
+                print("  \(progress.status)")
+                fflush(stdout)
+            }
+        )
+        let genTime = Date().timeIntervalSince(startGen)
+        print("LipDub completed in \(String(format: "%.1f", genTime))s")
+        fflush(stdout)
+
+        // Export
+        print("\nExporting to \(output)...")
+        fflush(stdout)
+        let outputURL = URL(fileURLWithPath: output)
+        var exportConfig = VideoExportConfig.default
+        if let kbps = bitrate {
+            exportConfig.averageBitRate = kbps * 1000
+        }
+
+        guard let audioWaveform = result.audioWaveform, let audioSampleRate = result.audioSampleRate else {
+            throw ValidationError("LipDub pipeline returned no audio — this should never happen")
+        }
+        let videoURL = try await VideoExporter.exportVideo(
+            frames: result.frames,
+            width: width,
+            height: height,
+            fps: 24.0,
+            audioWaveform: audioWaveform,
+            audioSampleRate: audioSampleRate,
+            config: exportConfig,
+            to: outputURL
+        )
+        print("Video saved to: \(videoURL.path)")
+
+        let wavPath = output.replacingOccurrences(of: ".mp4", with: ".wav")
+        try AudioExporter.exportToWAV(
+            waveform: audioWaveform,
+            sampleRate: audioSampleRate,
+            path: wavPath
+        )
+        print("Audio WAV saved to: \(wavPath)")
+
+        print("\n--- Summary ---")
+        print("Seed: \(result.seed)")
+        print("Generation time: \(String(format: "%.1f", result.generationTime))s")
     }
 }
 

@@ -287,7 +287,9 @@ class LTX2Transformer: Module {
         videoLatentShape: (frames: Int, height: Int, width: Int),
         audioNumFrames: Int,
         precomputedVideoRoPE: (cos: MLXArray, sin: MLXArray)? = nil,
-        precomputedCrossVideoRoPE: (cos: MLXArray, sin: MLXArray)? = nil
+        precomputedCrossVideoRoPE: (cos: MLXArray, sin: MLXArray)? = nil,
+        precomputedAudioRoPE: (cos: MLXArray, sin: MLXArray)? = nil,
+        precomputedCrossAudioRoPE: (cos: MLXArray, sin: MLXArray)? = nil
     ) -> (video: MLXArray, audio: MLXArray) {
         let batchSize = videoLatent.dim(0)
         let videoDim = config.innerDim
@@ -396,16 +398,45 @@ class LTX2Transformer: Module {
                 width: videoLatentShape.width
             )
         }
-        let audioRoPE = prepareAudioRoPE(batchSize: batchSize, audioFrames: audioNumFrames)
+        // Audio self-attention RoPE: when precomputed (e.g. appended audio reference
+        // tokens for LipDub), use it directly. Otherwise derive from audioNumFrames.
+        let audioRoPE: (cos: MLXArray, sin: MLXArray)
+        if let customA = precomputedAudioRoPE {
+            audioRoPE = customA
+        } else {
+            audioRoPE = prepareAudioRoPE(batchSize: batchSize, audioFrames: audioNumFrames)
+        }
 
         // Cross-modal RoPE: video side uses temporal-only positions, audio side likewise.
-        // For appended-guide tokens, the cross-modal video RoPE must also be extended
-        // so that the appended video tokens have a temporal coordinate when attending to audio.
+        // Each side can be independently overridden when tokens have been appended
+        // (extended video for keyframes/IC-LoRA, extended audio for LipDub audio ref).
         let crossVideoRoPE: (cos: MLXArray, sin: MLXArray)
         let crossAudioRoPE: (cos: MLXArray, sin: MLXArray)
+
         if let customCV = precomputedCrossVideoRoPE {
             crossVideoRoPE = customCV
-            // Compute audio cross-modal RoPE the normal way
+        } else {
+            let videoPositions3D = createPositionGrid(
+                batchSize: batchSize,
+                frames: videoLatentShape.frames,
+                height: videoLatentShape.height,
+                width: videoLatentShape.width
+            )
+            let videoTemporalOnly = videoPositions3D[0..., 0..<1, 0...]
+            crossVideoRoPE = precomputeFreqsCis(
+                indicesGrid: videoTemporalOnly,
+                dim: config.audioCrossAttentionDim,
+                theta: config.ropeTheta,
+                maxPos: config.audioMaxPos,
+                numAttentionHeads: config.audioNumAttentionHeads,
+                ropeType: ropeType,
+                doublePrecision: true
+            )
+        }
+
+        if let customCA = precomputedCrossAudioRoPE {
+            crossAudioRoPE = customCA
+        } else {
             let audioPositions = createAudioPositionGrid(batchSize: batchSize, audioFrames: audioNumFrames)
             crossAudioRoPE = precomputeFreqsCis(
                 indicesGrid: audioPositions,
@@ -415,14 +446,6 @@ class LTX2Transformer: Module {
                 numAttentionHeads: config.audioNumAttentionHeads,
                 ropeType: ropeType,
                 doublePrecision: true
-            )
-        } else {
-            (crossVideoRoPE, crossAudioRoPE) = prepareCrossModalRoPE(
-                batchSize: batchSize,
-                videoFrames: videoLatentShape.frames,
-                videoHeight: videoLatentShape.height,
-                videoWidth: videoLatentShape.width,
-                audioFrames: audioNumFrames
             )
         }
 

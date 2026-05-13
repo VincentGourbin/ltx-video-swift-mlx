@@ -552,7 +552,7 @@ public actor LTXPipeline {
     ///
     /// - Parameter latents: (B, 8, T, 16) audio latent tensor
     /// - Returns: (B, T, 128) packed audio latents
-    private func packAudioLatents(_ latents: MLXArray) -> MLXArray {
+    internal func packAudioLatents(_ latents: MLXArray) -> MLXArray {
         // (B, C, T, M) -> (B, T, C, M) -> (B, T, C*M)
         let transposed = latents.transposed(0, 2, 1, 3)
         return transposed.reshaped([transposed.dim(0), transposed.dim(1), -1])
@@ -564,7 +564,7 @@ public actor LTXPipeline {
     ///   - latents: (B, T, 128) packed audio latents
     ///   - numFrames: Number of audio latent frames
     /// - Returns: (B, 8, T, 16) unpacked audio latents
-    private func unpackAudioLatents(_ latents: MLXArray, numFrames: Int) -> MLXArray {
+    internal func unpackAudioLatents(_ latents: MLXArray, numFrames: Int) -> MLXArray {
         let b = latents.dim(0)
         // (B, T, C*M) -> (B, T, C, M) -> (B, C, T, M)
         let unflattened = latents.reshaped([b, numFrames, Self.audioLatentChannels, Self.audioLatentMelBins])
@@ -576,17 +576,26 @@ public actor LTXPipeline {
     /// Result of one denoise-loop forward pass: predicted velocities for the
     /// video latent (always present) and the audio packed latent (when running
     /// dual-stream `LTX2Transformer`). Both are unpatchified and float32 — ready
-    /// for the scheduler step. The video velocity has already been cropped back
-    /// to the original token count when `appendCtx` was provided.
+    /// for the scheduler step. Velocities are already cropped back to the
+    /// original token counts when their respective `*AppendCtx` was provided.
     private struct StepVelocity {
         let video: MLXArray
         let audio: MLXArray?
     }
 
     /// One forward pass through the active transformer (video-only `LTXTransformer`
-    /// or dual `LTX2Transformer`) at the given `sigma`. Handles the keyframe-append
-    /// path (extended tokens + per-token timestep + precomputed RoPE) when
-    /// `appendCtx` is non-nil, and the standard path otherwise.
+    /// or dual `LTX2Transformer`) at the given `sigma`.
+    ///
+    /// Two independent append paths are supported:
+    /// - `videoAppendCtx` extends the video sequence (used by keyframe interpolation
+    ///   and by the LipDub IC-LoRA video reference).
+    /// - `audioRefCtx` extends the audio sequence (used by LipDub audio reference).
+    ///
+    /// Either, both, or neither may be set. When set, per-token timesteps put σ on
+    /// the original tokens and 0 on the appended tokens, and the matching
+    /// `precomputed*RoPE` overrides bypass the transformer's internal cache.
+    /// Predicted velocities are cropped back to the original token counts before
+    /// the scheduler step.
     ///
     /// Caller is responsible for the scheduler step and post-step `MLX.eval`.
     /// This split keeps the Stage 1 (Euler scheduler) and Stage 2 (manual Euler)
@@ -596,7 +605,8 @@ public actor LTXPipeline {
         videoLatent: MLXArray,
         audioLatentPacked: MLXArray?,
         shape: VideoLatentShape,
-        appendCtx: AppendKeyframeContext?,
+        videoAppendCtx: AppendKeyframeContext?,
+        audioRefCtx: AudioReferenceContext?,
         audioNumFrames: Int,
         videoTextEmbeddings: MLXArray,
         audioTextEmbeddings: MLXArray,
@@ -604,9 +614,10 @@ public actor LTXPipeline {
     ) -> StepVelocity {
         let videoPatchified = patchify(videoLatent).asType(.bfloat16)
 
+        // --- Extend the video stream when videoAppendCtx is provided ---
         let extTokensVideo: MLXArray
         let videoTimestep: MLXArray
-        if let ctx = appendCtx {
+        if let ctx = videoAppendCtx {
             extTokensVideo = MLX.concatenated([videoPatchified, ctx.guideTokens], axis: 1)
             videoTimestep = buildExtendedTimestep(
                 sigma: sigma,
@@ -619,11 +630,25 @@ public actor LTXPipeline {
         }
 
         if let ltx2 = ltx2Transformer, let ap = audioLatentPacked {
-            let audioTimestep = MLXArray([sigma])
+            // --- Extend the audio stream when audioRefCtx is provided ---
             let audioPatchified = ap.asType(.bfloat16)
-            let (videoVelExt, audioVel) = ltx2(
+            let extTokensAudio: MLXArray
+            let audioTimestep: MLXArray
+            if let aCtx = audioRefCtx {
+                extTokensAudio = MLX.concatenated([audioPatchified, aCtx.guideTokens], axis: 1)
+                audioTimestep = buildExtendedTimestep(
+                    sigma: sigma,
+                    originalCount: aCtx.originalCount,
+                    guideCount: aCtx.guideCount
+                )
+            } else {
+                extTokensAudio = audioPatchified
+                audioTimestep = MLXArray([sigma])
+            }
+
+            let (videoVelExt, audioVelExt) = ltx2(
                 videoLatent: extTokensVideo,
-                audioLatent: audioPatchified,
+                audioLatent: extTokensAudio,
                 videoContext: videoTextEmbeddings.asType(.bfloat16),
                 audioContext: audioTextEmbeddings.asType(.bfloat16),
                 videoTimesteps: videoTimestep,
@@ -632,26 +657,33 @@ public actor LTXPipeline {
                 audioContextMask: nil,
                 videoLatentShape: (frames: shape.frames, height: shape.height, width: shape.width),
                 audioNumFrames: audioNumFrames,
-                precomputedVideoRoPE: appendCtx?.extRoPE,
-                precomputedCrossVideoRoPE: appendCtx?.extCrossVideoRoPE
+                precomputedVideoRoPE: videoAppendCtx?.extRoPE,
+                precomputedCrossVideoRoPE: videoAppendCtx?.extCrossVideoRoPE,
+                precomputedAudioRoPE: audioRefCtx?.extRoPE,
+                precomputedCrossAudioRoPE: audioRefCtx?.extCrossRoPE
             )
-            let videoVel = appendCtx
+            let videoVel = videoAppendCtx
                 .map { cropToOriginal(velocity: videoVelExt, originalCount: $0.originalCount) }
                 ?? videoVelExt
+            let audioVel = audioRefCtx
+                .map { cropToOriginal(velocity: audioVelExt, originalCount: $0.originalCount) }
+                ?? audioVelExt
             return StepVelocity(
                 video: unpatchify(videoVel, shape: shape).asType(.float32),
                 audio: audioVel.asType(.float32)
             )
         } else if let videoTransformer = transformer {
+            // Audio reference is meaningless without ltx2Transformer — caller's bug if set.
+            assert(audioRefCtx == nil, "audioRefCtx requires LTX2Transformer (audio enabled)")
             let velExt = videoTransformer(
                 latent: extTokensVideo,
                 context: videoTextEmbeddings.asType(.bfloat16),
                 timesteps: videoTimestep,
                 contextMask: nil,
                 latentShape: (frames: shape.frames, height: shape.height, width: shape.width),
-                precomputedRoPE: appendCtx?.extRoPE
+                precomputedRoPE: videoAppendCtx?.extRoPE
             )
-            let vel = appendCtx
+            let vel = videoAppendCtx
                 .map { cropToOriginal(velocity: velExt, originalCount: $0.originalCount) }
                 ?? velExt
             return StepVelocity(
@@ -877,7 +909,8 @@ public actor LTXPipeline {
                 videoLatent: videoLatent,
                 audioLatentPacked: audioLatentPacked,
                 shape: stage1Shape,
-                appendCtx: stage1AppendCtx,
+                videoAppendCtx: stage1AppendCtx,
+                audioRefCtx: nil,
                 audioNumFrames: audioNumFrames,
                 videoTextEmbeddings: videoTextEmbeddings,
                 audioTextEmbeddings: audioTextEmbeddings,
@@ -1020,7 +1053,8 @@ public actor LTXPipeline {
                 videoLatent: videoLatent,
                 audioLatentPacked: audioLatentPacked,
                 shape: stage2Shape,
-                appendCtx: stage2AppendCtx,
+                videoAppendCtx: stage2AppendCtx,
+                audioRefCtx: nil,
                 audioNumFrames: audioNumFrames,
                 videoTextEmbeddings: videoTextEmbeddings,
                 audioTextEmbeddings: audioTextEmbeddings,
@@ -1587,6 +1621,328 @@ public actor LTXPipeline {
                 sourceAudioPath: videoPath
             )
         }
+    }
+
+    // MARK: - LipDub
+
+    /// Generate a lip-synced video from a reference video + prompt using the LipDub IC-LoRA.
+    ///
+    /// Two-stage distilled pipeline that conditions BOTH streams on the reference:
+    /// - **Video stream** is conditioned on the reference video frames via the IC-LoRA
+    ///   (`buildVideoReference`, downscaled per `reference_downscale_factor` from the
+    ///   LoRA's safetensors metadata).
+    /// - **Audio stream** is conditioned on the reference audio via appended audio tokens
+    ///   with negative RoPE positions (`buildAudioReference`).
+    ///
+    /// Stage 2 reuses the Stage 1 audio output as the new audio reference and keeps the
+    /// audio latent FROZEN (no further denoising — Python `lipdub.py` `frozen=True`).
+    /// The decoded audio is the Stage 1 denoised result (matches Python `lipdub.py` line 264).
+    ///
+    /// - Parameters:
+    ///   - prompt: Text description of the desired output (typically describing what is being said).
+    ///   - referenceVideoPath: Path to the source video file (.mp4) — both video frames and
+    ///     audio track are extracted from this file.
+    ///   - lipdubLoraPath: Path to the LipDub IC-LoRA safetensors file.
+    ///   - config: Width / height / seed / etc. `numFrames` is overridden by the snap
+    ///     applied to the reference video's actual frame count (rounded down to `8k+1`).
+    ///   - upscalerWeightsPath: Path to spatial upscaler safetensors (used between stages).
+    ///   - referenceStrength: Conditioning strength for the video reference (default 1.0 = full).
+    ///   - onProgress: Optional progress callback.
+    /// - Returns: `VideoGenerationResult` with the generated video frames and the decoded
+    ///   audio waveform.
+    public func generateLipDub(
+        prompt: String,
+        referenceVideoPath: String,
+        lipdubLoraPath: String,
+        config: LTXVideoGenerationConfig,
+        upscalerWeightsPath: String,
+        referenceStrength: Float = 1.0,
+        onProgress: GenerationProgressCallback? = nil
+    ) async throws -> VideoGenerationResult {
+        try config.validate()
+
+        guard config.width % 64 == 0 && config.height % 64 == 0 else {
+            throw LTXError.invalidConfiguration("LipDub requires width and height divisible by 64. Got \(config.width)x\(config.height)")
+        }
+        guard let textEncoder = textEncoder,
+              let vaeDecoder = vaeDecoder,
+              let audioVAE = audioVAE,
+              let vocoder = vocoder else {
+            throw LTXError.modelNotLoaded("LipDub requires text encoder + VAE + AudioVAE + vocoder. Call loadModels() then loadAudioModels().")
+        }
+        guard let ltx2 = ltx2Transformer else {
+            throw LTXError.modelNotLoaded("LipDub requires the dual-stream LTX2Transformer (audio enabled). Call loadAudioModels().")
+        }
+        guard FileManager.default.fileExists(atPath: referenceVideoPath) else {
+            throw LTXError.fileNotFound("Reference video not found: \(referenceVideoPath)")
+        }
+        guard FileManager.default.fileExists(atPath: lipdubLoraPath) else {
+            throw LTXError.fileNotFound("LipDub LoRA not found: \(lipdubLoraPath)")
+        }
+
+        let generationStart = Date()
+        let halfWidth = config.width / 2
+        let halfHeight = config.height / 2
+
+        // 1. Read LoRA metadata and fuse into the dual-stream transformer.
+        let downscaleFactor = LoRALoader.referenceDownscaleFactor(from: lipdubLoraPath)
+        LTXDebug.log("[lipdub] reference_downscale_factor=\(downscaleFactor) from LoRA metadata")
+        guard halfWidth % downscaleFactor == 0 && halfHeight % downscaleFactor == 0 else {
+            throw LTXError.invalidConfiguration(
+                "Half-resolution \(halfWidth)x\(halfHeight) must be divisible by downscale_factor=\(downscaleFactor)"
+            )
+        }
+        LTXDebug.log("[lipdub] fusing LipDub IC-LoRA into LTX2Transformer...")
+        // Note: this MUTATES the loaded ltx2Transformer in place. Programmatic callers
+        // who reuse a pipeline instance should reload models or unfuse before re-running.
+        _ = try ltx2.fuseLoRA(from: lipdubLoraPath, scale: 1.0)
+        eval(ltx2.parameters())
+        Memory.clearCache()
+
+        // 2. Snap target frame count to 8k+1 based on the reference video.
+        // We respect config.numFrames as the upper bound but never exceed the ref video.
+        let numFrames = config.numFrames  // CLI is responsible for snapping; trust the caller
+        let stage1Shape = VideoLatentShape.fromPixelDimensions(
+            batch: 1, channels: 128,
+            frames: numFrames, height: halfHeight, width: halfWidth
+        )
+        let stage2Shape = VideoLatentShape.fromPixelDimensions(
+            batch: 1, channels: 128,
+            frames: numFrames, height: config.height, width: config.width
+        )
+        let audioNumFrames = computeAudioLatentFrames(videoFrames: numFrames)
+        LTXDebug.log("[lipdub] target frames=\(numFrames), Stage1 latent=\(stage1Shape.frames)x\(stage1Shape.height)x\(stage1Shape.width), audio frames=\(audioNumFrames)")
+
+        // 3. Text encode the prompt.
+        let (inputIds, attentionMask) = try tokenizePrompt(prompt, maxLength: textMaxLength)
+        MLX.eval(inputIds, attentionMask)
+        guard let gemma = gemmaModel else {
+            throw LTXError.modelNotLoaded("Gemma model not loaded")
+        }
+        let (_, allHiddenStates) = gemma(inputIds, attentionMask: attentionMask, outputHiddenStates: true)
+        guard let states = allHiddenStates, states.count == gemma.config.hiddenLayers + 1 else {
+            throw LTXError.generationFailed("Failed to extract Gemma hidden states")
+        }
+        let encoderOutput = try textEncoder.encodeFromHiddenStates(
+            hiddenStates: states,
+            attentionMask: attentionMask,
+            paddingSide: "left"
+        )
+        let videoTextEmbeddings = encoderOutput.videoEncoding
+        let audioTextEmbeddings = encoderOutput.audioEncoding ?? videoTextEmbeddings
+        let textMask = encoderOutput.attentionMask
+        MLX.eval(videoTextEmbeddings, audioTextEmbeddings, textMask)
+        // Unload Gemma — frees ~7.5 GB before the dual-stream denoising loops
+        self.gemmaModel = nil
+        self.tokenizer = nil
+        Memory.clearCache()
+
+        // 4. Encode reference video at Stage 1 downscaled resolution.
+        let refS1Width = halfWidth / downscaleFactor
+        let refS1Height = halfHeight / downscaleFactor
+        LTXDebug.log("[lipdub] encoding reference video at Stage 1 res \(refS1Width)x\(refS1Height)")
+        let refLatentS1 = try await encodeVideo(
+            path: referenceVideoPath, width: refS1Width, height: refS1Height, numFrames: numFrames
+        )
+        unloadVAEEncoder()  // free encoder; we'll reload it for Stage 2
+
+        // 5. Extract reference audio + encode via AudioVAE.
+        LTXDebug.log("[lipdub] extracting + encoding reference audio")
+        let audioProcessor = AudioProcessor()
+        let refWaveform = try await audioProcessor.loadAudio(from: referenceVideoPath)
+        let refMel = try audioProcessor.melSpectrogram(refWaveform)
+        let refAudioLatent = try audioVAE.encode(refMel)  // (1, 8, T_audio_ref, 16)
+        MLX.eval(refAudioLatent)
+
+        // 6. Build Stage 1 reference contexts.
+        let s1VideoRefCtx = buildVideoReference(
+            referenceLatent: refLatentS1,
+            targetShape: stage1Shape,
+            downscaleFactor: downscaleFactor,
+            hasAudio: true,
+            refConfig: ltx2.config
+        )
+        let s1AudioRefCtx = buildAudioReference(
+            referenceLatent: refAudioLatent,
+            targetAudioFrames: audioNumFrames,
+            refConfig: ltx2.config
+        )
+        LTXDebug.log("[lipdub] Stage 1 video ref tokens=\(s1VideoRefCtx.guideCount), audio ref tokens=\(s1AudioRefCtx.guideCount)")
+
+        // 7. Initial noise + Stage 1 sigma schedule (always distilled).
+        if let seed = config.seed { MLXRandom.seed(seed) }
+        var videoLatent = generateNoise(shape: stage1Shape, seed: config.seed)
+        let initialAudio = MLXRandom.normal(
+            [1, Self.audioLatentChannels, audioNumFrames, Self.audioLatentMelBins]
+        ).asType(.float32)
+        var audioLatentPacked: MLXArray? = packAudioLatents(initialAudio)
+
+        let stage1Scheduler = LTXScheduler(isDistilled: true)
+        stage1Scheduler.setTimesteps(
+            numSteps: 8, distilled: true, latentTokenCount: stage1Shape.tokenCount
+        )
+        let stage1Sigmas = stage1Scheduler.sigmas
+        videoLatent = videoLatent * stage1Sigmas[0]
+        if let ap = audioLatentPacked { audioLatentPacked = ap * stage1Sigmas[0] }
+        MLX.eval(videoLatent)
+        if let ap = audioLatentPacked { MLX.eval(ap) }
+
+        // 8. Stage 1 denoise loop — dual stream, both refs appended.
+        LTXMemoryManager.setPhase(.denoising)
+        let totalSteps = (stage1Sigmas.count - 1) + (STAGE_2_DISTILLED_SIGMA_VALUES.count - 1)
+        let stage1NumSteps = stage1Sigmas.count - 1
+        for step in 0..<stage1NumSteps {
+            let sigma = stage1Sigmas[step]
+            let sigmaNext = stage1Sigmas[step + 1]
+            onProgress?(GenerationProgress(
+                currentStep: step, totalSteps: totalSteps, sigma: sigma, phase: .denoising
+            ))
+            let vel = runDenoiseStep(
+                sigma: sigma,
+                videoLatent: videoLatent,
+                audioLatentPacked: audioLatentPacked,
+                shape: stage1Shape,
+                videoAppendCtx: s1VideoRefCtx,
+                audioRefCtx: s1AudioRefCtx,
+                audioNumFrames: audioNumFrames,
+                videoTextEmbeddings: videoTextEmbeddings,
+                audioTextEmbeddings: audioTextEmbeddings,
+                textMask: textMask
+            )
+            videoLatent = stage1Scheduler.step(
+                latent: videoLatent, velocity: vel.video,
+                sigma: sigma, sigmaNext: sigmaNext
+            )
+            if let av = vel.audio, let ap = audioLatentPacked {
+                let updatedAudio = ap + (sigmaNext - sigma) * av
+                audioLatentPacked = updatedAudio
+                MLX.eval(videoLatent, updatedAudio)
+            } else {
+                MLX.eval(videoLatent)
+            }
+            if (step + 1) % 5 == 0 { Memory.clearCache() }
+            LTXDebug.log("[lipdub] Stage 1 step \(step)/\(stage1NumSteps) σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext))")
+        }
+        guard let s1AudioLatentPacked = audioLatentPacked else {
+            throw LTXError.generationFailed("Stage 1 audio latent missing after denoising")
+        }
+
+        // 9. Upscale video latent (denormalize → spatial upscale 2x → renormalize).
+        onProgress?(GenerationProgress(
+            currentStep: stage1NumSteps, totalSteps: totalSteps, sigma: 0, phase: .upscaling
+        ))
+        let upscaler = try loadSpatialUpscaler(from: upscalerWeightsPath)
+        let mean5d = vaeDecoder.meanOfMeans.asType(.float32).reshaped([1, -1, 1, 1, 1])
+        let std5d = vaeDecoder.stdOfMeans.asType(.float32).reshaped([1, -1, 1, 1, 1])
+        let denormedS1 = videoLatent * std5d + mean5d
+        let upscaled = upscaler(denormedS1)
+        videoLatent = (upscaled - mean5d) / std5d
+        MLX.eval(videoLatent)
+
+        // 10. Re-encode reference video at Stage 2 downscaled resolution.
+        let refS2Width = config.width / downscaleFactor
+        let refS2Height = config.height / downscaleFactor
+        LTXDebug.log("[lipdub] re-encoding reference video at Stage 2 res \(refS2Width)x\(refS2Height)")
+        let refLatentS2 = try await encodeVideo(
+            path: referenceVideoPath, width: refS2Width, height: refS2Height, numFrames: numFrames
+        )
+        unloadVAEEncoder()
+
+        // 11. Build Stage 2 reference contexts.
+        let s2VideoRefCtx = buildVideoReference(
+            referenceLatent: refLatentS2,
+            targetShape: stage2Shape,
+            downscaleFactor: downscaleFactor,
+            hasAudio: true,
+            refConfig: ltx2.config
+        )
+        // Stage 2 audio reference = Stage 1 denoised audio (already packed).
+        let s2AudioRefCtx = buildAudioReferenceFromPacked(
+            packed: s1AudioLatentPacked,
+            targetAudioFrames: audioNumFrames,
+            refConfig: ltx2.config
+        )
+
+        // 12. Re-noise video for Stage 2; audio is FROZEN to s1 output.
+        let stage2Sigmas = STAGE_2_DISTILLED_SIGMA_VALUES
+        let videoNoise = generateNoise(shape: stage2Shape)
+        let s2NoiseScale = stage2Sigmas[0]
+        videoLatent = MLXArray(s2NoiseScale) * videoNoise + MLXArray(1.0 - s2NoiseScale) * videoLatent
+        audioLatentPacked = s1AudioLatentPacked  // frozen for Stage 2
+        MLX.eval(videoLatent)
+
+        // 13. Stage 2 denoise loop — manual Euler for video, audio frozen (discard vel.audio).
+        let stage2NumSteps = stage2Sigmas.count - 1
+        for step in 0..<stage2NumSteps {
+            let sigma = stage2Sigmas[step]
+            let sigmaNext = stage2Sigmas[step + 1]
+            onProgress?(GenerationProgress(
+                currentStep: stage1NumSteps + step, totalSteps: totalSteps, sigma: sigma, phase: .refinement
+            ))
+            let vel = runDenoiseStep(
+                sigma: sigma,
+                videoLatent: videoLatent,
+                audioLatentPacked: audioLatentPacked,
+                shape: stage2Shape,
+                videoAppendCtx: s2VideoRefCtx,
+                audioRefCtx: s2AudioRefCtx,
+                audioNumFrames: audioNumFrames,
+                videoTextEmbeddings: videoTextEmbeddings,
+                audioTextEmbeddings: audioTextEmbeddings,
+                textMask: textMask
+            )
+            let dt = sigmaNext - sigma
+            videoLatent = videoLatent + MLXArray(dt) * vel.video
+            // AUDIO FROZEN — discard vel.audio (matches Python lipdub.py frozen=True)
+            MLX.eval(videoLatent)
+            LTXDebug.log("[lipdub] Stage 2 step \(step)/\(stage2NumSteps) σ=\(String(format: "%.4f", sigma))→\(String(format: "%.4f", sigmaNext))")
+        }
+
+        // 14. Unload transformer before VAE decode if memory pressure is a concern.
+        if memoryOptimization.unloadAfterUse {
+            self.ltx2Transformer = nil
+            Memory.clearCache()
+        }
+
+        // 15. Decode video.
+        onProgress?(GenerationProgress(
+            currentStep: totalSteps, totalSteps: totalSteps, sigma: 0, phase: .decoding
+        ))
+        LTXMemoryManager.setPhase(.vaeDecode)
+        let videoTensor = decodeVideo(
+            latent: videoLatent, decoder: vaeDecoder, timestep: nil,
+            temporalTileSize: memoryOptimization.vaeTemporalTileSize,
+            temporalTileOverlap: memoryOptimization.vaeTemporalTileOverlap
+        )
+        MLX.eval(videoTensor)
+        let trimmedVideo: MLXArray
+        if videoTensor.dim(0) > numFrames {
+            trimmedVideo = videoTensor[0..<numFrames]
+        } else {
+            trimmedVideo = videoTensor
+        }
+
+        // 16. Decode audio (from Stage 1 packed latent — matches Python lipdub.py:264).
+        let audioLatentUnpacked = unpackAudioLatents(s1AudioLatentPacked, numFrames: audioNumFrames)
+        let audioWaveform = decodeAudio(
+            latents: audioLatentUnpacked,
+            audioVAE: audioVAE,
+            vocoder: vocoder
+        )
+        MLX.eval(audioWaveform)
+
+        LTXMemoryManager.resetCacheLimit()
+        let generationTime = Date().timeIntervalSince(generationStart)
+        LTXDebug.log("[lipdub] total generation time: \(String(format: "%.1f", generationTime))s")
+
+        return VideoGenerationResult(
+            frames: trimmedVideo,
+            seed: config.seed ?? 0,
+            generationTime: generationTime,
+            audioWaveform: audioWaveform,
+            audioSampleRate: vocoder.outputSampleRate,
+            effectivePrompt: prompt
+        )
     }
 
     /// Encode a video into latent space using the VAE encoder
