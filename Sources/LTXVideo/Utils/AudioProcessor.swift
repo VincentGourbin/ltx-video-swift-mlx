@@ -154,16 +154,20 @@ public class AudioProcessor {
         // rfft: (numFrames, nFFT) → (numFrames, nFFT/2+1) complex
         let spectrum = MLXFFT.rfft(windowed, axis: -1)
 
-        // Power spectrum: |S|^2
+        // Magnitude spectrum: |S| (matches Python torchaudio MelSpectrogram(power=1.0)
+        // used by Lightricks AudioVAE — power=2.0 would give |S|^2 and double-scale
+        // the log output, leading to silent garbage in the audio reference encoding).
         let real = spectrum.realPart()
         let imag = spectrum.imaginaryPart()
-        let powerSpec = real * real + imag * imag  // (numFrames, nFFT/2+1)
+        let magSpec = MLX.sqrt(real * real + imag * imag)  // (numFrames, nFFT/2+1)
 
         // Apply mel filterbank: (numFrames, nFFT/2+1) @ (nFFT/2+1, nMels) → (numFrames, nMels)
-        let melSpec = MLX.matmul(powerSpec, melFilterbank.transposed(1, 0))
+        let melSpec = MLX.matmul(magSpec, melFilterbank.transposed(1, 0))
 
-        // Log scale with floor to avoid log(0)
-        let logMelSpec = MLX.log(MLX.maximum(melSpec, MLXArray(Float(1e-10))))
+        // Log scale with floor to avoid log(0). Python uses min=1e-5 in the clamp;
+        // we keep our 1e-10 floor since for magnitude (vs power) the typical floor differs;
+        // the model is trained on log values so this only matters for VERY quiet samples.
+        let logMelSpec = MLX.log(MLX.maximum(melSpec, MLXArray(Float(1e-5))))
 
         return logMelSpec
     }
