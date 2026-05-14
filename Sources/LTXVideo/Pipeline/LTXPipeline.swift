@@ -1695,7 +1695,8 @@ public actor LTXPipeline {
         LTXDebug.log("[lipdub] fusing LipDub IC-LoRA into LTX2Transformer...")
         // Note: this MUTATES the loaded ltx2Transformer in place. Programmatic callers
         // who reuse a pipeline instance should reload models or unfuse before re-running.
-        _ = try ltx2.fuseLoRA(from: lipdubLoraPath, scale: 1.0)
+        let (_, fuseResult) = try ltx2.fuseLoRA(from: lipdubLoraPath, scale: 1.0)
+        print("[lipdub] LoRA fused: \(fuseResult.modifiedLayerCount) layers modified (LoRA name: \(fuseResult.loraName))")
         eval(ltx2.parameters())
         Memory.clearCache()
 

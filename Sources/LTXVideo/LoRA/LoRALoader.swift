@@ -253,12 +253,15 @@ struct LoRAKeyMapper {
         //    Python: FeedForward contains nn.Sequential("net") with [GEGLU(.proj), ..., Linear]
         //    Swift: LTXFeedForward uses @ModuleInfo(key: "project_in") var projectIn: GELUApprox
         //           and GELUApprox uses @ModuleInfo var proj: Linear  (default key "proj")
-        key = key.replacingOccurrences(of: ".ff.net.0.proj", with: ".ff.project_in.proj")
+        //    No leading "." so this matches BOTH the video FFN (`.ff.`) and the audio
+        //    FFN (`_ff.`) used by the dual-stream LTX2TransformerBlock.
+        key = key.replacingOccurrences(of: "ff.net.0.proj", with: "ff.project_in.proj")
 
         // 5. ff.net.2 -> ff.project_out
         //    Python: FeedForward's net[2] is the output Linear
         //    Swift: LTXFeedForward uses @ModuleInfo(key: "project_out") var projectOut: Linear
-        key = key.replacingOccurrences(of: ".ff.net.2", with: ".ff.project_out")
+        //    Same reason as #4 — drop the leading "." so audio_ff is also matched.
+        key = key.replacingOccurrences(of: "ff.net.2", with: "ff.project_out")
 
         // 6. Append .weight — all targeted layers are Linear modules whose weight
         //    parameter is named "weight"
