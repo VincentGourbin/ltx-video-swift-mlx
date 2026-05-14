@@ -1757,6 +1757,15 @@ public actor LTXPipeline {
         let refWaveform = try await audioProcessor.loadAudio(from: referenceVideoPath)
         let refMel = try audioProcessor.melSpectrogram(refWaveform)
         let refAudioLatent = try audioVAE.encode(refMel)  // (1, 8, T_audio_ref, 16)
+        if ProcessInfo.processInfo.environment["LTX_LIPDUB_DUMP_AUDIO"] == "1" {
+            let melF32 = refMel.asType(.float32)
+            let latF32 = refAudioLatent.asType(.float32)
+            MLX.eval(melF32, latF32)
+            try? MLX.save(arrays: ["data": melF32], url: URL(fileURLWithPath: "/tmp/swift_audio_mel.safetensors"))
+            try? MLX.save(arrays: ["data": latF32], url: URL(fileURLWithPath: "/tmp/swift_audio_latent.safetensors"))
+            print("[lipdub][DIAG] dumped mel \(melF32.shape) and latent \(latF32.shape) to /tmp/swift_audio_*.safetensors — exiting")
+            return VideoGenerationResult(frames: MLXArray.zeros([1,3,1,64,64]), seed: 0, generationTime: 0, audioWaveform: nil, audioSampleRate: nil, effectivePrompt: prompt)
+        }
         MLX.eval(refAudioLatent)
 
         // 6. Build Stage 1 reference contexts.
