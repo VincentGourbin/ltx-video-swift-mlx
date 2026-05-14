@@ -102,12 +102,20 @@ func buildAudioReferenceFromPacked(
         temporalScale: temporalScale
     )
 
-    // Shift into negative range. Per-token width = temporalScale * hopLength / sampleRate.
-    // Half-width compensates for our middle-only convention so the last reference
-    // token's END time (= middle + halfWidth) lands at exactly -0.04 after shift.
+    // Shift into negative range. Python `patchify_lipdub_audio_reference_latent`
+    // computes `aud_dur = positions[:, :, -1, 1].max()` (END of last token) then
+    // `positions = positions - aud_dur - 0.04`. After the shift, the last token's
+    // END time sits at exactly -0.04, just before the target audio at t=0.
+    //
+    // Our `createAudioPositionGrid` returns the MIDDLE of each token (Python's
+    // RoPE averages start+end into the middle anyway — see rope.py:138-139).
+    // To match Python's shift, we compute END_last = middle_last + halfTokenWidth
+    // by reading the ACTUAL middle from refPositions (don't recompute — the
+    // causal clamp at frame 0 makes the closed-form `(N-1)*width + width/2`
+    // incorrect by one half-step at small offsets).
     let tokenWidth = Float(temporalScale) * Float(hopLength) / Float(sampleRate)
     let halfWidth = tokenWidth / 2.0
-    let lastMid = (Float(refFrames - 1) * tokenWidth) + (tokenWidth / 2.0)
+    let lastMid = refPositions[0, 0, refFrames - 1].item(Float.self)
     let shift = lastMid + halfWidth + 0.04
     let shiftedPositions = refPositions - MLXArray(shift)
 
@@ -123,6 +131,17 @@ func buildAudioReferenceFromPacked(
 
     // Concatenate target positions + shifted reference positions along the token axis.
     let extPositions = MLX.concatenated([targetPositions, shiftedPositions], axis: 2)
+
+    // [DIAG] Print positions for debugging
+    if ProcessInfo.processInfo.environment["LTX_LIPDUB_DUMP_POS"] == "1" {
+        let refArr = refPositions.asArray(Float.self)
+        let shiftedArr = shiftedPositions.asArray(Float.self)
+        let targetArr = targetPositions.asArray(Float.self)
+        print("[DIAG-AUDIO-POS] refFrames=\(refFrames) targetFrames=\(targetAudioFrames) tokenWidth=\(tokenWidth) halfWidth=\(halfWidth) shift=\(shift)")
+        print("[DIAG-AUDIO-POS] refPositions  (first/last 3): \(refArr.prefix(3)) ... \(refArr.suffix(3))")
+        print("[DIAG-AUDIO-POS] shifted (= ref - shift) (first/last 3): \(shiftedArr.prefix(3)) ... \(shiftedArr.suffix(3))")
+        print("[DIAG-AUDIO-POS] targetPositions (first/last 3): \(targetArr.prefix(3)) ... \(targetArr.suffix(3))")
+    }
 
     // Pre-compute RoPE for the extended sequence (audio self-attention).
     let extRoPE = precomputeFreqsCis(

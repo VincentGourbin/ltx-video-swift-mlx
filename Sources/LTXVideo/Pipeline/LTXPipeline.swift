@@ -1692,13 +1692,17 @@ public actor LTXPipeline {
                 "Half-resolution \(halfWidth)x\(halfHeight) must be divisible by downscale_factor=\(downscaleFactor)"
             )
         }
-        LTXDebug.log("[lipdub] fusing LipDub IC-LoRA into LTX2Transformer...")
-        // Note: this MUTATES the loaded ltx2Transformer in place. Programmatic callers
-        // who reuse a pipeline instance should reload models or unfuse before re-running.
-        let (_, fuseResult) = try ltx2.fuseLoRA(from: lipdubLoraPath, scale: 1.0)
-        print("[lipdub] LoRA fused: \(fuseResult.modifiedLayerCount) layers modified (LoRA name: \(fuseResult.loraName))")
-        eval(ltx2.parameters())
-        Memory.clearCache()
+        // [DIAGNOSTIC] LTX_LIPDUB_SKIP_LORA=1 bypasses LoRA fusion to isolate IC-LoRA contribution.
+        let skipLoRA = ProcessInfo.processInfo.environment["LTX_LIPDUB_SKIP_LORA"] == "1"
+        if skipLoRA {
+            print("[lipdub][DIAG] LTX_LIPDUB_SKIP_LORA=1 — skipping LoRA fusion")
+        } else {
+            LTXDebug.log("[lipdub] fusing LipDub IC-LoRA into LTX2Transformer...")
+            let (_, fuseResult) = try ltx2.fuseLoRA(from: lipdubLoraPath, scale: 1.0)
+            print("[lipdub] LoRA fused: \(fuseResult.modifiedLayerCount) layers modified (LoRA name: \(fuseResult.loraName))")
+            eval(ltx2.parameters())
+            Memory.clearCache()
+        }
 
         // 2. Snap target frame count to 8k+1 based on the reference video.
         // We respect config.numFrames as the upper bound but never exceed the ref video.
@@ -1763,12 +1767,24 @@ public actor LTXPipeline {
             hasAudio: true,
             refConfig: ltx2.config
         )
-        let s1AudioRefCtx = buildAudioReference(
+        // [DIAGNOSTIC] LTX_LIPDUB_SKIP_AUDIO_REF=1 disables the audio reference (audio is still
+        // denoised but with no negative-position reference tokens) to isolate audio-ref contribution.
+        let skipAudioRef = ProcessInfo.processInfo.environment["LTX_LIPDUB_SKIP_AUDIO_REF"] == "1"
+        let s1AudioRefCtx: AudioReferenceContext? = skipAudioRef ? nil : buildAudioReference(
             referenceLatent: refAudioLatent,
             targetAudioFrames: audioNumFrames,
             refConfig: ltx2.config
         )
-        LTXDebug.log("[lipdub] Stage 1 video ref tokens=\(s1VideoRefCtx.guideCount), audio ref tokens=\(s1AudioRefCtx.guideCount)")
+        if skipAudioRef {
+            print("[lipdub][DIAG] LTX_LIPDUB_SKIP_AUDIO_REF=1 — audio reference disabled")
+        }
+        // [DIAGNOSTIC] LTX_LIPDUB_SKIP_VIDEO_REF=1 disables the video reference (no IC-LoRA append).
+        let skipVideoRef = ProcessInfo.processInfo.environment["LTX_LIPDUB_SKIP_VIDEO_REF"] == "1"
+        if skipVideoRef {
+            print("[lipdub][DIAG] LTX_LIPDUB_SKIP_VIDEO_REF=1 — video reference disabled")
+        }
+        let s1VideoRefCtxEffective: AppendKeyframeContext? = skipVideoRef ? nil : s1VideoRefCtx
+        LTXDebug.log("[lipdub] Stage 1 video ref tokens=\(s1VideoRefCtxEffective?.guideCount ?? 0), audio ref tokens=\(s1AudioRefCtx?.guideCount ?? 0)")
 
         // 7. Initial noise + Stage 1 sigma schedule (always distilled).
         if let seed = config.seed { MLXRandom.seed(seed) }
@@ -1803,7 +1819,7 @@ public actor LTXPipeline {
                 videoLatent: videoLatent,
                 audioLatentPacked: audioLatentPacked,
                 shape: stage1Shape,
-                videoAppendCtx: s1VideoRefCtx,
+                videoAppendCtx: s1VideoRefCtxEffective,
                 audioRefCtx: s1AudioRefCtx,
                 audioNumFrames: audioNumFrames,
                 videoTextEmbeddings: videoTextEmbeddings,
@@ -1885,8 +1901,8 @@ public actor LTXPipeline {
                 videoLatent: videoLatent,
                 audioLatentPacked: audioLatentPacked,
                 shape: stage2Shape,
-                videoAppendCtx: s2VideoRefCtx,
-                audioRefCtx: s2AudioRefCtx,
+                videoAppendCtx: skipVideoRef ? nil : s2VideoRefCtx,
+                audioRefCtx: skipAudioRef ? nil : s2AudioRefCtx,
                 audioNumFrames: audioNumFrames,
                 videoTextEmbeddings: videoTextEmbeddings,
                 audioTextEmbeddings: audioTextEmbeddings,
