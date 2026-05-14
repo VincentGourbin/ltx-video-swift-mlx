@@ -388,12 +388,16 @@ class AudioDownsample: Module {
         // Input: (B, C, H, W) NCHW — convert to NHWC for MLX Conv2d
         var input = x.transposed(0, 2, 3, 1)  // (B, H, W, C)
 
-        // Causal padding: all height padding to top, symmetric width padding
-        // pad_h = kernel-1 = 2 (top), pad_w = kernel-1 = 2 (split: 1 left, 1 right)
+        // Downsample-specific padding (NOT the same as the regular causal conv).
+        // Python `Downsample(causality_axis=HEIGHT)` uses pad (left=0, right=1, top=2, bottom=0)
+        // — see ltx_core/model/audio_vae/downsample.py:45.  The causal axis (height) gets
+        // the full (kernel-1)=2 pre-pad; the non-causal axis (width) gets ONLY a right-pad of 1
+        // (kernel - 1 - kernel/2 = 1), NOT symmetric (1,1) like in the standard CausalConv2d.
+        // Symmetric width padding produced ~74% relative error in the audio reference latent.
         input = MLX.padded(input, widths: [
             .init((0, 0)),  // batch
-            .init((2, 0)),  // height: causal (top only)
-            .init((1, 1)),  // width: symmetric
+            .init((2, 0)),  // height: causal (top=2, bottom=0)
+            .init((0, 1)),  // width: right-only (left=0, right=1)
             .init((0, 0))   // channels
         ])
 
@@ -427,11 +431,23 @@ class AudioEncoderDownLevel: Module {
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         var h = x
-        for block in blocks {
+        let dumpEnabled = ProcessInfo.processInfo.environment["LTX_LIPDUB_DUMP_AUDIO"] == "1"
+        let levelTag = ProcessInfo.processInfo.environment["LTX_DUMP_LEVEL_TAG"] ?? "X"
+        for (i, block) in blocks.enumerated() {
             h = block(h)
+            if dumpEnabled {
+                let f32 = h.asType(.float32); MLX.eval(f32)
+                try? MLX.save(arrays: ["data": f32], url: URL(fileURLWithPath: "/tmp/swift_layer_down_\(levelTag)_block_\(i).safetensors"))
+                print("[DIAG-LAYER]   down_\(levelTag).block_\(i): \(f32.shape) mean=\(f32.mean().item(Float.self)) std=\(MLX.sqrt(MLX.variance(f32)).item(Float.self))")
+            }
         }
         if let down = downsample {
             h = down(h)
+            if dumpEnabled {
+                let f32 = h.asType(.float32); MLX.eval(f32)
+                try? MLX.save(arrays: ["data": f32], url: URL(fileURLWithPath: "/tmp/swift_layer_down_\(levelTag)_downsample.safetensors"))
+                print("[DIAG-LAYER]   down_\(levelTag).downsample: \(f32.shape) mean=\(f32.mean().item(Float.self)) std=\(MLX.sqrt(MLX.variance(f32)).item(Float.self))")
+            }
         }
         return h
     }
@@ -527,26 +543,50 @@ class AudioEncoder: Module {
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
+        let dumpEnabled = ProcessInfo.processInfo.environment["LTX_LIPDUB_DUMP_AUDIO"] == "1"
+        func dump(_ a: MLXArray, _ name: String) {
+            guard dumpEnabled else { return }
+            let f32 = a.asType(.float32); MLX.eval(f32)
+            try? MLX.save(arrays: ["data": f32], url: URL(fileURLWithPath: "/tmp/swift_layer_\(name).safetensors"))
+            print("[DIAG-LAYER] \(name): \(f32.shape) mean=\(f32.mean().item(Float.self)) std=\(MLX.sqrt(MLX.variance(f32)).item(Float.self))")
+        }
+
         // x: (B, C=2, T_mel, F=64) NCHW format from mel spectrogram
         // AudioCausalConv2d handles NCHW→NHWC internally and returns NCHW
         var h = convIn(x)
+        dump(h, "conv_in")
 
         // Down path
         for (i, level) in downLevels.enumerated() {
+            setenv("LTX_DUMP_LEVEL_TAG", "\(i)", 1)
+            // [DIAG] dump downsample weight for comparison with Python
+            if dumpEnabled, let down = level.downsample {
+                let w = down.conv.weight.asType(.float32); MLX.eval(w)
+                try? MLX.save(arrays: ["data": w], url: URL(fileURLWithPath: "/tmp/swift_downsample_\(i)_weight.safetensors"))
+                print("[DIAG-WEIGHT] downsample.\(i).conv.weight: \(w.shape) mean=\(w.mean().item(Float.self)) std=\(MLX.sqrt(MLX.variance(w)).item(Float.self))")
+                let v0000 = w[0, 0, 0, 0].item(Float.self)
+                let v0011 = w[0, 0, 1, 1].item(Float.self)
+                print("[DIAG-WEIGHT]   weight[0,0,0,0]=\(v0000) weight[0,0,1,1]=\(v0011)")
+            }
             h = level(h)
             eval(h)
             Memory.clearCache()
+            dump(h, "down_\(i)")
             LTXDebug.log("Audio encoder down[\(i)]: \(h.shape)")
         }
 
         // Mid block
         h = mid(h)
         eval(h)
+        dump(h, "mid")
 
         // Final — all in NCHW (AudioCausalConv2d handles format internally)
         h = normOut(h)
+        dump(h, "norm_out")
         h = MLXNN.silu(h)
+        dump(h, "non_linearity")
         h = convOut(h)
+        dump(h, "conv_out")
 
         return h  // (B, 16, T_latent, 16) — mean + logvar concatenated on channel axis
     }
@@ -681,6 +721,14 @@ class AudioVAE: Module {
         let mean = encoderOutput[0..., 0..<latentChannels, 0..., 0...]  // (B, 8, T_latent, M)
 
         LTXDebug.log("Audio encode: encoder output \(encoderOutput.shape), mean \(mean.shape)")
+
+        // [DIAG] Dump pre-normalize mean before patchify
+        if ProcessInfo.processInfo.environment["LTX_LIPDUB_DUMP_AUDIO"] == "1" {
+            let m32 = mean.asType(.float32)
+            MLX.eval(m32)
+            try? MLX.save(arrays: ["data": m32], url: URL(fileURLWithPath: "/tmp/swift_audio_mean_prenorm.safetensors"))
+            print("[DIAG-AUDIO] dumped mean pre-norm \(m32.shape)")
+        }
 
         // Patchify: (B, 8, T, M) → (B, T, 8*M) = (B, T, 128)
         var sample = mean.transposed(0, 2, 1, 3)  // (B, T, 8, M)
