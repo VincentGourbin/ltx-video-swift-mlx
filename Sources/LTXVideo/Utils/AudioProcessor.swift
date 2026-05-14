@@ -69,10 +69,15 @@ public class AudioProcessor {
 
     // MARK: - Public API
 
-    /// Load audio from a video or audio file as a mono float32 waveform at 16kHz.
+    /// Load audio from a video or audio file as float32 waveform(s) at 16kHz.
+    ///
+    /// Preserves the source channel layout: mono → `(samples,)`, stereo → `(2, samples)`.
+    /// The AudioVAE was trained on real stereo (L≠R); duplicating mono into fake stereo
+    /// loses the inter-channel correlations the encoder learned to use, which corrupts
+    /// the audio reference features for LipDub.
     ///
     /// - Parameter path: Path to video (.mp4) or audio (.wav, .m4a) file
-    /// - Returns: Mono waveform as MLXArray of shape `(samples,)`
+    /// - Returns: Waveform `(samples,)` for mono input, `(2, samples)` for stereo input
     public func loadAudio(from path: String) async throws -> MLXArray {
         let url = URL(fileURLWithPath: path)
         let asset = AVURLAsset(url: url)
@@ -84,14 +89,25 @@ public class AudioProcessor {
             return MLXArray.zeros([numSamples]).asType(.float32)
         }
 
+        // Probe the source channel count. AVAssetReader will respect this and not
+        // collapse stereo to mono (which our previous AVNumberOfChannelsKey=1 did).
+        let formatDescriptions = try await audioTrack.load(.formatDescriptions)
+        var srcChannels = 1
+        for desc in formatDescriptions {
+            if let absd = CMAudioFormatDescriptionGetStreamBasicDescription(desc) {
+                srcChannels = max(srcChannels, Int(absd.pointee.mChannelsPerFrame))
+            }
+        }
+        let outChannels = min(srcChannels, 2)  // clamp to mono or stereo
+
         let reader = try AVAssetReader(asset: asset)
         let outputSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVSampleRateKey: sampleRate,
-            AVNumberOfChannelsKey: 1,
+            AVNumberOfChannelsKey: outChannels,
             AVLinearPCMBitDepthKey: 32,
             AVLinearPCMIsFloatKey: true,
-            AVLinearPCMIsNonInterleaved: false,
+            AVLinearPCMIsNonInterleaved: false,  // interleaved L,R,L,R,...
         ]
         let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
         reader.add(output)
@@ -119,24 +135,42 @@ public class AudioProcessor {
             throw AudioProcessorError.extractionFailed(path)
         }
 
-        return MLXArray(allSamples)
+        if outChannels == 1 {
+            return MLXArray(allSamples)  // (samples,)
+        }
+        // Deinterleave (L, R, L, R, ...) → (2, samples)
+        let totalSamples = allSamples.count / outChannels
+        var deinterleaved = [Float](repeating: 0, count: outChannels * totalSamples)
+        for i in 0..<totalSamples {
+            for c in 0..<outChannels {
+                deinterleaved[c * totalSamples + i] = allSamples[i * outChannels + c]
+            }
+        }
+        return MLXArray(deinterleaved).reshaped([outChannels, totalSamples])
     }
 
     /// Compute a stereo mel spectrogram suitable for AudioVAE.encode().
     ///
-    /// Mono input is duplicated to stereo. Output is log-scaled.
+    /// Accepts mono `(samples,)` or true stereo `(2, samples)` input. For mono input
+    /// the mel is duplicated to fill both channels (fallback). For stereo, each channel
+    /// is mel-transformed independently — preserving the L/R correlations the AudioVAE
+    /// was trained on (critical for LipDub audio reference fidelity).
     ///
-    /// - Parameter waveform: Mono waveform `(samples,)` float32 at 16kHz
+    /// - Parameter waveform: `(samples,)` (mono) or `(2, samples)` (stereo) float32 at 16kHz
     /// - Returns: Stereo mel spectrogram `(1, 2, T_mel, 64)` for AudioVAE
     public func melSpectrogram(_ waveform: MLXArray) throws -> MLXArray {
-        // Compute mel spectrogram for mono signal
-        let mel = try computeMelSpectrogram(waveform)  // (T_mel, nMels)
-
-        // Duplicate mono → stereo: (1, 2, T_mel, nMels)
-        let melBatched = mel.reshaped([1, 1, mel.dim(0), mel.dim(1)])
-        let stereo = MLX.concatenated([melBatched, melBatched], axis: 1)
-
-        return stereo
+        if waveform.ndim == 1 {
+            // Mono input — compute one mel and duplicate to fill stereo encoder input.
+            let mel = try computeMelSpectrogram(waveform)
+            let melBatched = mel.reshaped([1, 1, mel.dim(0), mel.dim(1)])
+            return MLX.concatenated([melBatched, melBatched], axis: 1)
+        }
+        // Stereo input (2, samples): mel each channel separately, preserving L/R differences.
+        let leftMel = try computeMelSpectrogram(waveform[0])  // (T_mel, nMels)
+        let rightMel = try computeMelSpectrogram(waveform[1])
+        let l = leftMel.reshaped([1, 1, leftMel.dim(0), leftMel.dim(1)])
+        let r = rightMel.reshaped([1, 1, rightMel.dim(0), rightMel.dim(1)])
+        return MLX.concatenated([l, r], axis: 1)
     }
 
     // MARK: - Internal

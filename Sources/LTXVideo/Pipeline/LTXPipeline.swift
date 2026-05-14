@@ -646,6 +646,10 @@ public actor LTXPipeline {
                 audioTimestep = MLXArray([sigma])
             }
 
+            // Match Python `context_mask=None` (LipDub/keyframe/IC-LoRA paths) — the
+            // dual-stream LTX2 model was trained without masking padding tokens.
+            // textMask intentionally unused; kept in the signature for symmetry.
+            _ = textMask
             let (videoVelExt, audioVelExt) = ltx2(
                 videoLatent: extTokensVideo,
                 audioLatent: extTokensAudio,
@@ -653,7 +657,7 @@ public actor LTXPipeline {
                 audioContext: audioTextEmbeddings.asType(.bfloat16),
                 videoTimesteps: videoTimestep,
                 audioTimesteps: audioTimestep,
-                videoContextMask: textMask,
+                videoContextMask: nil,
                 audioContextMask: nil,
                 videoLatentShape: (frames: shape.frames, height: shape.height, width: shape.width),
                 audioNumFrames: audioNumFrames,
@@ -1216,9 +1220,12 @@ public actor LTXPipeline {
 
         // Always extract audio from source video for passthrough to output
         let sourceWaveform = try await audioProcessor.loadAudio(from: videoPath)
-        if sourceWaveform.dim(0) > 0 {
+        // loadAudio returns (samples,) for mono or (channels, samples) for stereo —
+        // sample count is the LAST axis in either case.
+        let sourceSampleCount = sourceWaveform.dim(sourceWaveform.ndim - 1)
+        if sourceSampleCount > 0 {
             sourceAudioWaveform = sourceWaveform
-            LTXDebug.log("Source audio extracted: \(sourceWaveform.dim(0)) samples (\(String(format: "%.1f", Float(sourceWaveform.dim(0)) / Float(Self.audioSampleRate)))s)")
+            LTXDebug.log("Source audio extracted: \(sourceSampleCount) samples × \(sourceWaveform.ndim == 1 ? 1 : sourceWaveform.dim(0)) ch (\(String(format: "%.1f", Float(sourceSampleCount) / Float(Self.audioSampleRate)))s)")
         }
 
         // Encode audio latents for cross-modal attention if LTX2Transformer + AudioVAE encoder are loaded
@@ -1698,8 +1705,20 @@ public actor LTXPipeline {
             print("[lipdub][DIAG] LTX_LIPDUB_SKIP_LORA=1 — skipping LoRA fusion")
         } else {
             LTXDebug.log("[lipdub] fusing LipDub IC-LoRA into LTX2Transformer...")
+            let loraDebug = ProcessInfo.processInfo.environment["LTX_LIPDUB_LORA_DEBUG"] == "1"
+            let prevDebug = LTXDebug.isEnabled
+            if loraDebug { LTXDebug.enableDebugMode() }
+            let probeWeights = try LoRALoader.load(
+                from: lipdubLoraPath,
+                config: LoRAConfig(weightsPath: lipdubLoraPath, scale: 1.0)
+            )
+            print("[lipdub] LoRA file contains \(probeWeights.layers.count) layer-pairs (lora_A+lora_B)")
             let (_, fuseResult) = try ltx2.fuseLoRA(from: lipdubLoraPath, scale: 1.0)
-            print("[lipdub] LoRA fused: \(fuseResult.modifiedLayerCount) layers modified (LoRA name: \(fuseResult.loraName))")
+            let coverage = probeWeights.layers.count > 0
+                ? Float(fuseResult.modifiedLayerCount) / Float(probeWeights.layers.count) * 100.0
+                : 0
+            print("[lipdub] LoRA fused: \(fuseResult.modifiedLayerCount) / \(probeWeights.layers.count) layers (\(String(format: "%.1f", coverage))%) — \(fuseResult.loraName)")
+            if !loraDebug { _ = prevDebug } else { LTXDebug.isEnabled = prevDebug }
             eval(ltx2.parameters())
             Memory.clearCache()
         }
@@ -1752,10 +1771,13 @@ public actor LTXPipeline {
         unloadVAEEncoder()  // free encoder; we'll reload it for Stage 2
 
         // 5. Extract reference audio + encode via AudioVAE.
-        LTXDebug.log("[lipdub] extracting + encoding reference audio")
         let audioProcessor = AudioProcessor()
         let refWaveform = try await audioProcessor.loadAudio(from: referenceVideoPath)
+        let refChannels = refWaveform.ndim == 1 ? 1 : refWaveform.dim(0)
+        let refSamples = refWaveform.dim(refWaveform.ndim - 1)
+        print("[lipdub] reference audio loaded: \(refChannels) ch × \(refSamples) samples (\(String(format: "%.2f", Float(refSamples) / 16000.0))s)")
         let refMel = try audioProcessor.melSpectrogram(refWaveform)
+        print("[lipdub] reference mel spectrogram: \(refMel.shape)")
         let refAudioLatent = try audioVAE.encode(refMel)  // (1, 8, T_audio_ref, 16)
         if ProcessInfo.processInfo.environment["LTX_LIPDUB_DUMP_AUDIO"] == "1" {
             let melF32 = refMel.asType(.float32)
