@@ -36,10 +36,24 @@ DerivedData/
 *.npy
 *.pt
 
-# Generated videos
+# Generated videos / audio / images
 *.mp4
-# Allow example videos in docs
-!docs/examples/**/*.mp4
+*.wav
+*.png
+*.jpg
+*.jpeg
+# Allow assets in docs (READMEs reference these)
+!docs/**/*.mp4
+!docs/**/*.wav
+!docs/**/*.png
+!docs/**/*.jpg
+!docs/**/*.jpeg
+
+# Profiling artifacts
+*.profraw
+*.profdata
+profile_results/
+benchmarks/
 
 # Temporary files
 *.tmp
