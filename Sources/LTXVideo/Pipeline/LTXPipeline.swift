@@ -1768,6 +1768,16 @@ public actor LTXPipeline {
         let refLatentS1 = try await encodeVideo(
             path: referenceVideoPath, width: refS1Width, height: refS1Height, numFrames: numFrames
         )
+        if ProcessInfo.processInfo.environment["LTX_LIPDUB_DUMP_VIDEO_REF"] == "1" {
+            let f32 = refLatentS1.asType(.float32)
+            MLX.eval(f32)
+            try? MLX.save(arrays: ["data": f32], url: URL(fileURLWithPath: "/tmp/swift_video_ref_latent_s1.safetensors"))
+            print("[lipdub][DIAG] dumped video ref latent S1 \(f32.shape) to /tmp/swift_video_ref_latent_s1.safetensors")
+            let m = f32.mean().item(Float.self)
+            let v = MLX.mean(MLX.square(f32 - m)).item(Float.self)
+            print("[lipdub][DIAG]   stats: mean=\(m), std=\(sqrt(v)), min=\(f32.min().item(Float.self)), max=\(f32.max().item(Float.self))")
+            return VideoGenerationResult(frames: MLXArray.zeros([1,3,1,64,64]), seed: 0, generationTime: 0, audioWaveform: nil, audioSampleRate: nil, effectivePrompt: prompt)
+        }
         unloadVAEEncoder()  // free encoder; we'll reload it for Stage 2
 
         // 5. Extract reference audio + encode via AudioVAE.
