@@ -431,23 +431,11 @@ class AudioEncoderDownLevel: Module {
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         var h = x
-        let dumpEnabled = ProcessInfo.processInfo.environment["LTX_LIPDUB_DUMP_AUDIO"] == "1"
-        let levelTag = ProcessInfo.processInfo.environment["LTX_DUMP_LEVEL_TAG"] ?? "X"
-        for (i, block) in blocks.enumerated() {
+        for block in blocks {
             h = block(h)
-            if dumpEnabled {
-                let f32 = h.asType(.float32); MLX.eval(f32)
-                try? MLX.save(arrays: ["data": f32], url: URL(fileURLWithPath: "/tmp/swift_layer_down_\(levelTag)_block_\(i).safetensors"))
-                print("[DIAG-LAYER]   down_\(levelTag).block_\(i): \(f32.shape) mean=\(f32.mean().item(Float.self)) std=\(MLX.sqrt(MLX.variance(f32)).item(Float.self))")
-            }
         }
         if let down = downsample {
             h = down(h)
-            if dumpEnabled {
-                let f32 = h.asType(.float32); MLX.eval(f32)
-                try? MLX.save(arrays: ["data": f32], url: URL(fileURLWithPath: "/tmp/swift_layer_down_\(levelTag)_downsample.safetensors"))
-                print("[DIAG-LAYER]   down_\(levelTag).downsample: \(f32.shape) mean=\(f32.mean().item(Float.self)) std=\(MLX.sqrt(MLX.variance(f32)).item(Float.self))")
-            }
         }
         return h
     }

@@ -211,54 +211,6 @@ class LTX2Transformer: Module {
         return result
     }
 
-    /// Prepare cross-modal RoPE for cross-attention
-    ///
-    /// Python uses temporal-only coordinates for cross-modal attention:
-    ///   `video_coords[:, 0:1, :]` and `audio_coords[:, 0:1, :]`
-    /// This makes physical sense: cross-modal attention aligns video and audio
-    /// on time, not spatial position.
-    private func prepareCrossModalRoPE(
-        batchSize: Int,
-        videoFrames: Int,
-        videoHeight: Int,
-        videoWidth: Int,
-        audioFrames: Int
-    ) -> (video: (cos: MLXArray, sin: MLXArray), audio: (cos: MLXArray, sin: MLXArray)) {
-        // Video side: temporal-only (1D) RoPE for cross-attention
-        // Python: self.cross_attn_rope(video_coords[:, 0:1, :])
-        let videoPositions3D = createPositionGrid(
-            batchSize: batchSize, frames: videoFrames, height: videoHeight, width: videoWidth
-        )
-        // Extract temporal coordinate only: (B, 3, T) → (B, 1, T)
-        let videoTemporalOnly = videoPositions3D[0..., 0..<1, 0...]
-        let videoCrossRoPE = precomputeFreqsCis(
-            indicesGrid: videoTemporalOnly,
-            dim: config.audioCrossAttentionDim,
-            theta: config.ropeTheta,
-            maxPos: config.audioMaxPos,  // Temporal only → use audioMaxPos (frame-based)
-            numAttentionHeads: config.audioNumAttentionHeads,
-            ropeType: ropeType,
-            doublePrecision: true
-        )
-
-        // Audio side: temporal-only (1D) RoPE for cross-attention
-        // Python: self.cross_attn_audio_rope(audio_coords[:, 0:1, :])
-        let audioPositions = createAudioPositionGrid(
-            batchSize: batchSize, audioFrames: audioFrames
-        )
-        let audioCrossRoPE = precomputeFreqsCis(
-            indicesGrid: audioPositions,
-            dim: config.audioCrossAttentionDim,
-            theta: config.ropeTheta,
-            maxPos: config.audioMaxPos,
-            numAttentionHeads: config.audioNumAttentionHeads,
-            ropeType: ropeType,
-            doublePrecision: true
-        )
-
-        return (videoCrossRoPE, audioCrossRoPE)
-    }
-
     // MARK: - Forward Pass
 
     /// Dual video/audio forward pass

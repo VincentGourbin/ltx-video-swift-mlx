@@ -1653,17 +1653,20 @@ public actor LTXPipeline {
     ///   - config: Width / height / seed / etc. `numFrames` is overridden by the snap
     ///     applied to the reference video's actual frame count (rounded down to `8k+1`).
     ///   - upscalerWeightsPath: Path to spatial upscaler safetensors (used between stages).
-    ///   - referenceStrength: Conditioning strength for the video reference (default 1.0 = full).
     ///   - onProgress: Optional progress callback.
     /// - Returns: `VideoGenerationResult` with the generated video frames and the decoded
     ///   audio waveform.
+    ///
+    /// > NOTE: `reference_strength` (Python `VideoConditionByReferenceLatent.strength`,
+    /// > default 1.0) is hard-coded to 1.0 here — the reference is fully clean
+    /// > (`denoise_mask = 0`). Partial-strength reference conditioning would require
+    /// > adding per-token denoise-mask blending in `runDenoiseStep`; not implemented.
     public func generateLipDub(
         prompt: String,
         referenceVideoPath: String,
         lipdubLoraPath: String,
         config: LTXVideoGenerationConfig,
         upscalerWeightsPath: String,
-        referenceStrength: Float = 1.0,
         onProgress: GenerationProgressCallback? = nil
     ) async throws -> VideoGenerationResult {
         try config.validate()

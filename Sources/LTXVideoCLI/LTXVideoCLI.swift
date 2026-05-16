@@ -673,9 +673,6 @@ struct LipDub: AsyncParsableCommand {
     @Option(name: .long, help: "Random seed for reproducibility")
     var seed: UInt64?
 
-    @Option(name: .long, help: "Reference video conditioning strength (default: 1.0)")
-    var referenceStrength: Float = 1.0
-
     @Option(name: .long, help: "Path to LipDub IC-LoRA .safetensors (default: auto-download from HuggingFace)")
     var lora: String?
 
@@ -711,7 +708,6 @@ struct LipDub: AsyncParsableCommand {
         print("Resolution: \(width)x\(height) (stage 1: \(width / 2)x\(height / 2))")
         print("Frames: \(frames)")
         if let seed = seed { print("Seed: \(seed)") }
-        if referenceStrength != 1.0 { print("Reference strength: \(referenceStrength)") }
         print()
 
         // Validate
@@ -794,7 +790,6 @@ struct LipDub: AsyncParsableCommand {
             lipdubLoraPath: loraPath,
             config: config,
             upscalerWeightsPath: upscalerPath,
-            referenceStrength: referenceStrength,
             onProgress: { progress in
                 print("  \(progress.status)")
                 fflush(stdout)

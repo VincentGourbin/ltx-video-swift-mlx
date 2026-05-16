@@ -88,6 +88,21 @@ The same token is also used for the LTX-2.3 base weights (also gated).
 - **`--image`, `--keyframe`, `--video` are incompatible** with `lipdub` — this
   is a dedicated pipeline, not a flag on `generate`.
 
+## Diagnostic environment variables
+
+These are unsupported, undocumented-elsewhere knobs left in for debugging
+parity bugs against Lightricks' Python reference. They early-exit or skip
+parts of the pipeline; they are NOT for production use.
+
+| Env var | Effect |
+|---|---|
+| `LTX_LIPDUB_DUMP_AUDIO=1` | Dump `refMel` + `refAudioLatent` (and per-block AudioVAE activations) to `/tmp/swift_audio_*.safetensors`, then exit |
+| `LTX_LIPDUB_DUMP_VIDEO_REF=1` | Dump the Stage 1 VAE-encoded reference video latent to `/tmp/swift_video_ref_latent_s1.safetensors`, then exit |
+| `LTX_LIPDUB_SKIP_LORA=1` | Run with the LipDub IC-LoRA NOT fused (baseline behavior of LTX-2.3 distilled with audio) |
+| `LTX_LIPDUB_SKIP_AUDIO_REF=1` | Disable the appended audio reference tokens (audio is still denoised, but with no negative-position reference) |
+| `LTX_LIPDUB_SKIP_VIDEO_REF=1` | Disable the appended video reference tokens (no IC-LoRA video append; the LoRA still fuses) |
+| `LTX_LIPDUB_LORA_DEBUG=1` | Verbose `LTXDebug.log` output during LoRA fusion (per-layer match/miss) |
+
 ## Performance
 
 Measured on M3 Max 96 GB:
