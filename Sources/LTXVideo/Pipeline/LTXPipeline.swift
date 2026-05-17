@@ -1517,12 +1517,12 @@ public actor LTXPipeline {
             // STG: perturbed pass with self-attention skipped on stgBlocks (dev model only)
             if stgScale != 0.0 && !stgBlocks.isEmpty {
                 if let ltx2 = ltx2Transformer { ltx2.setSTGBlocks(stgBlocks) }
-                if let t = transformer as? LTXTransformer { t.setSTGBlocks(stgBlocks) }
+                if let t = transformer { t.setSTGBlocks(stgBlocks) }
 
                 let stgDenoised = try runTransformer(context: videoTextEmbeddings, audioContext: audioCtx)
 
                 if let ltx2 = ltx2Transformer { ltx2.clearSTG() }
-                if let t = transformer as? LTXTransformer { t.clearSTG() }
+                if let t = transformer { t.clearSTG() }
 
                 // STG: pred += stg_scale * (cond - perturbed)
                 denoisedVideo = denoisedVideo + MLXArray(stgScale) * (condDenoised - stgDenoised)
