@@ -144,12 +144,12 @@ public actor LTXPipeline {
     /// Model downloader
     private let downloader: ModelDownloader
 
-    /// Resolved unified weights file path currently associated with this pipeline.
+    /// Resolved unified weights file paths associated with this pipeline, keyed by model.
     ///
     /// When the caller supplies a local unified safetensors file via `loadModels`,
     /// later lazy loads such as the I2V VAE encoder should reuse that same file
     /// instead of falling back to the downloader.
-    private var unifiedWeightsPath: String?
+    private var unifiedWeightsPaths: [LTXModel: String] = [:]
 
     /// Flow-matching scheduler
     private let scheduler: LTXScheduler
@@ -232,6 +232,38 @@ public actor LTXPipeline {
         self.scheduler = LTXScheduler(isDistilled: true)
     }
 
+    /// Resolve the unified safetensors path for a model.
+    ///
+    /// Resolution order is: explicit caller override, cached path for the model
+    /// if it still exists, then downloader/cache lookup. Explicit overrides are
+    /// cached as-is so later lazy component loads use the same caller-supplied file.
+    private func resolveUnifiedWeightsPath(
+        for model: LTXModel,
+        overridePath: String? = nil,
+        progressCallback: DownloadProgressCallback? = nil
+    ) async throws -> String {
+        if let overridePath {
+            unifiedWeightsPaths[model] = overridePath
+            return overridePath
+        }
+
+        if let cachedPath = unifiedWeightsPaths[model] {
+            if FileManager.default.fileExists(atPath: cachedPath) {
+                return cachedPath
+            }
+
+            LTXDebug.log("Cached unified weights missing for \(model.displayName): \(cachedPath)")
+            unifiedWeightsPaths[model] = nil
+        }
+
+        LTXDebug.log("Downloading unified weights for \(model.displayName) (if needed)...")
+        let downloadedPath = try await downloader.downloadUnifiedWeights(model: model) { progress in
+            progressCallback?(progress)
+        }
+        unifiedWeightsPaths[model] = downloadedPath.path
+        return downloadedPath.path
+    }
+
 
     // MARK: - Model Loading
 
@@ -293,21 +325,14 @@ public actor LTXPipeline {
         let connectorWeights: [String: MLXArray]
 
         stepStart = Date()
-        let unifiedPath: String
-        if let path = ltxWeightsPath {
-            unifiedPath = path
-        } else if let cachedPath = unifiedWeightsPath {
-            unifiedPath = cachedPath
-        } else {
-            // Download unified file from Lightricks/LTX-2.3
-            LTXDebug.log("Downloading unified weights for \(model.displayName) (if needed)...")
+        if ltxWeightsPath == nil {
             progressCallback?(DownloadProgress(progress: 0.35, message: "Downloading unified weights..."))
-            let downloadedPath = try await downloader.downloadUnifiedWeights(model: model) { progress in
-                progressCallback?(progress)
-            }
-            unifiedPath = downloadedPath.path
         }
-        self.unifiedWeightsPath = unifiedPath
+        let unifiedPath = try await resolveUnifiedWeightsPath(
+            for: model,
+            overridePath: ltxWeightsPath,
+            progressCallback: progressCallback
+        )
 
         LTXDebug.log("Splitting unified weights from \(unifiedPath)...")
         let split = try LTXWeightLoader.splitUnifiedWeightsFile(path: unifiedPath)
@@ -422,10 +447,8 @@ public actor LTXPipeline {
         // Step 2: Download unified file and extract connector weights
         progressCallback?(DownloadProgress(progress: 0.7, message: "Loading connector weights..."))
         stepStart = Date()
-        let unifiedPath = try await downloader.downloadUnifiedWeights(model: model) { progress in
-            progressCallback?(progress)
-        }
-        let split = try LTXWeightLoader.splitUnifiedWeightsFile(path: unifiedPath.path)
+        let unifiedPath = try await resolveUnifiedWeightsPath(for: model, progressCallback: progressCallback)
+        let split = try LTXWeightLoader.splitUnifiedWeightsFile(path: unifiedPath)
         let connectorWeights = split.connector
 
         textEncoder = createTextEncoder(
@@ -490,16 +513,7 @@ public actor LTXPipeline {
         // plus additional audio-specific keys. We reload from the unified file.
         progressCallback?(DownloadProgress(progress: 0.6, message: "Loading dual audio/video transformer..."))
 
-        let unifiedPath: String
-        if let cachedPath = unifiedWeightsPath {
-            unifiedPath = cachedPath
-        } else {
-            let downloadedPath = try await downloader.downloadUnifiedWeights(model: model) { progress in
-                progressCallback?(progress)
-            }
-            unifiedPath = downloadedPath.path
-            self.unifiedWeightsPath = unifiedPath
-        }
+        let unifiedPath = try await resolveUnifiedWeightsPath(for: model, progressCallback: progressCallback)
 
         // Load and split unified weights (includeAudio: true to keep audio transformer keys)
         let (transformerWeights, _, connectorWeightsFromUnified) = try LTXWeightLoader.splitUnifiedWeightsFile(
@@ -2068,14 +2082,7 @@ public actor LTXPipeline {
         if vaeEncoder != nil { return }  // Already loaded
 
         LTXDebug.log("Loading VAE encoder...")
-        let resolvedUnifiedPath: String
-        if let cachedPath = unifiedWeightsPath {
-            resolvedUnifiedPath = cachedPath
-        } else {
-            let downloadedPath = try await downloader.downloadUnifiedWeights(model: model, progress: nil)
-            resolvedUnifiedPath = downloadedPath.path
-            self.unifiedWeightsPath = resolvedUnifiedPath
-        }
+        let resolvedUnifiedPath = try await resolveUnifiedWeightsPath(for: model)
         let encoderWeights = try LTXWeightLoader.loadVAEEncoderWeightsFromUnified(from: resolvedUnifiedPath)
 
         let encoder = VideoEncoder()
@@ -2750,7 +2757,7 @@ public actor LTXPipeline {
         vocoder = nil
         loraOriginalWeights = nil
         loraFusedPath = nil
-        unifiedWeightsPath = nil
+        unifiedWeightsPaths.removeAll()
 
         // Clear GPU cache from within the actor's isolation context
         // so ARC has already released the model refs above
@@ -2910,4 +2917,3 @@ extension VideoLatentShape {
 }
 
 // MARK: - Convenience Functions
-
