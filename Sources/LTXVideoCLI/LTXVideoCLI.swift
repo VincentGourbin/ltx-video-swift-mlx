@@ -386,6 +386,12 @@ struct Retake: AsyncParsableCommand {
     @Option(name: .long, help: "End time in seconds for partial retake (default: retake all frames)")
     var endTime: Float?
 
+    @Option(name: .long, help: "Path to LoRA .safetensors file to apply during retake")
+    var lora: String?
+
+    @Option(name: .long, help: "LoRA scale factor (default: 1.0)")
+    var loraScale: Float = 1.0
+
     @Option(name: .shortAndLong, help: "Output file path (default: retake.mp4)")
     var output: String = "retake.mp4"
 
@@ -485,6 +491,7 @@ struct Retake: AsyncParsableCommand {
             print("Seed: \(seed)")
         }
         if enhancePrompt { print("Prompt enhancement: enabled") }
+        if let loraPath = lora { print("LoRA: \(loraPath) (scale: \(loraScale))") }
         if transformerQuant != "bf16" { print("Transformer quantization: \(transformerQuant)") }
         print()
 
@@ -497,6 +504,17 @@ struct Retake: AsyncParsableCommand {
         }
         guard FileManager.default.fileExists(atPath: video) else {
             throw ValidationError("Source video not found: \(video)")
+        }
+        if let loraPath = lora {
+            guard FileManager.default.fileExists(atPath: loraPath) else {
+                throw ValidationError("LoRA file not found: \(loraPath)")
+            }
+        }
+        guard loraScale.isFinite else {
+            throw ValidationError("LoRA scale must be finite. Got \(loraScale)")
+        }
+        guard loraScale >= 0 else {
+            throw ValidationError("LoRA scale must be >= 0. Got \(loraScale)")
         }
         // Parse quantization
         let quantConfig: LTXQuantizationConfig
@@ -543,6 +561,14 @@ struct Retake: AsyncParsableCommand {
                 print("  \(progress.message) (\(Int(progress.progress * 100))%)")
             }
             print("Audio models loaded")
+        }
+
+        // Fuse LoRA if specified (after loading final transformer variant)
+        if let loraPath = lora {
+            print("Fusing LoRA weights...")
+            fflush(stdout)
+            let fusedCount = try await pipeline.fuseLoRA(from: loraPath, scale: loraScale)
+            print("LoRA fused (\(fusedCount) weight updates)")
         }
 
         // Build config

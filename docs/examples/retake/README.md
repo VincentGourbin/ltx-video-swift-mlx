@@ -111,6 +111,32 @@ ltx-video retake \
 
 ---
 
+### 3. Full Retake with LoRA — Camera Motion Control
+
+Apply a compatible LoRA during retake generation (for example a camera-motion LoRA) using the same flags as `generate`.
+
+```bash
+ltx-video retake \
+    "Arc shot around a red vintage car parked on a forest road, cinematic lighting" \
+    --video source-car.mp4 \
+    --lora /path/to/lora.safetensors \
+    --lora-scale 0.8 \
+    -w 768 -h 512 -f 121 \
+    --seed 42 \
+    -o retake-lora-768x512-5s.mp4
+```
+
+| Parameter | Value |
+|-----------|-------|
+| Resolution | 768x512 |
+| Frames | 121 (5.0s at 24fps) |
+| Mode | Full retake |
+| LoRA | custom `.safetensors` |
+| LoRA scale | 0.8 |
+| Seed | 42 |
+
+---
+
 ## CLI Reference
 
 ```
@@ -130,6 +156,8 @@ ltx-video retake <prompt> --video <path> [options]
 | `-f, --frames` | `121` | Frame count (must be 8n+1) |
 | `--seed` | random | Random seed |
 | `--enhance-prompt` | off | Enhance prompt with Gemma VLM |
+| `--lora` | none | Path to LoRA `.safetensors` file |
+| `--lora-scale` | `1.0` | LoRA strength multiplier |
 | `--transformer-quant` | `bf16` | Quantization: `bf16`, `qint8`, `int4` |
 
 ### Strength Guide

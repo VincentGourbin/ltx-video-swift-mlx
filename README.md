@@ -132,6 +132,12 @@ ltx-video retake "Replace the red ball with a fireball with blazing flames and s
     --video source.mp4 \
     --start-time 5.0 --end-time 7.0 -w 512 -h 512 -f 233
 
+# Retake with LoRA (same flags as generate)
+ltx-video retake "A cinematic arc shot around a vintage red car" \
+    --video source.mp4 \
+    --lora /path/to/lora.safetensors --lora-scale 0.8 \
+    -w 768 -h 512 -f 121
+
 # Use distilled mode for faster inference (default: dev model with CFG)
 ltx-video retake "The vase explodes into colorful smoke" \
     --video source.mp4 --distilled \
