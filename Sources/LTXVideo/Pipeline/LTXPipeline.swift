@@ -149,7 +149,7 @@ public actor LTXPipeline {
     /// When the caller supplies a local unified safetensors file via `loadModels`,
     /// later lazy loads such as the I2V VAE encoder should reuse that same file
     /// instead of falling back to the downloader.
-    private var unifiedWeightsPaths: [LTXModel: String] = [:]
+    private var unifiedWeightsPathCache = UnifiedWeightsPathCache()
 
     /// Flow-matching scheduler
     private let scheduler: LTXScheduler
@@ -243,24 +243,19 @@ public actor LTXPipeline {
         progressCallback: DownloadProgressCallback? = nil
     ) async throws -> String {
         if let overridePath {
-            unifiedWeightsPaths[model] = overridePath
+            unifiedWeightsPathCache.store(overridePath, for: model)
             return overridePath
         }
 
-        if let cachedPath = unifiedWeightsPaths[model] {
-            if FileManager.default.fileExists(atPath: cachedPath) {
-                return cachedPath
-            }
-
-            LTXDebug.log("Cached unified weights missing for \(model.displayName): \(cachedPath)")
-            unifiedWeightsPaths[model] = nil
+        if let cachedPath = unifiedWeightsPathCache.cachedPath(for: model) {
+            return cachedPath
         }
 
         LTXDebug.log("Downloading unified weights for \(model.displayName) (if needed)...")
         let downloadedPath = try await downloader.downloadUnifiedWeights(model: model) { progress in
             progressCallback?(progress)
         }
-        unifiedWeightsPaths[model] = downloadedPath.path
+        unifiedWeightsPathCache.store(downloadedPath.path, for: model)
         return downloadedPath.path
     }
 
@@ -2757,7 +2752,7 @@ public actor LTXPipeline {
         vocoder = nil
         loraOriginalWeights = nil
         loraFusedPath = nil
-        unifiedWeightsPaths.removeAll()
+        unifiedWeightsPathCache.clear()
 
         // Clear GPU cache from within the actor's isolation context
         // so ARC has already released the model refs above
