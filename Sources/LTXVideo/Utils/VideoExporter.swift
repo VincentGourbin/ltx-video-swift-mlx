@@ -616,7 +616,7 @@ extension VideoExporter {
     /// second track — no separate WAV file needed.
     ///
     /// - Parameters:
-    ///   - frames: Video tensor of shape `(F, H, W, C)` or `(B, F, H, W, C)`, uint8 [0, 255]
+    ///   - frames: Video tensor of shape `(F, H, W, C)` or `(B, F, H, W, C)`, float32 [0, 1]
     ///   - width: Video width in pixels
     ///   - height: Video height in pixels
     ///   - fps: Frames per second (default: 24.0)

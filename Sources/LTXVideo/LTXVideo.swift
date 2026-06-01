@@ -195,7 +195,7 @@ public struct VideoGenerationResult: @unchecked Sendable {
     /// Generated video frames as an MLX array.
     ///
     /// Shape: `(F, H, W, C)` where `F` = frame count, `H` = height,
-    /// `W` = width, `C` = 3 (RGB). Values are uint8 in `[0, 255]`.
+    /// `W` = width, `C` = 3 (RGB). Values are float32 in `[0, 1]`.
     public let frames: MLXArray
 
     /// Number of generated frames
