@@ -681,8 +681,11 @@ struct LipDub: AsyncParsableCommand {
     @Argument(help: "The text prompt describing what is being said / shown")
     var prompt: String
 
-    @Option(name: .long, help: "Reference video path (.mp4) — frames AND audio are extracted from this file")
+    @Option(name: .long, help: "Reference video path (.mp4) — frames AND (default) audio are extracted from this file")
     var referenceVideo: String
+
+    @Option(name: .long, help: "Optional target audio path (.wav/.m4a/.mp4) to lip-sync to. When set, the audio is auto-aligned (silence-aware time-stretch with pitch preservation) to the source video's speech window, and replaces the source audio as the LipDub reference. Use this for dubbing scenarios where the TTS duration differs from the source.")
+    var targetAudio: String?
 
     @Option(name: .shortAndLong, help: "Output file path (default: lipdub.mp4)")
     var output: String = "lipdub.mp4"
@@ -729,6 +732,7 @@ struct LipDub: AsyncParsableCommand {
         print("LTX-2.3 LipDub")
         print("==============")
         print("Reference video: \(referenceVideo)")
+        if let ta = targetAudio { print("Target audio: \(ta) (silence-aware auto-align enabled)") }
         print("Prompt: \(prompt)")
         print("Output: \(output)")
         print("Resolution: \(width)x\(height) (stage 1: \(width / 2)x\(height / 2))")
@@ -745,6 +749,11 @@ struct LipDub: AsyncParsableCommand {
         }
         guard FileManager.default.fileExists(atPath: referenceVideo) else {
             throw ValidationError("Reference video not found: \(referenceVideo)")
+        }
+        if let ta = targetAudio {
+            guard FileManager.default.fileExists(atPath: ta) else {
+                throw ValidationError("Target audio not found: \(ta)")
+            }
         }
 
         // LipDub always uses distilled (8-step Stage 1) + audio
@@ -816,6 +825,7 @@ struct LipDub: AsyncParsableCommand {
             lipdubLoraPath: loraPath,
             config: config,
             upscalerWeightsPath: upscalerPath,
+            targetAudioPath: targetAudio,
             onProgress: { progress in
                 print("  \(progress.status)")
                 fflush(stdout)

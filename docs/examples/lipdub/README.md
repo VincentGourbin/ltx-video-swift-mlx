@@ -58,12 +58,29 @@ ltx-video lipdub "A man at a podium, speaking in French saying: \"Bonjour à tou
 |---|---|---|
 | `<prompt>` | — | Text description + target dialogue (see prompt format above) |
 | `--reference-video` | — | Path to source `.mp4` (frames + audio both extracted) |
+| `--target-audio` | none | Optional separate target audio (`.wav`/`.m4a`/`.mp4`) for dubbing. When set, the framework auto-detects speech windows in both source and target, time-stretches the target speech (pitch preserved via `AVAudioUnitTimePitch`) to match the source's speech duration, and pads with silence so the timing aligns with the source video's mouth movements. Replaces the source audio as the LipDub reference. |
 | `-w` / `-h` | 768 / 512 | Output resolution (must be divisible by 64) |
 | `-f` | 121 | Frame count (must be `8n+1`; should match reference video) |
 | `--seed` | random | Seed for reproducibility |
 | `--reference-strength` | `1.0` | Video reference conditioning strength |
 | `--lora` | auto-download | Override LipDub IC-LoRA path |
 | `--hf-token` | auto (see below) | HuggingFace token for gated downloads |
+
+### Dubbing workflow (`--target-audio`)
+
+When you supply `--target-audio` (e.g. a TTS in a different language whose
+duration doesn't match the source video), the framework:
+
+1. Loads both source and target audios as mono at 16 kHz.
+2. Detects speech-active windows in each using a 10 ms-frame RMS threshold (−35 dBFS).
+3. Computes the stretch ratio `target_speech_duration / source_speech_duration`.
+4. Time-stretches the target speech with `AVAudioUnitTimePitch` (pitch preserved).
+5. Pads with leading/trailing silence to reproduce the source's silence layout.
+6. The aligned waveform replaces the source audio as the LipDub reference.
+
+This is the dubbing path: the model lip-syncs the source video to the (auto-fitted)
+target audio. Without this flag, naive mux + truncate breaks lip-sync whenever the
+TTS duration differs from the source video (a common case for cross-language dubbing).
 
 ### HuggingFace authentication
 

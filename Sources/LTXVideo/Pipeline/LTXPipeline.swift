@@ -1679,6 +1679,12 @@ public actor LTXPipeline {
     ///   - config: Width / height / seed / etc. `numFrames` is overridden by the snap
     ///     applied to the reference video's actual frame count (rounded down to `8k+1`).
     ///   - upscalerWeightsPath: Path to spatial upscaler safetensors (used between stages).
+    ///   - targetAudioPath: Optional path to a separate audio file (e.g. TTS in a
+    ///     different language) to lip-sync to. When set, the audio is loaded as mono,
+    ///     its speech-active window is detected, and it is time-stretched (pitch
+    ///     preserved) so the speech occupies the same window as the source video's
+    ///     speech. The aligned waveform replaces the source video's audio as the
+    ///     LipDub reference. When nil, the source video's audio is used as-is.
     ///   - onProgress: Optional progress callback.
     /// - Returns: `VideoGenerationResult` with the generated video frames and the decoded
     ///   audio waveform.
@@ -1693,6 +1699,7 @@ public actor LTXPipeline {
         lipdubLoraPath: String,
         config: LTXVideoGenerationConfig,
         upscalerWeightsPath: String,
+        targetAudioPath: String? = nil,
         onProgress: GenerationProgressCallback? = nil
     ) async throws -> VideoGenerationResult {
         try config.validate()
@@ -1714,6 +1721,11 @@ public actor LTXPipeline {
         }
         guard FileManager.default.fileExists(atPath: lipdubLoraPath) else {
             throw LTXError.fileNotFound("LipDub LoRA not found: \(lipdubLoraPath)")
+        }
+        if let targetAudioPath = targetAudioPath {
+            guard FileManager.default.fileExists(atPath: targetAudioPath) else {
+                throw LTXError.fileNotFound("Target audio not found: \(targetAudioPath)")
+            }
         }
 
         let generationStart = Date()
@@ -1810,11 +1822,39 @@ public actor LTXPipeline {
         unloadVAEEncoder()  // free encoder; we'll reload it for Stage 2
 
         // 5. Extract reference audio + encode via AudioVAE.
+        //
+        // When `targetAudioPath` is set, swap the audio reference for the
+        // (silence-aware, pitch-preserving) time-stretched target audio so the
+        // model lip-syncs to it. Otherwise, use the source video's audio.
         let audioProcessor = AudioProcessor()
-        let refWaveform = try await audioProcessor.loadAudio(from: referenceVideoPath)
+        let refWaveform: MLXArray
+        if let targetAudioPath = targetAudioPath {
+            print("[lipdub] aligning target audio \(targetAudioPath) to source video speech window")
+            let sourceMonoMLX = try await audioProcessor.loadAudio(from: referenceVideoPath)
+            let targetMonoMLX = try await audioProcessor.loadAudio(from: targetAudioPath)
+            let sourceMono = AudioPreprocessor.mlxToMonoFloats(sourceMonoMLX)
+            let targetMono = AudioPreprocessor.mlxToMonoFloats(targetMonoMLX)
+            let (aligned, rate, srcWin, tgtWin) = try AudioPreprocessor.alignTargetToSource(
+                source: sourceMono,
+                target: targetMono,
+                sampleRate: 16000
+            )
+            let srcStart = Float(srcWin.0) / 16000.0
+            let srcEnd = Float(srcWin.1) / 16000.0
+            let tgtStart = Float(tgtWin.0) / 16000.0
+            let tgtEnd = Float(tgtWin.1) / 16000.0
+            let srcSpeech = srcEnd - srcStart
+            let tgtSpeech = tgtEnd - tgtStart
+            print(String(format: "[lipdub] source speech window: %.3fs..%.3fs (%.3fs)", srcStart, srcEnd, srcSpeech))
+            print(String(format: "[lipdub] target speech window: %.3fs..%.3fs (%.3fs)", tgtStart, tgtEnd, tgtSpeech))
+            print(String(format: "[lipdub] time-stretch rate=%.3f (pitch preserved)", rate))
+            refWaveform = MLXArray(aligned)  // mono (samples,)
+        } else {
+            refWaveform = try await audioProcessor.loadAudio(from: referenceVideoPath)
+        }
         let refChannels = refWaveform.ndim == 1 ? 1 : refWaveform.dim(0)
         let refSamples = refWaveform.dim(refWaveform.ndim - 1)
-        print("[lipdub] reference audio loaded: \(refChannels) ch × \(refSamples) samples (\(String(format: "%.2f", Float(refSamples) / 16000.0))s)")
+        print("[lipdub] reference audio: \(refChannels) ch × \(refSamples) samples (\(String(format: "%.2f", Float(refSamples) / 16000.0))s)")
         let refMel = try audioProcessor.melSpectrogram(refWaveform)
         print("[lipdub] reference mel spectrogram: \(refMel.shape)")
         let refAudioLatent = try audioVAE.encode(refMel)  // (1, 8, T_audio_ref, 16)

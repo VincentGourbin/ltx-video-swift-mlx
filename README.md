@@ -161,6 +161,14 @@ The LipDub LoRA is gated on HF — accept the license and run `huggingface-cli l
 ltx-video lipdub "a person speaking the dialogue" \
     --reference-video source.mp4 \
     -w 768 -h 512 -f 121 --seed 42
+
+# Dubbing: supply a separate target audio (e.g. TTS in a new language).
+# Framework auto-detects speech windows and time-stretches the target (pitch
+# preserved) so its speech aligns with the source video's mouth movements.
+ltx-video lipdub "A person speaking in English saying: \"Hello everyone...\"" \
+    --reference-video source.mp4 \
+    --target-audio english_tts.wav \
+    -w 768 -h 512 -f 121
 ```
 
 See [docs/examples/lipdub/README.md](docs/examples/lipdub/README.md) for pipeline details and constraints.
