@@ -92,6 +92,35 @@ struct AudioPreprocessorTests {
 
     // MARK: - End-to-end alignment
 
+    @Test("timeStretch throws when rate exceeds supported range")
+    func testTimeStretchOutOfRange() throws {
+        let wave: [Float] = Array(repeating: 0.1, count: 1000)
+        #expect(throws: LTXError.self) {
+            _ = try AudioPreprocessor.timeStretch(waveform: wave, sampleRate: 16000, rate: 5.0)
+        }
+        #expect(throws: LTXError.self) {
+            _ = try AudioPreprocessor.timeStretch(waveform: wave, sampleRate: 16000, rate: 0.1)
+        }
+    }
+
+    @Test("alignTargetToSource throws when computed rate is extreme")
+    func testAlignTargetToSourceExtremeRate() throws {
+        let sr = 16000
+        // Source: 10 ms of speech (tiny window) in 1 second of total audio
+        var source = [Float](repeating: 0, count: sr)
+        for i in 0..<160 {  // 10 ms
+            source[i] = 0.3 * sin(2 * .pi * 440 * Float(i) / Float(sr))
+        }
+        // Target: 1 s of speech → rate would be ~100 (way over 4.0)
+        var target = [Float](repeating: 0, count: sr)
+        for i in 0..<sr {
+            target[i] = 0.3 * sin(2 * .pi * 660 * Float(i) / Float(sr))
+        }
+        #expect(throws: LTXError.self) {
+            _ = try AudioPreprocessor.alignTargetToSource(source: source, target: target, sampleRate: sr)
+        }
+    }
+
     @Test("alignTargetToSource preserves total length and silence layout")
     func testAlignTargetToSource() throws {
         let sr = 16000

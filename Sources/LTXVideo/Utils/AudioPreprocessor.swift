@@ -77,7 +77,9 @@ public enum AudioPreprocessor {
     ///   - waveform: Input mono float32 samples
     ///   - sampleRate: Sample rate (Hz)
     ///   - rate: Speed multiplier. `>1` shortens output (faster speech),
-    ///           `<1` lengthens it. Valid range: `[1/32, 32]`.
+    ///           `<1` lengthens it. Enforced range: `[0.25, 4.0]` (beyond this,
+    ///           `AVAudioUnitTimePitch` quality degrades badly and the speech
+    ///           becomes unintelligible — the function throws instead).
     /// - Returns: Time-stretched mono float32 samples.
     public static func timeStretch(
         waveform: [Float],
@@ -87,6 +89,12 @@ public enum AudioPreprocessor {
         // No-op for negligible ratios
         if abs(rate - 1.0) < 0.005 { return waveform }
         guard waveform.count > 0 else { return waveform }
+        guard rate >= 0.25 && rate <= 4.0 else {
+            throw LTXError.invalidConfiguration(
+                "Time-stretch rate \(rate) is outside the supported range [0.25, 4.0]. " +
+                "AVAudioUnitTimePitch produces unintelligible output beyond this range."
+            )
+        }
 
         guard let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -202,6 +210,17 @@ public enum AudioPreprocessor {
         }
 
         let rate = Float(tgtSpeechSamples) / Float(srcSpeechSamples)
+        guard rate >= 0.25 && rate <= 4.0 else {
+            let srcS = Float(srcSpeechSamples) / Float(sampleRate)
+            let tgtS = Float(tgtSpeechSamples) / Float(sampleRate)
+            throw LTXError.invalidConfiguration(String(format:
+                "Computed stretch rate %.2f (target speech %.2fs / source speech %.2fs) " +
+                "is outside the supported range [0.25, 4.0]. The target audio is too %@ " +
+                "relative to the source's speech window. Use a target audio whose speech " +
+                "duration is within 4x of the source's, or adjust the source video length.",
+                rate, tgtS, srcS, rate > 4.0 ? "long" : "short"
+            ))
+        }
         let targetSpeech = Array(target[tgtWin.start..<tgtWin.end])
         let stretched = try timeStretch(
             waveform: targetSpeech,
