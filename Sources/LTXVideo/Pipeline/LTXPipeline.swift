@@ -1812,27 +1812,20 @@ public actor LTXPipeline {
         // 2b. Optional VLM-based prompt enhancement (image mode only — VLM needs an image).
         // The VLM analyzes the reference image and enriches the scene description while the
         // I2V system prompt instructs it to preserve the user's quoted dialogue verbatim.
-        // Sanity check: if NO common speaking-verb variant is present in the enhanced
-        // output, we re-append the original signature so the LipDub LoRA stays engaged.
-        // The LoRA cares about the dialogue text + language hint, not a rigid phrase
-        // ("speaks in" / "speaking in" / "says in" are all acceptable in practice).
+        // If the VLM nonetheless drops all speaking-verb variants, the original signature
+        // is re-appended via `applyLipDubSignatureFallback` so the LipDub LoRA stays
+        // engaged. The LoRA cares about the dialogue + language hint, not a rigid phrase.
         let effectivePrompt: String
         if enhancePrompt, let imagePath = referenceImagePath {
             print("[lipdub] enhancing prompt via VLM (analyzing reference image)...")
             let enhanced = try await enhancePromptWithVLM(prompt, imagePath: imagePath)
-            let speakingVariants = ["speaking in", "speaks in", "says in", "saying in"]
-            let hasSpeakingHint = speakingVariants.contains { v in
-                enhanced.range(of: v, options: .caseInsensitive) != nil
+            let (final, reappended) = Self.applyLipDubSignatureFallback(
+                enhanced: enhanced, original: prompt
+            )
+            if let reappended = reappended {
+                print("[lipdub] VLM dropped speaking/dialogue hint — re-appended: \(reappended)")
             }
-            if !hasSpeakingHint,
-               let sigStart = prompt.lowercased().range(of: "speaking in")?.lowerBound {
-                let signature = String(prompt[sigStart...])
-                let joiner = enhanced.hasSuffix(".") || enhanced.hasSuffix(",") ? " " : ", "
-                effectivePrompt = enhanced + joiner + signature
-                print("[lipdub] VLM dropped speaking/dialogue hint — re-appended: \(signature)")
-            } else {
-                effectivePrompt = enhanced
-            }
+            effectivePrompt = final
             print("[lipdub] enhanced prompt: \(effectivePrompt)")
         } else {
             if enhancePrompt && referenceImagePath == nil {
@@ -2188,6 +2181,41 @@ public actor LTXPipeline {
             audioSampleRate: vocoder.outputSampleRate,
             effectivePrompt: effectivePrompt
         )
+    }
+
+    /// Repair a VLM-enhanced LipDub prompt when the speaking-verb hint is missing.
+    ///
+    /// The LipDub IC-LoRA was trained on prompts whose dialogue is introduced by some
+    /// form of "speaking in <LANG> saying: ...". The I2V system prompt the VLM runs
+    /// under is instructed to preserve the user's dialogue verbatim, but the speaking-
+    /// verb wrapper may be rephrased (e.g. `"speaks in Spanish"`) or, rarely, dropped.
+    /// We accept any common variant (`speaking in`, `speaks in`, `says in`, `saying in`)
+    /// as evidence the hint survived. If none are present and the original prompt did
+    /// contain `speaking in`, the original tail is re-appended to keep the LoRA engaged.
+    ///
+    /// - Parameters:
+    ///   - enhanced: VLM-enhanced prompt.
+    ///   - original: User's input prompt (the one passed to the VLM).
+    /// - Returns: A tuple `(final, reappended)` — `final` is the prompt to send onward;
+    ///   `reappended` is non-nil only when the fallback fired, set to the signature
+    ///   string that was glued onto the end (useful for logging / tests).
+    static func applyLipDubSignatureFallback(
+        enhanced: String, original: String
+    ) -> (final: String, reappended: String?) {
+        let speakingVariants = ["speaking in", "speaks in", "says in", "saying in"]
+        let hasSpeakingHint = speakingVariants.contains { v in
+            enhanced.range(of: v, options: .caseInsensitive) != nil
+        }
+        if hasSpeakingHint { return (enhanced, nil) }
+        guard let sigStart = original.lowercased().range(of: "speaking in")?.lowerBound else {
+            return (enhanced, nil)
+        }
+        let signature = String(original[sigStart...])
+        let trimmed = enhanced.trimmingCharacters(in: .whitespacesAndNewlines)
+        let needsJoiner = !trimmed.isEmpty
+            && !(trimmed.hasSuffix(".") || trimmed.hasSuffix(",") || trimmed.hasSuffix(";"))
+        let joiner = trimmed.isEmpty ? "" : (needsJoiner ? ", " : " ")
+        return (trimmed + joiner + signature, signature)
     }
 
     /// Encode a video into latent space using the VAE encoder
