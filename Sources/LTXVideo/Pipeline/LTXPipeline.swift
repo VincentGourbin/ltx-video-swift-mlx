@@ -1684,8 +1684,9 @@ public actor LTXPipeline {
     ///     `targetAudioPath` is REQUIRED (the image has no audio) and the speech-window
     ///     alignment step is skipped — the target audio is used directly.
     ///   - lipdubLoraPath: Path to the LipDub IC-LoRA safetensors file.
-    ///   - config: Width / height / seed / etc. `numFrames` is overridden by the snap
-    ///     applied to the reference video's actual frame count (rounded down to `8k+1`).
+    ///   - config: Width / height / seed / etc. `numFrames` **must** be `8n+1`
+    ///     already (no automatic snap is performed here — the CLI enforces the
+    ///     constraint up front, and library callers are expected to do the same).
     ///   - upscalerWeightsPath: Path to spatial upscaler safetensors (used between stages).
     ///   - targetAudioPath: Optional path to a separate audio file (e.g. TTS in a
     ///     different language) to lip-sync to. When set (and `referenceVideoPath` is
@@ -1728,6 +1729,15 @@ public actor LTXPipeline {
             throw LTXError.modelNotLoaded("LipDub requires the dual-stream LTX2Transformer (audio enabled). Call loadAudioModels().")
         }
         // Exactly one of referenceVideoPath / referenceImagePath must be set.
+        // After this block:
+        //   - `isImageMode == true`  iff `referenceImagePath != nil`
+        //   - `videoRefPath`         is the non-nil video path in video mode, or
+        //                            an empty sentinel in image mode (never read).
+        // The trailing helpers below assume these two invariants — use
+        // `videoRefPath` directly inside `!isImageMode` branches instead of
+        // re-unwrapping `referenceVideoPath`.
+        let isImageMode: Bool
+        let videoRefPath: String
         switch (referenceVideoPath, referenceImagePath) {
         case (nil, nil):
             throw LTXError.invalidConfiguration("LipDub requires either referenceVideoPath or referenceImagePath.")
@@ -1737,6 +1747,8 @@ public actor LTXPipeline {
             guard FileManager.default.fileExists(atPath: vp) else {
                 throw LTXError.fileNotFound("Reference video not found: \(vp)")
             }
+            videoRefPath = vp
+            isImageMode = false
         case (nil, .some(let ip)):
             guard FileManager.default.fileExists(atPath: ip) else {
                 throw LTXError.fileNotFound("Reference image not found: \(ip)")
@@ -1744,6 +1756,8 @@ public actor LTXPipeline {
             guard targetAudioPath != nil else {
                 throw LTXError.invalidConfiguration("LipDub image mode requires targetAudioPath (the image has no audio track).")
             }
+            videoRefPath = ""  // sentinel — image mode never reads videoRefPath
+            isImageMode = true
         }
         guard FileManager.default.fileExists(atPath: lipdubLoraPath) else {
             throw LTXError.fileNotFound("LipDub LoRA not found: \(lipdubLoraPath)")
@@ -1753,11 +1767,34 @@ public actor LTXPipeline {
                 throw LTXError.fileNotFound("Target audio not found: \(targetAudioPath)")
             }
         }
-        let isImageMode = referenceImagePath != nil
 
         let generationStart = Date()
         let halfWidth = config.width / 2
         let halfHeight = config.height / 2
+
+        // 0. Optional VLM-based prompt enhancement (image mode only — VLM needs an image).
+        // Done BEFORE LoRA fusion so the ~7.5 GB VLM container doesn't stack on top of
+        // the LoRA-fused dual-stream transformer in resident memory. The VLM is unloaded
+        // inside `enhancePromptWithVLM` via Memory.clearCache before this returns.
+        // The I2V system prompt instructs the VLM to preserve the user's quoted dialogue
+        // verbatim; if the speaking-verb wrapper is nonetheless dropped from the output,
+        // `applyLipDubSignatureFallback` re-appends the original tail so the LipDub LoRA
+        // still sees its trained trigger.
+        let effectivePrompt: String
+        if enhancePrompt, let imagePath = referenceImagePath {
+            print("[lipdub] enhancing prompt via VLM (analyzing reference image)...")
+            let enhanced = try await enhancePromptWithVLM(prompt, imagePath: imagePath)
+            let (final, reappended) = Self.applyLipDubSignatureFallback(
+                enhanced: enhanced, original: prompt
+            )
+            if let reappended = reappended {
+                print("[lipdub] VLM dropped speaking/dialogue hint — re-appended: \(reappended)")
+            }
+            effectivePrompt = final
+            print("[lipdub] enhanced prompt: \(effectivePrompt)")
+        } else {
+            effectivePrompt = prompt
+        }
 
         // 1. Read LoRA metadata and fuse into the dual-stream transformer.
         let downscaleFactor = LoRALoader.referenceDownscaleFactor(from: lipdubLoraPath)
@@ -1809,31 +1846,6 @@ public actor LTXPipeline {
         let audioNumFrames = computeAudioLatentFrames(videoFrames: numFrames)
         LTXDebug.log("[lipdub] target frames=\(numFrames), Stage1 latent=\(stage1Shape.frames)x\(stage1Shape.height)x\(stage1Shape.width), audio frames=\(audioNumFrames)")
 
-        // 2b. Optional VLM-based prompt enhancement (image mode only — VLM needs an image).
-        // The VLM analyzes the reference image and enriches the scene description while the
-        // I2V system prompt instructs it to preserve the user's quoted dialogue verbatim.
-        // If the VLM nonetheless drops all speaking-verb variants, the original signature
-        // is re-appended via `applyLipDubSignatureFallback` so the LipDub LoRA stays
-        // engaged. The LoRA cares about the dialogue + language hint, not a rigid phrase.
-        let effectivePrompt: String
-        if enhancePrompt, let imagePath = referenceImagePath {
-            print("[lipdub] enhancing prompt via VLM (analyzing reference image)...")
-            let enhanced = try await enhancePromptWithVLM(prompt, imagePath: imagePath)
-            let (final, reappended) = Self.applyLipDubSignatureFallback(
-                enhanced: enhanced, original: prompt
-            )
-            if let reappended = reappended {
-                print("[lipdub] VLM dropped speaking/dialogue hint — re-appended: \(reappended)")
-            }
-            effectivePrompt = final
-            print("[lipdub] enhanced prompt: \(effectivePrompt)")
-        } else {
-            if enhancePrompt && referenceImagePath == nil {
-                print("[lipdub] --enhance-prompt requires --reference-image; skipping enhancement")
-            }
-            effectivePrompt = prompt
-        }
-
         // 3. Text encode the prompt.
         let (inputIds, attentionMask) = try tokenizePrompt(effectivePrompt, maxLength: textMaxLength)
         MLX.eval(inputIds, attentionMask)
@@ -1877,8 +1889,11 @@ public actor LTXPipeline {
         } else {
             LTXDebug.log("[lipdub] encoding reference video at Stage 1 res \(refS1Width)x\(refS1Height)")
             refLatentS1 = try await encodeVideo(
-                path: referenceVideoPath!, width: refS1Width, height: refS1Height, numFrames: numFrames
+                path: videoRefPath, width: refS1Width, height: refS1Height, numFrames: numFrames
             )
+        }
+        if isImageMode && ProcessInfo.processInfo.environment["LTX_LIPDUB_DUMP_VIDEO_REF"] == "1" {
+            print("[lipdub][DIAG] LTX_LIPDUB_DUMP_VIDEO_REF=1 ignored in image mode — the I2V keyframe path produces no multi-frame reference latent to dump")
         }
         if !isImageMode, let f = refLatentS1, ProcessInfo.processInfo.environment["LTX_LIPDUB_DUMP_VIDEO_REF"] == "1" {
             let f32 = f.asType(.float32)
@@ -1909,7 +1924,7 @@ public actor LTXPipeline {
             refWaveform = try await audioProcessor.loadAudio(from: audioPath)
         } else if let targetAudioPath = targetAudioPath {
             print("[lipdub] aligning target audio \(targetAudioPath) to source video speech window")
-            let sourceMonoMLX = try await audioProcessor.loadAudio(from: referenceVideoPath!)
+            let sourceMonoMLX = try await audioProcessor.loadAudio(from: videoRefPath)
             let targetMonoMLX = try await audioProcessor.loadAudio(from: targetAudioPath)
             let sourceMono = AudioPreprocessor.mlxToMonoFloats(sourceMonoMLX)
             let targetMono = AudioPreprocessor.mlxToMonoFloats(targetMonoMLX)
@@ -1929,7 +1944,7 @@ public actor LTXPipeline {
             print(String(format: "[lipdub] time-stretch rate=%.3f (pitch preserved)", rate))
             refWaveform = MLXArray(aligned)  // mono (samples,)
         } else {
-            refWaveform = try await audioProcessor.loadAudio(from: referenceVideoPath!)
+            refWaveform = try await audioProcessor.loadAudio(from: videoRefPath)
         }
         let refChannels = refWaveform.ndim == 1 ? 1 : refWaveform.dim(0)
         let refSamples = refWaveform.dim(refWaveform.ndim - 1)
@@ -2070,7 +2085,7 @@ public actor LTXPipeline {
         } else {
             LTXDebug.log("[lipdub] re-encoding reference video at Stage 2 res \(refS2Width)x\(refS2Height)")
             refLatentS2 = try await encodeVideo(
-                path: referenceVideoPath!, width: refS2Width, height: refS2Height, numFrames: numFrames
+                path: videoRefPath, width: refS2Width, height: refS2Height, numFrames: numFrames
             )
         }
         unloadVAEEncoder()
@@ -2185,13 +2200,25 @@ public actor LTXPipeline {
 
     /// Repair a VLM-enhanced LipDub prompt when the speaking-verb hint is missing.
     ///
-    /// The LipDub IC-LoRA was trained on prompts whose dialogue is introduced by some
-    /// form of "speaking in <LANG> saying: ...". The I2V system prompt the VLM runs
-    /// under is instructed to preserve the user's dialogue verbatim, but the speaking-
-    /// verb wrapper may be rephrased (e.g. `"speaks in Spanish"`) or, rarely, dropped.
-    /// We accept any common variant (`speaking in`, `speaks in`, `says in`, `saying in`)
-    /// as evidence the hint survived. If none are present and the original prompt did
-    /// contain `speaking in`, the original tail is re-appended to keep the LoRA engaged.
+    /// The LipDub IC-LoRA was trained on **English-wrapped** prompts of the form
+    /// `<scene>, speaking in <LANGUAGE> saying: "<DIALOGUE>"` — the wrapper is
+    /// always English even when the dialogue is in another language. The I2V
+    /// system prompt the VLM runs under is instructed to preserve the user's
+    /// quoted dialogue verbatim, but the wrapper itself may be rephrased
+    /// (`"speaks in Spanish"`) or, rarely, dropped.
+    ///
+    /// We treat the enhanced output as still valid when it contains any common
+    /// English speaking-verb variant (`speaking|speaks|saying|says` followed by
+    /// `in` as a whole word — substrings inside `speaking individually` /
+    /// `says intermittently` are NOT matches). If none survive AND the original
+    /// prompt did contain a `speaking in` wrapper, that wrapper's tail is glued
+    /// to the enhanced text so the LoRA stays engaged. Joiner picks `" "` after
+    /// any terminal punctuation (`.,;?!"')]…—`) and `", "` otherwise.
+    ///
+    /// > **Cross-language caveat.** Authors using non-English wrappers
+    /// > (`parlant en …`, `hablando en …`, `sprechend in …`) get no fallback —
+    /// > but those wrappers also don't match the LoRA's trained distribution,
+    /// > so the right fix is the prompt, not this helper.
     ///
     /// - Parameters:
     ///   - enhanced: VLM-enhanced prompt.
@@ -2202,20 +2229,78 @@ public actor LTXPipeline {
     static func applyLipDubSignatureFallback(
         enhanced: String, original: String
     ) -> (final: String, reappended: String?) {
-        let speakingVariants = ["speaking in", "speaks in", "says in", "saying in"]
-        let hasSpeakingHint = speakingVariants.contains { v in
-            enhanced.range(of: v, options: .caseInsensitive) != nil
-        }
-        if hasSpeakingHint { return (enhanced, nil) }
-        guard let sigStart = original.lowercased().range(of: "speaking in")?.lowerBound else {
+        if Self.containsSpeakingVerbWrapper(enhanced) {
             return (enhanced, nil)
         }
-        let signature = String(original[sigStart...])
+        // Search the original directly with case-insensitive match — avoids the
+        // Swift String-index portability hazard of indexing `original` with an
+        // index obtained from `original.lowercased()` (lowercasing can change
+        // unit length: Turkish `İ` → `i\u{0307}`, German `ẞ` → `ss`, etc.).
+        guard let sigRange = Self.firstSpeakingInRange(in: original) else {
+            return (enhanced, nil)
+        }
+        let signature = String(original[sigRange.lowerBound...])
         let trimmed = enhanced.trimmingCharacters(in: .whitespacesAndNewlines)
-        let needsJoiner = !trimmed.isEmpty
-            && !(trimmed.hasSuffix(".") || trimmed.hasSuffix(",") || trimmed.hasSuffix(";"))
-        let joiner = trimmed.isEmpty ? "" : (needsJoiner ? ", " : " ")
+        if trimmed.isEmpty {
+            return (signature, signature)
+        }
+        let terminalChars: Set<Character> =
+            [".", ",", ";", ":", "?", "!", "\"", "'", ")", "]", "}", "…", "—", "–"]
+        let endsTerminally = trimmed.last.map { terminalChars.contains($0) } ?? false
+        let joiner = endsTerminally ? " " : ", "
         return (trimmed + joiner + signature, signature)
+    }
+
+    /// Whether `text` contains any common English speaking-verb wrapper —
+    /// `(speaking|speaks|saying|says)` followed by `in` as a WHOLE WORD.
+    /// `"speaking individually"` / `"says intermittently"` do NOT match.
+    private static func containsSpeakingVerbWrapper(_ text: String) -> Bool {
+        let verbs = ["speaking", "speaks", "saying", "says"]
+        for verb in verbs {
+            var searchStart = text.startIndex
+            while let r = text.range(
+                of: verb, options: .caseInsensitive, range: searchStart..<text.endIndex
+            ) {
+                // After the verb we want: 1+ whitespace, then literal "in",
+                // then a word-boundary char (whitespace, punctuation, EOS).
+                var i = r.upperBound
+                // Skip whitespace.
+                while i < text.endIndex, text[i].isWhitespace { i = text.index(after: i) }
+                let afterWs = i
+                let inEnd = text.index(afterWs, offsetBy: 2, limitedBy: text.endIndex)
+                if let inEnd = inEnd, afterWs < text.endIndex {
+                    let twoChars = text[afterWs..<inEnd]
+                    if twoChars.lowercased() == "in" {
+                        // Boundary: end-of-string OR next char is non-letter.
+                        if inEnd == text.endIndex || !text[inEnd].isLetter {
+                            return true
+                        }
+                    }
+                }
+                searchStart = r.upperBound
+            }
+        }
+        return false
+    }
+
+    /// Find the first `speaking in` (as whole-word wrapper) in `original`.
+    private static func firstSpeakingInRange(in original: String) -> Range<String.Index>? {
+        var searchStart = original.startIndex
+        while let r = original.range(
+            of: "speaking", options: .caseInsensitive, range: searchStart..<original.endIndex
+        ) {
+            var i = r.upperBound
+            while i < original.endIndex, original[i].isWhitespace { i = original.index(after: i) }
+            let afterWs = i
+            if let inEnd = original.index(afterWs, offsetBy: 2, limitedBy: original.endIndex),
+               afterWs < original.endIndex,
+               original[afterWs..<inEnd].lowercased() == "in",
+               inEnd == original.endIndex || !original[inEnd].isLetter {
+                return r.lowerBound..<inEnd
+            }
+            searchStart = r.upperBound
+        }
+        return nil
     }
 
     /// Encode a video into latent space using the VAE encoder

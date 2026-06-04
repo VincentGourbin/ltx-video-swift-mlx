@@ -743,14 +743,20 @@ struct LipDub: AsyncParsableCommand {
         case (.some, .some):
             throw ValidationError("--reference-video and --reference-image are mutually exclusive.")
         case (.some(let vp), nil):
+            if enhancePrompt {
+                throw ValidationError("--enhance-prompt requires --reference-image (the VLM analyzes the still image); it is not supported in video-reference mode.")
+            }
             print("Reference video: \(vp)")
             if let ta = targetAudio { print("Target audio: \(ta) (silence-aware auto-align enabled)") }
         case (nil, .some(let ip)):
-            print("Reference image: \(ip) (static, replicated to \(frames) frames)")
+            print("Reference image: \(ip) (single I2V keyframe at frame 0, rest animated from the prompt)")
             guard let ta = targetAudio else {
                 throw ValidationError("--reference-image requires --target-audio (the still image has no audio track).")
             }
             print("Target audio: \(ta) (used directly, no alignment)")
+            if enhancePrompt {
+                print("Prompt enhancement: on (multimodal Gemma VLM analyzes the reference image)")
+            }
         }
         print("Prompt: \(prompt)")
         print("Output: \(output)")
