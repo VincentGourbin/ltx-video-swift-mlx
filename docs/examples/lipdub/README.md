@@ -145,35 +145,45 @@ in `generateLipDub` re-appends the original `speaking in <LANG> saying:
 "..."` signature if the VLM output contains none of the common variants
 (`speaking in` / `speaks in` / `says in` / `saying in`).
 
-#### Example output
+#### Example output — making the Mona Lisa speak Spanish
 
-[![Image + VLM thumbnail](lipdub-image-vlm-spanish-768x512-121f-thumb.png)](https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/lipdub/lipdub-image-vlm-spanish-768x512-121f.mp4)
+[![Mona Lisa + VLM thumbnail](lipdub-image-vlm-monalisa-512x768-121f-thumb.png)](https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/lipdub/lipdub-image-vlm-monalisa-512x768-121f.mp4)
 
 *Click to download · Reference image
-([`lipdub-image-vlm-spanish-source.jpg`](lipdub-image-vlm-spanish-source.jpg))
-+ a 4.88 s Spanish TTS clip + the minimal prompt `'Speaking in Spanish
-saying: "Hola a todos..."'`. Resolution 768×512, 121 frames, distilled
-two-stage, seed 0, M3 Max — ~4.5 min wall time. The VLM-enhanced prompt
-that drove generation was:*
+([`lipdub-image-vlm-monalisa-source.png`](lipdub-image-vlm-monalisa-source.png),
+Leonardo's Mona Lisa, 940×1180) + a 4.88 s Spanish TTS clip + the minimal
+prompt `'Speaking in Spanish saying: "Hola a todos..."'`. Portrait
+resolution 512×768 (matching the painting's aspect), 121 frames,
+distilled two-stage, seed 0, M3 Max — ~5.3 min wall time. The
+VLM-enhanced prompt that drove generation was:*
 
-> *Style: documentary - The man holds a microphone and speaks in Spanish,
-> his voice clear and enthusiastic, "Hola a todos, hoy les presentaré
-> estos nuevos audífonos absolutamente increíbles." He gestures with his
-> open hand, demonstrating the headphones. The sound of his voice,
-> slightly amplified by the microphone, mixes with the gentle rustling of
-> leaves and distant birdsong, creating a natural outdoor ambience.*
+> *Style: oil painting - The woman turns her head slightly to the right,
+> her expression enigmatic as she speaks in a clear, measured voice,
+> "Hola a todos, hoy les presentaré estos nuevos audífonos absolutamente
+> increíbles." A faint rustling of her dark gown is audible, blending with
+> the distant sound of flowing water and birdsong.*
+
+This is deliberately deep out-of-distribution: an oil-painted portrait,
+no microphone, no modern lighting, no real motion vocabulary in the
+input. Gemma still recognized the medium (`Style: oil painting`), kept
+the iconic posture (`expression enigmatic`), and inferred a plausible
+soundscape from the landscape background (`flowing water and birdsong`).
+The LipDub LoRA does the lip-sync on the painted face; the I2V keyframe
+keeps the composition recognizably the Mona Lisa.
 
 #### Caveats
 
-- **Out-of-distribution conditioning.** The IC-LoRA was trained on
-  multi-frame video references; using a single keyframe instead is a
-  structural change. In practice identity transfers well for frontal,
-  well-lit portraits — it may degrade for non-frontal faces or unusual
-  lighting.
+- **Deep out-of-distribution conditioning.** The IC-LoRA was trained on
+  multi-frame video references of real-life speakers; using a single
+  keyframe is already a structural change, and feeding it a painting or
+  stylized portrait stretches it further. Lip-sync still works in
+  practice (see the Mona Lisa example), but identity / texture fidelity
+  degrades faster than on real photos.
 - **`--target-audio` is required.** A still photo has no audio track to
   fall back on.
-- **`--enhance-prompt` is image-mode only.** It no-ops silently in
-  `--reference-video` mode (the VLM needs an image to analyze).
+- **`--enhance-prompt` is image-mode only.** It now throws a CLI
+  validation error if combined with `--reference-video` (the VLM needs
+  an image to analyze).
 
 ### HuggingFace authentication
 
@@ -231,6 +241,7 @@ Measured on M3 Max 96 GB:
 | `--reference-video` | 121 | 1920×1088 source → 768×512 | ~30–90 min | Source video resolution affects encode time |
 | `--reference-image` | 121 | 768×512 | ~6.5 min | Single keyframe append (one VAE encode per stage), no source audio decode |
 | `--reference-image --enhance-prompt` | 121 | 768×512 | ~4.5 min | + ~30 s VLM load/inference; warm cache run from same session |
+| `--reference-image --enhance-prompt` | 121 | 512×768 | ~5.3 min | Portrait aspect (Mona Lisa example); same per-token cost, slightly more H tiles |
 
 The video-mode reference is re-encoded **twice** (once per stage at the matching
 downscaled resolution), so VAE encoder time is roughly 2× compared to other
