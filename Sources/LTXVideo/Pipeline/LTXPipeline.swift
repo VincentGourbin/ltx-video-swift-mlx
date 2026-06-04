@@ -1710,6 +1710,7 @@ public actor LTXPipeline {
         config: LTXVideoGenerationConfig,
         upscalerWeightsPath: String,
         targetAudioPath: String? = nil,
+        enhancePrompt: Bool = false,
         onProgress: GenerationProgressCallback? = nil
     ) async throws -> VideoGenerationResult {
         try config.validate()
@@ -1808,8 +1809,40 @@ public actor LTXPipeline {
         let audioNumFrames = computeAudioLatentFrames(videoFrames: numFrames)
         LTXDebug.log("[lipdub] target frames=\(numFrames), Stage1 latent=\(stage1Shape.frames)x\(stage1Shape.height)x\(stage1Shape.width), audio frames=\(audioNumFrames)")
 
+        // 2b. Optional VLM-based prompt enhancement (image mode only — VLM needs an image).
+        // The VLM analyzes the reference image and enriches the scene description while the
+        // I2V system prompt instructs it to preserve the user's quoted dialogue verbatim.
+        // Sanity check: if NO common speaking-verb variant is present in the enhanced
+        // output, we re-append the original signature so the LipDub LoRA stays engaged.
+        // The LoRA cares about the dialogue text + language hint, not a rigid phrase
+        // ("speaks in" / "speaking in" / "says in" are all acceptable in practice).
+        let effectivePrompt: String
+        if enhancePrompt, let imagePath = referenceImagePath {
+            print("[lipdub] enhancing prompt via VLM (analyzing reference image)...")
+            let enhanced = try await enhancePromptWithVLM(prompt, imagePath: imagePath)
+            let speakingVariants = ["speaking in", "speaks in", "says in", "saying in"]
+            let hasSpeakingHint = speakingVariants.contains { v in
+                enhanced.range(of: v, options: .caseInsensitive) != nil
+            }
+            if !hasSpeakingHint,
+               let sigStart = prompt.lowercased().range(of: "speaking in")?.lowerBound {
+                let signature = String(prompt[sigStart...])
+                let joiner = enhanced.hasSuffix(".") || enhanced.hasSuffix(",") ? " " : ", "
+                effectivePrompt = enhanced + joiner + signature
+                print("[lipdub] VLM dropped speaking/dialogue hint — re-appended: \(signature)")
+            } else {
+                effectivePrompt = enhanced
+            }
+            print("[lipdub] enhanced prompt: \(effectivePrompt)")
+        } else {
+            if enhancePrompt && referenceImagePath == nil {
+                print("[lipdub] --enhance-prompt requires --reference-image; skipping enhancement")
+            }
+            effectivePrompt = prompt
+        }
+
         // 3. Text encode the prompt.
-        let (inputIds, attentionMask) = try tokenizePrompt(prompt, maxLength: textMaxLength)
+        let (inputIds, attentionMask) = try tokenizePrompt(effectivePrompt, maxLength: textMaxLength)
         MLX.eval(inputIds, attentionMask)
         guard let gemma = gemmaModel else {
             throw LTXError.modelNotLoaded("Gemma model not loaded")
@@ -1862,7 +1895,7 @@ public actor LTXPipeline {
             let m = f32.mean().item(Float.self)
             let v = MLX.mean(MLX.square(f32 - m)).item(Float.self)
             print("[lipdub][DIAG]   stats: mean=\(m), std=\(sqrt(v)), min=\(f32.min().item(Float.self)), max=\(f32.max().item(Float.self))")
-            return VideoGenerationResult(frames: MLXArray.zeros([1,3,1,64,64]), seed: 0, generationTime: 0, audioWaveform: nil, audioSampleRate: nil, effectivePrompt: prompt)
+            return VideoGenerationResult(frames: MLXArray.zeros([1,3,1,64,64]), seed: 0, generationTime: 0, audioWaveform: nil, audioSampleRate: nil, effectivePrompt: effectivePrompt)
         }
         unloadVAEEncoder()  // free encoder; we'll reload it for Stage 2
 
@@ -1918,7 +1951,7 @@ public actor LTXPipeline {
             try? MLX.save(arrays: ["data": melF32], url: URL(fileURLWithPath: "/tmp/swift_audio_mel.safetensors"))
             try? MLX.save(arrays: ["data": latF32], url: URL(fileURLWithPath: "/tmp/swift_audio_latent.safetensors"))
             print("[lipdub][DIAG] dumped mel \(melF32.shape) and latent \(latF32.shape) to /tmp/swift_audio_*.safetensors — exiting")
-            return VideoGenerationResult(frames: MLXArray.zeros([1,3,1,64,64]), seed: 0, generationTime: 0, audioWaveform: nil, audioSampleRate: nil, effectivePrompt: prompt)
+            return VideoGenerationResult(frames: MLXArray.zeros([1,3,1,64,64]), seed: 0, generationTime: 0, audioWaveform: nil, audioSampleRate: nil, effectivePrompt: effectivePrompt)
         }
         MLX.eval(refAudioLatent)
 
@@ -2153,7 +2186,7 @@ public actor LTXPipeline {
             generationTime: generationTime,
             audioWaveform: audioWaveform,
             audioSampleRate: vocoder.outputSampleRate,
-            effectivePrompt: prompt
+            effectivePrompt: effectivePrompt
         )
     }
 

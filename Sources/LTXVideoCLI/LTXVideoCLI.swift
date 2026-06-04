@@ -714,6 +714,9 @@ struct LipDub: AsyncParsableCommand {
     @Flag(name: .long, help: "Enable debug output")
     var debug: Bool = false
 
+    @Flag(name: .long, help: "Enhance the prompt via the VLM (Gemma) by analyzing --reference-image. Generates a richer scene description while preserving the `speaking in <LANG> saying: \"...\"` LipDub signature. Image mode only.")
+    var enhancePrompt: Bool = false
+
     @Option(name: .long, help: "HuggingFace token for gated models (LipDub LoRA + LTX-2.3 are gated)")
     var hfToken: String?
 
@@ -850,6 +853,7 @@ struct LipDub: AsyncParsableCommand {
             config: config,
             upscalerWeightsPath: upscalerPath,
             targetAudioPath: targetAudio,
+            enhancePrompt: enhancePrompt,
             onProgress: { progress in
                 print("  \(progress.status)")
                 fflush(stdout)
