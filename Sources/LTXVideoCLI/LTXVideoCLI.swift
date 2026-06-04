@@ -684,7 +684,7 @@ struct LipDub: AsyncParsableCommand {
     @Option(name: .long, help: "Reference video path (.mp4) — frames AND (default) audio are extracted from this file. Mutually exclusive with --reference-image.")
     var referenceVideo: String?
 
-    @Option(name: .long, help: "Reference image path (.png/.jpg) used as a frozen-in-time visual reference (image replicated to --frames). Requires --target-audio (the still image has no audio track). Note: out-of-distribution for the LipDub LoRA (trained on real videos) — expect minimal head motion.")
+    @Option(name: .long, help: "Reference image path (.png/.jpg) used as a frame-0 I2V keyframe (same path as `generate --image`). The image anchors identity at frame 0 while the rest of the timeline animates from the prompt; the LipDub LoRA + --target-audio drive lip-sync. Requires --target-audio (the still image has no audio track).")
     var referenceImage: String?
 
     @Option(name: .long, help: "Target audio path (.wav/.m4a/.mp4) to lip-sync to. With --reference-video, the audio is auto-aligned (silence-aware time-stretch, pitch preserved) to the source's speech window and replaces the source audio. REQUIRED with --reference-image (used directly without alignment).")

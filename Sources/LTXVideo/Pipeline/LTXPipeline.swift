@@ -1676,12 +1676,13 @@ public actor LTXPipeline {
     ///   - referenceVideoPath: Path to the source video file (.mp4) — both video frames and
     ///     (by default) audio track are extracted from this file. Provide either this OR
     ///     `referenceImagePath`, not both.
-    ///   - referenceImagePath: Path to a still image (.png/.jpg) used as a frozen-in-time
-    ///     video reference. The image is replicated to `config.numFrames` frames before VAE
-    ///     encoding. When set, `targetAudioPath` is REQUIRED (the image has no audio) and
-    ///     the speech-window alignment step is skipped — the target audio is used directly.
-    ///     This mode is out-of-distribution for the IC-LoRA (trained on real videos with
-    ///     natural motion); expect minimal head movement and no blinks.
+    ///   - referenceImagePath: Path to a still image (.png/.jpg) used as the identity
+    ///     anchor. Internally encoded as a single-frame I2V keyframe at pixel index 0
+    ///     (same code path as `generate --image`), NOT as a multi-frame IC-LoRA video
+    ///     reference. This frees the rest of the timeline to respond to the prompt while
+    ///     the LipDub LoRA + audio reference still drive lip-sync. When set,
+    ///     `targetAudioPath` is REQUIRED (the image has no audio) and the speech-window
+    ///     alignment step is skipped — the target audio is used directly.
     ///   - lipdubLoraPath: Path to the LipDub IC-LoRA safetensors file.
     ///   - config: Width / height / seed / etc. `numFrames` is overridden by the snap
     ///     applied to the reference video's actual frame count (rounded down to `8k+1`).
@@ -1760,10 +1761,14 @@ public actor LTXPipeline {
         // 1. Read LoRA metadata and fuse into the dual-stream transformer.
         let downscaleFactor = LoRALoader.referenceDownscaleFactor(from: lipdubLoraPath)
         LTXDebug.log("[lipdub] reference_downscale_factor=\(downscaleFactor) from LoRA metadata")
-        guard halfWidth % downscaleFactor == 0 && halfHeight % downscaleFactor == 0 else {
-            throw LTXError.invalidConfiguration(
-                "Half-resolution \(halfWidth)x\(halfHeight) must be divisible by downscale_factor=\(downscaleFactor)"
-            )
+        // Downscale factor only matters for the video-reference path; in image mode
+        // we use the I2V keyframe-append pattern at the full target resolution.
+        if !isImageMode {
+            guard halfWidth % downscaleFactor == 0 && halfHeight % downscaleFactor == 0 else {
+                throw LTXError.invalidConfiguration(
+                    "Half-resolution \(halfWidth)x\(halfHeight) must be divisible by downscale_factor=\(downscaleFactor)"
+                )
+            }
         }
         // [DIAGNOSTIC] LTX_LIPDUB_SKIP_LORA=1 bypasses LoRA fusion to isolate IC-LoRA contribution.
         let skipLoRA = ProcessInfo.processInfo.environment["LTX_LIPDUB_SKIP_LORA"] == "1"
@@ -1827,15 +1832,21 @@ public actor LTXPipeline {
         self.tokenizer = nil
         Memory.clearCache()
 
-        // 4. Encode reference at Stage 1 downscaled resolution.
-        // Video mode: sample frames from MP4. Image mode: replicate still image.
+        // 4. Stage 1 reference: VIDEO MODE uses the IC-LoRA multi-frame reference
+        // at downscaled resolution; IMAGE MODE uses the I2V keyframe-append pattern
+        // (single VAE-encoded frame at index 0, full target resolution). The
+        // keyframe pattern doesn't pin every output frame to the reference, so the
+        // model is free to animate motion from the prompt while the LipDub LoRA +
+        // audio reference still drive lip-sync.
         let refS1Width = halfWidth / downscaleFactor
         let refS1Height = halfHeight / downscaleFactor
-        let refLatentS1: MLXArray
+        var refLatentS1: MLXArray? = nil
+        var s1ImageKeyframes: [EncodedKeyframe] = []
         if let imagePath = referenceImagePath {
-            LTXDebug.log("[lipdub] encoding static image reference at Stage 1 res \(refS1Width)x\(refS1Height) x \(numFrames) frames")
-            refLatentS1 = try await encodeImageAsStaticReference(
-                path: imagePath, width: refS1Width, height: refS1Height, numFrames: numFrames
+            LTXDebug.log("[lipdub] image mode — encoding I2V keyframe at Stage 1 res \(halfWidth)x\(halfHeight)")
+            s1ImageKeyframes = try await encodeKeyframes(
+                [KeyframeInput(path: imagePath, pixelFrameIndex: 0)],
+                width: halfWidth, height: halfHeight
             )
         } else {
             LTXDebug.log("[lipdub] encoding reference video at Stage 1 res \(refS1Width)x\(refS1Height)")
@@ -1843,8 +1854,8 @@ public actor LTXPipeline {
                 path: referenceVideoPath!, width: refS1Width, height: refS1Height, numFrames: numFrames
             )
         }
-        if ProcessInfo.processInfo.environment["LTX_LIPDUB_DUMP_VIDEO_REF"] == "1" {
-            let f32 = refLatentS1.asType(.float32)
+        if !isImageMode, let f = refLatentS1, ProcessInfo.processInfo.environment["LTX_LIPDUB_DUMP_VIDEO_REF"] == "1" {
+            let f32 = f.asType(.float32)
             MLX.eval(f32)
             try? MLX.save(arrays: ["data": f32], url: URL(fileURLWithPath: "/tmp/swift_video_ref_latent_s1.safetensors"))
             print("[lipdub][DIAG] dumped video ref latent S1 \(f32.shape) to /tmp/swift_video_ref_latent_s1.safetensors")
@@ -1912,13 +1923,24 @@ public actor LTXPipeline {
         MLX.eval(refAudioLatent)
 
         // 6. Build Stage 1 reference contexts.
-        let s1VideoRefCtx = buildVideoReference(
-            referenceLatent: refLatentS1,
-            targetShape: stage1Shape,
-            downscaleFactor: downscaleFactor,
-            hasAudio: true,
-            refConfig: ltx2.config
-        )
+        let s1VideoRefCtx: AppendKeyframeContext?
+        if isImageMode {
+            s1VideoRefCtx = prepareKeyframeAppend(
+                encoded: s1ImageKeyframes,
+                shape: stage1Shape,
+                hasAudio: true,
+                refConfig: ltx2.config,
+                stageLabel: "LipDub Stage 1 (image keyframe)"
+            )
+        } else {
+            s1VideoRefCtx = buildVideoReference(
+                referenceLatent: refLatentS1!,
+                targetShape: stage1Shape,
+                downscaleFactor: downscaleFactor,
+                hasAudio: true,
+                refConfig: ltx2.config
+            )
+        }
         // [DIAGNOSTIC] LTX_LIPDUB_SKIP_AUDIO_REF=1 disables the audio reference (audio is still
         // denoised but with no negative-position reference tokens) to isolate audio-ref contribution.
         let skipAudioRef = ProcessInfo.processInfo.environment["LTX_LIPDUB_SKIP_AUDIO_REF"] == "1"
@@ -2008,14 +2030,16 @@ public actor LTXPipeline {
         videoLatent = (upscaled - mean5d) / std5d
         MLX.eval(videoLatent)
 
-        // 10. Re-encode reference at Stage 2 downscaled resolution.
+        // 10. Stage 2 reference: same dual-path as Stage 1, at full resolution.
         let refS2Width = config.width / downscaleFactor
         let refS2Height = config.height / downscaleFactor
-        let refLatentS2: MLXArray
+        var refLatentS2: MLXArray? = nil
+        var s2ImageKeyframes: [EncodedKeyframe] = []
         if let imagePath = referenceImagePath {
-            LTXDebug.log("[lipdub] re-encoding static image reference at Stage 2 res \(refS2Width)x\(refS2Height) x \(numFrames) frames")
-            refLatentS2 = try await encodeImageAsStaticReference(
-                path: imagePath, width: refS2Width, height: refS2Height, numFrames: numFrames
+            LTXDebug.log("[lipdub] image mode — encoding I2V keyframe at Stage 2 res \(config.width)x\(config.height)")
+            s2ImageKeyframes = try await encodeKeyframes(
+                [KeyframeInput(path: imagePath, pixelFrameIndex: 0)],
+                width: config.width, height: config.height
             )
         } else {
             LTXDebug.log("[lipdub] re-encoding reference video at Stage 2 res \(refS2Width)x\(refS2Height)")
@@ -2026,13 +2050,24 @@ public actor LTXPipeline {
         unloadVAEEncoder()
 
         // 11. Build Stage 2 reference contexts.
-        let s2VideoRefCtx = buildVideoReference(
-            referenceLatent: refLatentS2,
-            targetShape: stage2Shape,
-            downscaleFactor: downscaleFactor,
-            hasAudio: true,
-            refConfig: ltx2.config
-        )
+        let s2VideoRefCtx: AppendKeyframeContext?
+        if isImageMode {
+            s2VideoRefCtx = prepareKeyframeAppend(
+                encoded: s2ImageKeyframes,
+                shape: stage2Shape,
+                hasAudio: true,
+                refConfig: ltx2.config,
+                stageLabel: "LipDub Stage 2 (image keyframe)"
+            )
+        } else {
+            s2VideoRefCtx = buildVideoReference(
+                referenceLatent: refLatentS2!,
+                targetShape: stage2Shape,
+                downscaleFactor: downscaleFactor,
+                hasAudio: true,
+                refConfig: ltx2.config
+            )
+        }
         // Stage 2 audio reference = Stage 1 denoised audio (already packed).
         let s2AudioRefCtx = buildAudioReferenceFromPacked(
             packed: s1AudioLatentPacked,
@@ -2120,39 +2155,6 @@ public actor LTXPipeline {
             audioSampleRate: vocoder.outputSampleRate,
             effectivePrompt: prompt
         )
-    }
-
-    /// Encode a still image as a frozen-in-time video reference (LipDub image-mode).
-    ///
-    /// Loads the image once via `loadImage` (center-crop + resize), tiles it
-    /// along the temporal axis to form a perfectly static `(1, 3, F, H, W)`
-    /// pixel tensor, then runs the standard VAE encode + per-channel normalize
-    /// path used by `encodeVideo`. Used by `generateLipDub` when the caller
-    /// provides `referenceImagePath` instead of `referenceVideoPath`.
-    private func encodeImageAsStaticReference(
-        path: String, width: Int, height: Int, numFrames: Int
-    ) async throws -> MLXArray {
-        let imageTensor = try loadImage(from: path, width: width, height: height)  // (1, 3, 1, H, W)
-        let staticVideo = MLX.repeated(imageTensor, count: numFrames, axis: 2)     // (1, 3, F, H, W)
-        MLX.eval(staticVideo)
-        LTXDebug.log("Static reference tensor: \(staticVideo.shape)")
-
-        try await loadVAEEncoder()
-        guard let encoder = vaeEncoder else {
-            throw LTXError.modelNotLoaded("VAE encoder failed to load")
-        }
-        let latent = encoder(staticVideo)
-        MLX.eval(latent)
-
-        guard let vaeDecoder = vaeDecoder else {
-            throw LTXError.modelNotLoaded("VAE decoder not loaded (needed for latent statistics)")
-        }
-        let mean5d = vaeDecoder.meanOfMeans.asType(.float32).reshaped([1, -1, 1, 1, 1])
-        let std5d = vaeDecoder.stdOfMeans.asType(.float32).reshaped([1, -1, 1, 1, 1])
-        let normalizedLatent = (latent.asType(.float32) - mean5d) / std5d
-        MLX.eval(normalizedLatent)
-        LTXDebug.log("Normalized static reference latent: mean=\(normalizedLatent.mean().item(Float.self)), std=\(MLX.sqrt(MLX.variance(normalizedLatent)).item(Float.self))")
-        return normalizedLatent
     }
 
     /// Encode a video into latent space using the VAE encoder
