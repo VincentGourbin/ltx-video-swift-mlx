@@ -57,8 +57,10 @@ ltx-video lipdub "A man at a podium, speaking in French saying: \"Bonjour à tou
 | Flag | Default | Description |
 |---|---|---|
 | `<prompt>` | — | Text description + target dialogue (see prompt format above) |
-| `--reference-video` | — | Path to source `.mp4` (frames + audio both extracted) |
-| `--target-audio` | none | Optional separate target audio (`.wav`/`.m4a`/`.mp4`) for dubbing. When set, the framework auto-detects speech windows in both source and target, time-stretches the target speech (pitch preserved via `AVAudioUnitTimePitch`) to match the source's speech duration, and pads with silence so the timing aligns with the source video's mouth movements. Replaces the source audio as the LipDub reference. |
+| `--reference-video` | — | Path to source `.mp4` (frames + audio both extracted). Mutually exclusive with `--reference-image`; exactly one is required. |
+| `--reference-image` | — | Path to a still image (`.png`/`.jpg`) used as a frame-0 I2V keyframe (see [Animating a still photo](#animating-a-still-photo---reference-image)). Requires `--target-audio`. Mutually exclusive with `--reference-video`. |
+| `--target-audio` | none (video mode) / **required** (image mode) | Separate target audio (`.wav`/`.m4a`/`.mp4`). With `--reference-video`: auto-aligned to the source's speech window (silence-aware time-stretch, pitch preserved). With `--reference-image`: used directly as the LipDub audio reference (no alignment — no source speech to align against). |
+| `--enhance-prompt` | off | (Image mode only) Run the multimodal Gemma VLM on `--reference-image` to enrich the scene description before tokenization. The original dialogue/signature is preserved verbatim (with a sanity-check fallback that re-appends `speaking in <LANG> saying: "..."` if all common speaking-verb variants are missing from the output). |
 | `-w` / `-h` | 768 / 512 | Output resolution (must be divisible by 64) |
 | `-f` | 121 | Frame count (must be `8n+1`; should match reference video) |
 | `--seed` | random | Seed for reproducibility |
@@ -82,6 +84,97 @@ This is the dubbing path: the model lip-syncs the source video to the (auto-fitt
 target audio. Without this flag, naive mux + truncate breaks lip-sync whenever the
 TTS duration differs from the source video (a common case for cross-language dubbing).
 
+### Animating a still photo (`--reference-image`)
+
+If you don't have a source video — just a portrait and a target TTS — pass
+`--reference-image <portrait.jpg> --target-audio <speech.wav>` instead of
+`--reference-video`. The pipeline:
+
+1. **Encodes the image as a single-frame I2V keyframe at pixel index 0** (the
+   same `prepareKeyframeAppend` path `generate --image` uses), *not* as a
+   multi-frame IC-LoRA video reference. This anchors identity at frame 0 only;
+   the rest of the timeline is denoised from noise and free to animate from the
+   text prompt while the LipDub LoRA + audio reference still drive lip-sync.
+2. **Skips speech-window alignment** (`AudioPreprocessor.alignTargetToSource`
+   has no source speech to align against). The target audio is loaded at
+   16 kHz and used as the LipDub audio reference directly.
+3. **Bypasses the `reference_downscale_factor` divisibility check** — the
+   keyframe pattern runs at the full target resolution.
+
+> **Why this differs from `--reference-video`.** The IC-LoRA video reference
+> appends multi-frame reference tokens with positions matching the target
+> temporal grid; the model is trained to make every output frame look like
+> the corresponding reference frame. Feeding a *replicated* still through
+> that path (tiled to F frames) anchors every output frame to the same
+> static look — lip-sync still works but the head/scene stay frozen. The
+> keyframe-append pattern trades multi-frame identity-anchoring for
+> single-frame anchoring + free motion, which is what you actually want
+> from a photo input.
+
+#### CLI
+
+```bash
+ltx-video lipdub 'A bearded man at an outdoor product launch, speaking in Spanish saying: "Hola a todos, hoy les presentaré estos nuevos audífonos absolutamente increíbles."' \
+    --reference-image portrait.jpg \
+    --target-audio spanish_tts.wav \
+    -w 768 -h 512 -f 121 \
+    --seed 42 \
+    -o lipdub_image.mp4
+```
+
+#### Auto-prompt from the image (`--enhance-prompt`)
+
+You don't have to hand-write the scene description. Add `--enhance-prompt`
+and supply only the LipDub signature in your prompt — the multimodal Gemma
+VLM analyzes the reference image and emits a richer prompt before
+denoising:
+
+```bash
+ltx-video lipdub 'Speaking in Spanish saying: "Hola a todos, hoy les presentaré estos nuevos audífonos absolutamente increíbles."' \
+    --reference-image portrait.jpg \
+    --target-audio spanish_tts.wav \
+    --enhance-prompt \
+    -w 768 -h 512 -f 121 \
+    --seed 42 \
+    -o lipdub_image_auto.mp4
+```
+
+The same I2V system prompt is used as in `generate --image --enhance-prompt`,
+so it preserves the user's quoted dialogue verbatim. A small sanity check
+in `generateLipDub` re-appends the original `speaking in <LANG> saying:
+"..."` signature if the VLM output contains none of the common variants
+(`speaking in` / `speaks in` / `says in` / `saying in`).
+
+#### Example output
+
+[![Image + VLM thumbnail](lipdub-image-vlm-spanish-768x512-121f-thumb.png)](https://github.com/VincentGourbin/ltx-video-swift-mlx/raw/main/docs/examples/lipdub/lipdub-image-vlm-spanish-768x512-121f.mp4)
+
+*Click to download · Reference image
+([`lipdub-image-vlm-spanish-source.jpg`](lipdub-image-vlm-spanish-source.jpg))
++ a 4.88 s Spanish TTS clip + the minimal prompt `'Speaking in Spanish
+saying: "Hola a todos..."'`. Resolution 768×512, 121 frames, distilled
+two-stage, seed 0, M3 Max — ~4.5 min wall time. The VLM-enhanced prompt
+that drove generation was:*
+
+> *Style: documentary - The man holds a microphone and speaks in Spanish,
+> his voice clear and enthusiastic, "Hola a todos, hoy les presentaré
+> estos nuevos audífonos absolutamente increíbles." He gestures with his
+> open hand, demonstrating the headphones. The sound of his voice,
+> slightly amplified by the microphone, mixes with the gentle rustling of
+> leaves and distant birdsong, creating a natural outdoor ambience.*
+
+#### Caveats
+
+- **Out-of-distribution conditioning.** The IC-LoRA was trained on
+  multi-frame video references; using a single keyframe instead is a
+  structural change. In practice identity transfers well for frontal,
+  well-lit portraits — it may degrade for non-frontal faces or unusual
+  lighting.
+- **`--target-audio` is required.** A still photo has no audio track to
+  fall back on.
+- **`--enhance-prompt` is image-mode only.** It no-ops silently in
+  `--reference-video` mode (the VLM needs an image to analyze).
+
 ### HuggingFace authentication
 
 The LipDub IC-LoRA is hosted on a gated HF repo
@@ -98,12 +191,18 @@ The same token is also used for the LTX-2.3 base weights (also gated).
 
 ## Constraints
 
-- **Audio is mandatory** — the reference video must have an audio track.
-- **Width / height divisible by 64** (and by `reference_downscale_factor`,
-  typically 2, after halving for Stage 1).
-- **Frame count `8n+1`** — the reference video's frame count snapped down.
+- **Audio is mandatory.** Either the reference video has an audio track, or
+  `--target-audio` is supplied. Image mode (`--reference-image`) always
+  requires `--target-audio`.
+- **Width / height divisible by 64**. In video mode, also by
+  `reference_downscale_factor` (typically 2) after halving for Stage 1. The
+  divisibility check is skipped in image mode (the keyframe pattern runs at
+  the full target resolution).
+- **Frame count `8n+1`** — the reference video's frame count snapped down,
+  or `--frames` in image mode.
 - **`--image`, `--keyframe`, `--video` are incompatible** with `lipdub` — this
-  is a dedicated pipeline, not a flag on `generate`.
+  is a dedicated pipeline, not a flag on `generate`. (In image mode, the
+  still is passed via `--reference-image`, not `--image`.)
 
 ## Diagnostic environment variables
 
@@ -124,16 +223,20 @@ parts of the pipeline; they are NOT for production use.
 
 Measured on M3 Max 96 GB:
 
-| Frames | Resolution | Time | Notes |
-|---|---|---|---|
-| 9 | 768×512 | 164 s | Smoke test (the reference VAE encode dominates at small frame counts) |
-| 33 | 768×512 | ~12 min | Cold MLX graph compile |
-| 121 | 768×512 | ~12 min | Warm cache (BEFORE/AFTER comparison run) |
-| 121 | 1920×1088 source → 768×512 | ~30–90 min | Source video resolution affects encode time |
+| Mode | Frames | Resolution | Time | Notes |
+|---|---|---|---|---|
+| `--reference-video` | 9 | 768×512 | 164 s | Smoke test (the reference VAE encode dominates at small frame counts) |
+| `--reference-video` | 33 | 768×512 | ~12 min | Cold MLX graph compile |
+| `--reference-video` | 121 | 768×512 | ~12 min | Warm cache (BEFORE/AFTER comparison run) |
+| `--reference-video` | 121 | 1920×1088 source → 768×512 | ~30–90 min | Source video resolution affects encode time |
+| `--reference-image` | 121 | 768×512 | ~6.5 min | Single keyframe append (one VAE encode per stage), no source audio decode |
+| `--reference-image --enhance-prompt` | 121 | 768×512 | ~4.5 min | + ~30 s VLM load/inference; warm cache run from same session |
 
-The video reference is re-encoded **twice** (once per stage at the matching
+The video-mode reference is re-encoded **twice** (once per stage at the matching
 downscaled resolution), so VAE encoder time is roughly 2× compared to other
-pipelines. The audio reference is encoded once.
+pipelines. The audio reference is encoded once. Image mode encodes a single
+frame per stage (much cheaper) and skips speech-window alignment, so the
+end-to-end is closer to half the video-mode time.
 
 ---
 

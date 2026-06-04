@@ -169,6 +169,15 @@ ltx-video lipdub "A person speaking in English saying: \"Hello everyone...\"" \
     --reference-video source.mp4 \
     --target-audio english_tts.wav \
     -w 768 -h 512 -f 121
+
+# Animate a still photo: use --reference-image (single I2V keyframe) +
+# --target-audio. Add --enhance-prompt to let the multimodal Gemma VLM
+# describe the scene from the image.
+ltx-video lipdub 'Speaking in Spanish saying: "Hola a todos..."' \
+    --reference-image portrait.jpg \
+    --target-audio spanish_tts.wav \
+    --enhance-prompt \
+    -w 768 -h 512 -f 121
 ```
 
 See [docs/examples/lipdub/README.md](docs/examples/lipdub/README.md) for pipeline details and constraints.
