@@ -1674,17 +1674,25 @@ public actor LTXPipeline {
     /// - Parameters:
     ///   - prompt: Text description of the desired output (typically describing what is being said).
     ///   - referenceVideoPath: Path to the source video file (.mp4) — both video frames and
-    ///     audio track are extracted from this file.
+    ///     (by default) audio track are extracted from this file. Provide either this OR
+    ///     `referenceImagePath`, not both.
+    ///   - referenceImagePath: Path to a still image (.png/.jpg) used as a frozen-in-time
+    ///     video reference. The image is replicated to `config.numFrames` frames before VAE
+    ///     encoding. When set, `targetAudioPath` is REQUIRED (the image has no audio) and
+    ///     the speech-window alignment step is skipped — the target audio is used directly.
+    ///     This mode is out-of-distribution for the IC-LoRA (trained on real videos with
+    ///     natural motion); expect minimal head movement and no blinks.
     ///   - lipdubLoraPath: Path to the LipDub IC-LoRA safetensors file.
     ///   - config: Width / height / seed / etc. `numFrames` is overridden by the snap
     ///     applied to the reference video's actual frame count (rounded down to `8k+1`).
     ///   - upscalerWeightsPath: Path to spatial upscaler safetensors (used between stages).
     ///   - targetAudioPath: Optional path to a separate audio file (e.g. TTS in a
-    ///     different language) to lip-sync to. When set, the audio is loaded as mono,
-    ///     its speech-active window is detected, and it is time-stretched (pitch
-    ///     preserved) so the speech occupies the same window as the source video's
-    ///     speech. The aligned waveform replaces the source video's audio as the
-    ///     LipDub reference. When nil, the source video's audio is used as-is.
+    ///     different language) to lip-sync to. When set (and `referenceVideoPath` is
+    ///     used), the audio is loaded as mono, its speech-active window is detected, and
+    ///     it is time-stretched (pitch preserved) so the speech occupies the same window
+    ///     as the source video's speech. The aligned waveform replaces the source video's
+    ///     audio as the LipDub reference. When nil and using a video reference, the
+    ///     source video's audio is used as-is. REQUIRED when using `referenceImagePath`.
     ///   - onProgress: Optional progress callback.
     /// - Returns: `VideoGenerationResult` with the generated video frames and the decoded
     ///   audio waveform.
@@ -1695,7 +1703,8 @@ public actor LTXPipeline {
     /// > adding per-token denoise-mask blending in `runDenoiseStep`; not implemented.
     public func generateLipDub(
         prompt: String,
-        referenceVideoPath: String,
+        referenceVideoPath: String? = nil,
+        referenceImagePath: String? = nil,
         lipdubLoraPath: String,
         config: LTXVideoGenerationConfig,
         upscalerWeightsPath: String,
@@ -1716,8 +1725,23 @@ public actor LTXPipeline {
         guard let ltx2 = ltx2Transformer else {
             throw LTXError.modelNotLoaded("LipDub requires the dual-stream LTX2Transformer (audio enabled). Call loadAudioModels().")
         }
-        guard FileManager.default.fileExists(atPath: referenceVideoPath) else {
-            throw LTXError.fileNotFound("Reference video not found: \(referenceVideoPath)")
+        // Exactly one of referenceVideoPath / referenceImagePath must be set.
+        switch (referenceVideoPath, referenceImagePath) {
+        case (nil, nil):
+            throw LTXError.invalidConfiguration("LipDub requires either referenceVideoPath or referenceImagePath.")
+        case (.some, .some):
+            throw LTXError.invalidConfiguration("LipDub: pass referenceVideoPath OR referenceImagePath, not both.")
+        case (.some(let vp), nil):
+            guard FileManager.default.fileExists(atPath: vp) else {
+                throw LTXError.fileNotFound("Reference video not found: \(vp)")
+            }
+        case (nil, .some(let ip)):
+            guard FileManager.default.fileExists(atPath: ip) else {
+                throw LTXError.fileNotFound("Reference image not found: \(ip)")
+            }
+            guard targetAudioPath != nil else {
+                throw LTXError.invalidConfiguration("LipDub image mode requires targetAudioPath (the image has no audio track).")
+            }
         }
         guard FileManager.default.fileExists(atPath: lipdubLoraPath) else {
             throw LTXError.fileNotFound("LipDub LoRA not found: \(lipdubLoraPath)")
@@ -1727,6 +1751,7 @@ public actor LTXPipeline {
                 throw LTXError.fileNotFound("Target audio not found: \(targetAudioPath)")
             }
         }
+        let isImageMode = referenceImagePath != nil
 
         let generationStart = Date()
         let halfWidth = config.width / 2
@@ -1802,13 +1827,22 @@ public actor LTXPipeline {
         self.tokenizer = nil
         Memory.clearCache()
 
-        // 4. Encode reference video at Stage 1 downscaled resolution.
+        // 4. Encode reference at Stage 1 downscaled resolution.
+        // Video mode: sample frames from MP4. Image mode: replicate still image.
         let refS1Width = halfWidth / downscaleFactor
         let refS1Height = halfHeight / downscaleFactor
-        LTXDebug.log("[lipdub] encoding reference video at Stage 1 res \(refS1Width)x\(refS1Height)")
-        let refLatentS1 = try await encodeVideo(
-            path: referenceVideoPath, width: refS1Width, height: refS1Height, numFrames: numFrames
-        )
+        let refLatentS1: MLXArray
+        if let imagePath = referenceImagePath {
+            LTXDebug.log("[lipdub] encoding static image reference at Stage 1 res \(refS1Width)x\(refS1Height) x \(numFrames) frames")
+            refLatentS1 = try await encodeImageAsStaticReference(
+                path: imagePath, width: refS1Width, height: refS1Height, numFrames: numFrames
+            )
+        } else {
+            LTXDebug.log("[lipdub] encoding reference video at Stage 1 res \(refS1Width)x\(refS1Height)")
+            refLatentS1 = try await encodeVideo(
+                path: referenceVideoPath!, width: refS1Width, height: refS1Height, numFrames: numFrames
+            )
+        }
         if ProcessInfo.processInfo.environment["LTX_LIPDUB_DUMP_VIDEO_REF"] == "1" {
             let f32 = refLatentS1.asType(.float32)
             MLX.eval(f32)
@@ -1823,14 +1857,22 @@ public actor LTXPipeline {
 
         // 5. Extract reference audio + encode via AudioVAE.
         //
-        // When `targetAudioPath` is set, swap the audio reference for the
-        // (silence-aware, pitch-preserving) time-stretched target audio so the
-        // model lip-syncs to it. Otherwise, use the source video's audio.
+        // Three sources, in priority order:
+        //   - Image mode: target audio is the ONLY audio source — load it directly,
+        //     no speech-window alignment (the static reference has no speech timing).
+        //   - Video mode + targetAudio: align target to source's speech window
+        //     (silence-aware, pitch-preserving time-stretch).
+        //   - Video mode without targetAudio: use the source video's own audio.
         let audioProcessor = AudioProcessor()
         let refWaveform: MLXArray
-        if let targetAudioPath = targetAudioPath {
+        if isImageMode {
+            // `targetAudioPath` is non-nil here (validated above).
+            let audioPath = targetAudioPath!
+            print("[lipdub] image mode — using target audio \(audioPath) directly (no alignment)")
+            refWaveform = try await audioProcessor.loadAudio(from: audioPath)
+        } else if let targetAudioPath = targetAudioPath {
             print("[lipdub] aligning target audio \(targetAudioPath) to source video speech window")
-            let sourceMonoMLX = try await audioProcessor.loadAudio(from: referenceVideoPath)
+            let sourceMonoMLX = try await audioProcessor.loadAudio(from: referenceVideoPath!)
             let targetMonoMLX = try await audioProcessor.loadAudio(from: targetAudioPath)
             let sourceMono = AudioPreprocessor.mlxToMonoFloats(sourceMonoMLX)
             let targetMono = AudioPreprocessor.mlxToMonoFloats(targetMonoMLX)
@@ -1850,7 +1892,7 @@ public actor LTXPipeline {
             print(String(format: "[lipdub] time-stretch rate=%.3f (pitch preserved)", rate))
             refWaveform = MLXArray(aligned)  // mono (samples,)
         } else {
-            refWaveform = try await audioProcessor.loadAudio(from: referenceVideoPath)
+            refWaveform = try await audioProcessor.loadAudio(from: referenceVideoPath!)
         }
         let refChannels = refWaveform.ndim == 1 ? 1 : refWaveform.dim(0)
         let refSamples = refWaveform.dim(refWaveform.ndim - 1)
@@ -1966,13 +2008,21 @@ public actor LTXPipeline {
         videoLatent = (upscaled - mean5d) / std5d
         MLX.eval(videoLatent)
 
-        // 10. Re-encode reference video at Stage 2 downscaled resolution.
+        // 10. Re-encode reference at Stage 2 downscaled resolution.
         let refS2Width = config.width / downscaleFactor
         let refS2Height = config.height / downscaleFactor
-        LTXDebug.log("[lipdub] re-encoding reference video at Stage 2 res \(refS2Width)x\(refS2Height)")
-        let refLatentS2 = try await encodeVideo(
-            path: referenceVideoPath, width: refS2Width, height: refS2Height, numFrames: numFrames
-        )
+        let refLatentS2: MLXArray
+        if let imagePath = referenceImagePath {
+            LTXDebug.log("[lipdub] re-encoding static image reference at Stage 2 res \(refS2Width)x\(refS2Height) x \(numFrames) frames")
+            refLatentS2 = try await encodeImageAsStaticReference(
+                path: imagePath, width: refS2Width, height: refS2Height, numFrames: numFrames
+            )
+        } else {
+            LTXDebug.log("[lipdub] re-encoding reference video at Stage 2 res \(refS2Width)x\(refS2Height)")
+            refLatentS2 = try await encodeVideo(
+                path: referenceVideoPath!, width: refS2Width, height: refS2Height, numFrames: numFrames
+            )
+        }
         unloadVAEEncoder()
 
         // 11. Build Stage 2 reference contexts.
@@ -2070,6 +2120,39 @@ public actor LTXPipeline {
             audioSampleRate: vocoder.outputSampleRate,
             effectivePrompt: prompt
         )
+    }
+
+    /// Encode a still image as a frozen-in-time video reference (LipDub image-mode).
+    ///
+    /// Loads the image once via `loadImage` (center-crop + resize), tiles it
+    /// along the temporal axis to form a perfectly static `(1, 3, F, H, W)`
+    /// pixel tensor, then runs the standard VAE encode + per-channel normalize
+    /// path used by `encodeVideo`. Used by `generateLipDub` when the caller
+    /// provides `referenceImagePath` instead of `referenceVideoPath`.
+    private func encodeImageAsStaticReference(
+        path: String, width: Int, height: Int, numFrames: Int
+    ) async throws -> MLXArray {
+        let imageTensor = try loadImage(from: path, width: width, height: height)  // (1, 3, 1, H, W)
+        let staticVideo = MLX.repeated(imageTensor, count: numFrames, axis: 2)     // (1, 3, F, H, W)
+        MLX.eval(staticVideo)
+        LTXDebug.log("Static reference tensor: \(staticVideo.shape)")
+
+        try await loadVAEEncoder()
+        guard let encoder = vaeEncoder else {
+            throw LTXError.modelNotLoaded("VAE encoder failed to load")
+        }
+        let latent = encoder(staticVideo)
+        MLX.eval(latent)
+
+        guard let vaeDecoder = vaeDecoder else {
+            throw LTXError.modelNotLoaded("VAE decoder not loaded (needed for latent statistics)")
+        }
+        let mean5d = vaeDecoder.meanOfMeans.asType(.float32).reshaped([1, -1, 1, 1, 1])
+        let std5d = vaeDecoder.stdOfMeans.asType(.float32).reshaped([1, -1, 1, 1, 1])
+        let normalizedLatent = (latent.asType(.float32) - mean5d) / std5d
+        MLX.eval(normalizedLatent)
+        LTXDebug.log("Normalized static reference latent: mean=\(normalizedLatent.mean().item(Float.self)), std=\(MLX.sqrt(MLX.variance(normalizedLatent)).item(Float.self))")
+        return normalizedLatent
     }
 
     /// Encode a video into latent space using the VAE encoder

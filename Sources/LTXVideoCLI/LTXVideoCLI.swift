@@ -681,10 +681,13 @@ struct LipDub: AsyncParsableCommand {
     @Argument(help: "The text prompt describing what is being said / shown")
     var prompt: String
 
-    @Option(name: .long, help: "Reference video path (.mp4) — frames AND (default) audio are extracted from this file")
-    var referenceVideo: String
+    @Option(name: .long, help: "Reference video path (.mp4) — frames AND (default) audio are extracted from this file. Mutually exclusive with --reference-image.")
+    var referenceVideo: String?
 
-    @Option(name: .long, help: "Optional target audio path (.wav/.m4a/.mp4) to lip-sync to. When set, the audio is auto-aligned (silence-aware time-stretch with pitch preservation) to the source video's speech window, and replaces the source audio as the LipDub reference. Use this for dubbing scenarios where the TTS duration differs from the source.")
+    @Option(name: .long, help: "Reference image path (.png/.jpg) used as a frozen-in-time visual reference (image replicated to --frames). Requires --target-audio (the still image has no audio track). Note: out-of-distribution for the LipDub LoRA (trained on real videos) — expect minimal head motion.")
+    var referenceImage: String?
+
+    @Option(name: .long, help: "Target audio path (.wav/.m4a/.mp4) to lip-sync to. With --reference-video, the audio is auto-aligned (silence-aware time-stretch, pitch preserved) to the source's speech window and replaces the source audio. REQUIRED with --reference-image (used directly without alignment).")
     var targetAudio: String?
 
     @Option(name: .shortAndLong, help: "Output file path (default: lipdub.mp4)")
@@ -731,8 +734,21 @@ struct LipDub: AsyncParsableCommand {
 
         print("LTX-2.3 LipDub")
         print("==============")
-        print("Reference video: \(referenceVideo)")
-        if let ta = targetAudio { print("Target audio: \(ta) (silence-aware auto-align enabled)") }
+        switch (referenceVideo, referenceImage) {
+        case (nil, nil):
+            throw ValidationError("Must provide exactly one of --reference-video or --reference-image.")
+        case (.some, .some):
+            throw ValidationError("--reference-video and --reference-image are mutually exclusive.")
+        case (.some(let vp), nil):
+            print("Reference video: \(vp)")
+            if let ta = targetAudio { print("Target audio: \(ta) (silence-aware auto-align enabled)") }
+        case (nil, .some(let ip)):
+            print("Reference image: \(ip) (static, replicated to \(frames) frames)")
+            guard let ta = targetAudio else {
+                throw ValidationError("--reference-image requires --target-audio (the still image has no audio track).")
+            }
+            print("Target audio: \(ta) (used directly, no alignment)")
+        }
         print("Prompt: \(prompt)")
         print("Output: \(output)")
         print("Resolution: \(width)x\(height) (stage 1: \(width / 2)x\(height / 2))")
@@ -747,8 +763,15 @@ struct LipDub: AsyncParsableCommand {
         guard width % 64 == 0 && height % 64 == 0 else {
             throw ValidationError("Width and height must be divisible by 64. Got \(width)x\(height)")
         }
-        guard FileManager.default.fileExists(atPath: referenceVideo) else {
-            throw ValidationError("Reference video not found: \(referenceVideo)")
+        if let vp = referenceVideo {
+            guard FileManager.default.fileExists(atPath: vp) else {
+                throw ValidationError("Reference video not found: \(vp)")
+            }
+        }
+        if let ip = referenceImage {
+            guard FileManager.default.fileExists(atPath: ip) else {
+                throw ValidationError("Reference image not found: \(ip)")
+            }
         }
         if let ta = targetAudio {
             guard FileManager.default.fileExists(atPath: ta) else {
@@ -822,6 +845,7 @@ struct LipDub: AsyncParsableCommand {
         let result = try await pipeline.generateLipDub(
             prompt: prompt,
             referenceVideoPath: referenceVideo,
+            referenceImagePath: referenceImage,
             lipdubLoraPath: loraPath,
             config: config,
             upscalerWeightsPath: upscalerPath,
@@ -1047,6 +1071,10 @@ struct Info: ParsableCommand {
               # LipDub: lip-sync a reference video to a new prompt
               ltx-video lipdub "a person speaking the dialogue" \
                 --reference-video source.mp4 -w 768 -h 512 -f 121
+
+              # LipDub from a still image (image replicated to F frames; out-of-distribution)
+              ltx-video lipdub "a man speaking in English saying: \"Hello world\"" \
+                --reference-image portrait.png --target-audio tts.wav -w 768 -h 512 -f 121
 
               # With prompt enhancement
               ltx-video generate "A beaver" -w 768 -h 512 -f 121 --enhance-prompt
