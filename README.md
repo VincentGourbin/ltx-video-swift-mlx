@@ -339,6 +339,25 @@ let ram = LTXModelRegistry.systemRAMGB
 print("System RAM: \(ram) GB")
 ```
 
+## Activity Beacon (Opt-in)
+
+Heavy operations (generation, model loading, LoRA training) can advertise themselves to external activity monitors such as [SiliconScope](https://github.com/kennss/SiliconScope). While the operation runs, a small JSON manifest lives at `~/Library/Application Support/ai-runtime-beacons/<pid>-<id>.json` and is deleted the moment it ends — errors included. Nothing is ever written unless you opt in:
+
+```swift
+// Swift package
+RuntimeBeacon.isEnabled = true
+```
+
+```bash
+# CLI: --beacon flag (generate / retake / lipdub / train / profile),
+# or the environment variable
+LTX_RUNTIME_BEACON=1 ltx-video generate "..."
+```
+
+The manifest schema is deliberately runtime-agnostic (`version`, `pid`, `runtime`, `displayName`, `task`, `model`, `phase`, `step`, `totalSteps`, timestamps) so any local-AI framework can adopt the same convention and monitors only need one reader. Manifests left behind by a force-killed process are garbage-collected on the next beacon start via a pid liveness check.
+
+> **Note:** sandboxed apps write inside their container, invisible to external monitors — the beacon targets CLI tools and non-sandboxed apps.
+
 ## Pipeline Architecture
 
 The `generate` command runs a **two-stage distilled pipeline** matching the [LTX-2 HuggingFace Space](https://huggingface.co/spaces/Lightricks/LTX-2):
@@ -386,6 +405,7 @@ flowchart TD
 | `--mixed-precision` | off | Per-block quantization: first/last 6 blocks qint8, middle int4 |
 | `--bitrate` | auto | Video bitrate in kbps |
 | `--debug` | off | Debug output |
+| `--beacon` | off | Advertise activity to external monitors (see [Activity Beacon](#activity-beacon-opt-in)) |
 | `--profile` | off | GPU/CPU profiling report + Chrome Trace export |
 
 ### `ltx-video export-quantized`
@@ -423,6 +443,7 @@ ltx-video export-quantized \
 | `--transformer-quant` | `bf16` | Quantization: `bf16`, `qint8`, `int4`, `nvfp4`, `mxfp8` |
 | `--mixed-precision` | off | Per-block quantization: first/last 6 blocks qint8, middle int4 |
 | `--regenerate-audio` | off | Regenerate audio via dual denoising (default: preserve source audio) |
+| `--beacon` | off | Advertise activity to external monitors (see [Activity Beacon](#activity-beacon-opt-in)) |
 | `--profile` | off | GPU/CPU profiling report + Chrome Trace export |
 
 ### `ltx-video train`
@@ -447,6 +468,7 @@ ltx-video export-quantized \
 | `--max-grad-norm` | `1.0` | Gradient clipping norm |
 | `--warmup-steps` | `100` | LR warmup steps |
 | `--preset` | none | Memory preset: `compact`, `balanced`, `quality`, `max` |
+| `--beacon` | off | Advertise activity to external monitors (see [Activity Beacon](#activity-beacon-opt-in)) |
 
 ### `ltx-video models`
 
