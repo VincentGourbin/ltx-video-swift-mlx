@@ -65,6 +65,23 @@ public class LoRATrainer {
     ) async throws {
         try config.validate()
 
+        let beacon = RuntimeBeacon.begin(task: "train", model: config.model)
+        defer { beacon?.end() }
+        let userProgress = onProgress
+        let onProgress: TrainingProgressCallback?
+        if let beacon {
+            onProgress = { progress in
+                beacon.update(
+                    phase: "training",
+                    step: progress.step,
+                    totalSteps: progress.totalSteps
+                )
+                userProgress?(progress)
+            }
+        } else {
+            onProgress = userProgress
+        }
+
         let startTime = Date()
 
         // Create output directory
@@ -110,6 +127,7 @@ public class LoRATrainer {
         )
 
         print("Loading models...")
+        beacon?.update(phase: "loading")
         try await pipeline.loadModels(
             progressCallback: { progress in
                 print("  \(progress.message) (\(Int(progress.progress * 100))%)")
@@ -130,6 +148,7 @@ public class LoRATrainer {
         let cache = LatentCache(cacheDir: cacheDir, triggerWord: config.triggerWord)
 
         print("Building latent cache...")
+        beacon?.update(phase: "caching-latents")
         try await cache.build(from: dataset, pipeline: pipeline) { idx, total, filename in
             print("  Encoding [\(idx + 1)/\(total)] \(filename)")
         }

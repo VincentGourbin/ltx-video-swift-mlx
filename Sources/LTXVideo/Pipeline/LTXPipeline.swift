@@ -281,6 +281,8 @@ public actor LTXPipeline {
         ltxWeightsPath: String? = nil
     ) async throws {
         LTXDebug.log("Loading models for \(model.displayName)...")
+        let beacon = RuntimeBeacon.begin(task: "load-models", model: model.rawValue)
+        defer { beacon?.end() }
         var stepStart = Date()
 
         // Step 1: Load Gemma model and tokenizer
@@ -480,6 +482,8 @@ public actor LTXPipeline {
         progressCallback: DownloadProgressCallback? = nil
     ) async throws {
         LTXDebug.log("Loading audio models...")
+        let beacon = RuntimeBeacon.begin(task: "load-audio-models", model: model.rawValue)
+        defer { beacon?.end() }
 
         // Step 1: Download and load Audio VAE
         progressCallback?(DownloadProgress(progress: 0.1, message: "Downloading audio VAE..."))
@@ -749,6 +753,23 @@ public actor LTXPipeline {
         onProgress: GenerationProgressCallback? = nil,
     ) async throws -> VideoGenerationResult {
         try config.validate()
+
+        let beacon = RuntimeBeacon.begin(task: "generate", model: model.rawValue)
+        defer { beacon?.end() }
+        let userProgress = onProgress
+        let onProgress: GenerationProgressCallback?
+        if let beacon {
+            onProgress = { progress in
+                beacon.update(
+                    phase: progress.phase.rawValue,
+                    step: progress.currentStep + 1,
+                    totalSteps: progress.totalSteps
+                )
+                userProgress?(progress)
+            }
+        } else {
+            onProgress = userProgress
+        }
 
         let hasAudio = isAudioLoaded
 
@@ -1211,6 +1232,23 @@ public actor LTXPipeline {
         onProgress: GenerationProgressCallback? = nil,
     ) async throws -> VideoGenerationResult {
         try config.validate()
+
+        let beacon = RuntimeBeacon.begin(task: "retake", model: model.rawValue)
+        defer { beacon?.end() }
+        let userProgress = onProgress
+        let onProgress: GenerationProgressCallback?
+        if let beacon {
+            onProgress = { progress in
+                beacon.update(
+                    phase: progress.phase.rawValue,
+                    step: progress.currentStep + 1,
+                    totalSteps: progress.totalSteps
+                )
+                userProgress?(progress)
+            }
+        } else {
+            onProgress = userProgress
+        }
 
         guard let videoPath = config.videoPath else {
             throw LTXError.invalidConfiguration("videoPath must be set for retake mode")
@@ -1715,6 +1753,23 @@ public actor LTXPipeline {
         onProgress: GenerationProgressCallback? = nil
     ) async throws -> VideoGenerationResult {
         try config.validate()
+
+        let beacon = RuntimeBeacon.begin(task: "lipdub", model: model.rawValue)
+        defer { beacon?.end() }
+        let userProgress = onProgress
+        let onProgress: GenerationProgressCallback?
+        if let beacon {
+            onProgress = { progress in
+                beacon.update(
+                    phase: progress.phase.rawValue,
+                    step: progress.currentStep + 1,
+                    totalSteps: progress.totalSteps
+                )
+                userProgress?(progress)
+            }
+        } else {
+            onProgress = userProgress
+        }
 
         guard config.width % 64 == 0 && config.height % 64 == 0 else {
             throw LTXError.invalidConfiguration("LipDub requires width and height divisible by 64. Got \(config.width)x\(config.height)")
@@ -2453,6 +2508,8 @@ public actor LTXPipeline {
     ///
     /// - Parameter path: Output safetensors file path
     public func exportQuantizedTransformer(to path: String) throws {
+        let beacon = RuntimeBeacon.begin(task: "export-quantized", model: self.model.rawValue)
+        defer { beacon?.end() }
         let model: Module
         if let ltx2 = ltx2Transformer {
             model = ltx2

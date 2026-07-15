@@ -94,6 +94,9 @@ struct Train: AsyncParsableCommand {
     @Flag(name: .long, help: "Resume from latest checkpoint in output directory")
     var resume: Bool = false
 
+    @Flag(name: .long, help: "Advertise activity to external monitors (writes a transient manifest in ~/Library/Application Support/ai-runtime-beacons/)")
+    var beacon: Bool = false
+
     @Option(name: .long, help: "Resume from a specific checkpoint step")
     var resumeStep: Int?
 
@@ -112,6 +115,8 @@ struct Train: AsyncParsableCommand {
     mutating func run() async throws {
         print("LTX-2 LoRA Training")
         print("===================")
+
+        RuntimeBeacon.isEnabled = beacon
 
         // Guard audio flag
         if audio {

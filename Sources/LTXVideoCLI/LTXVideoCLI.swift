@@ -108,6 +108,9 @@ struct Generate: AsyncParsableCommand {
     @Flag(name: .long, help: "Enable debug output")
     var debug: Bool = false
 
+    @Flag(name: .long, help: "Advertise activity to external monitors (writes a transient manifest in ~/Library/Application Support/ai-runtime-beacons/)")
+    var beacon: Bool = false
+
     @Flag(name: .long, help: "Enable performance profiling")
     var profile: Bool = false
 
@@ -133,6 +136,8 @@ struct Generate: AsyncParsableCommand {
         if debug {
             LTXDebug.enableDebugMode()
         }
+
+        RuntimeBeacon.isEnabled = beacon
 
         // Attach profiling session when --profile is enabled
         var profilingSession: ProfilingSession? = nil
@@ -428,6 +433,9 @@ struct Retake: AsyncParsableCommand {
     @Flag(name: .long, help: "Enable debug output")
     var debug: Bool = false
 
+    @Flag(name: .long, help: "Advertise activity to external monitors (writes a transient manifest in ~/Library/Application Support/ai-runtime-beacons/)")
+    var beacon: Bool = false
+
     @Flag(name: .long, help: "Enable performance profiling")
     var profile: Bool = false
 
@@ -451,6 +459,8 @@ struct Retake: AsyncParsableCommand {
         if debug {
             LTXDebug.enableDebugMode()
         }
+
+        RuntimeBeacon.isEnabled = beacon
 
         // Attach profiling session when --profile is enabled
         var profilingSession: ProfilingSession? = nil
@@ -714,6 +724,9 @@ struct LipDub: AsyncParsableCommand {
     @Flag(name: .long, help: "Enable debug output")
     var debug: Bool = false
 
+    @Flag(name: .long, help: "Advertise activity to external monitors (writes a transient manifest in ~/Library/Application Support/ai-runtime-beacons/)")
+    var beacon: Bool = false
+
     @Flag(name: .long, help: "Enhance the prompt via the VLM (Gemma) by analyzing --reference-image. Generates a richer scene description while preserving the `speaking in <LANG> saying: \"...\"` LipDub signature. Image mode only.")
     var enhancePrompt: Bool = false
 
@@ -734,6 +747,8 @@ struct LipDub: AsyncParsableCommand {
             LTXModelRegistry.customModelsDirectory = URL(fileURLWithPath: dir)
         }
         if debug { LTXDebug.enableDebugMode() }
+
+        RuntimeBeacon.isEnabled = beacon
 
         print("LTX-2.3 LipDub")
         print("==============")

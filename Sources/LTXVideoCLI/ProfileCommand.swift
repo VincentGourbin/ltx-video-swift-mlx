@@ -91,10 +91,15 @@ struct ProfileRun: AsyncParsableCommand {
     @Flag(name: .long, help: "Disable Chrome Trace JSON export")
     var noChromeTrace: Bool = false
 
+    @Flag(name: .long, help: "Advertise activity to external monitors (writes a transient manifest in ~/Library/Application Support/ai-runtime-beacons/)")
+    var beacon: Bool = false
+
     func run() async throws {
         if let dir = options.modelsDir {
             LTXModelRegistry.customModelsDirectory = URL(fileURLWithPath: dir)
         }
+
+        RuntimeBeacon.isEnabled = beacon
 
         let quantConfig = options.resolveQuantization()
         try FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
