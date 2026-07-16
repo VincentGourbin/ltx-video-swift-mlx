@@ -49,6 +49,18 @@ MLX products used: `MLX`, `MLXNN`, `MLXRandom`, `Transformers`
 - `distilled` (~16GB RAM) - Balanced
 - `dev` (~25GB RAM) - Full quality
 
+## Engineering Knowledge Base
+
+`docs/knowledge/` is an [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
+bundle of measured, durable engineering knowledge: benchmarks, decisions with
+rationale, verified pitfalls, investigation records, diagnostic playbooks.
+**Read [docs/knowledge/index.md](docs/knowledge/index.md) before debugging
+performance, LipDub quality, weight loading, or build/test tooling** — most
+traps in those areas have already been root-caused and documented there.
+When you root-cause something new or measure something durable, add a concept
+to the bundle (and a line to its `log.md`) instead of leaving it in a PR
+description.
+
 ## Implementation Notes
 
 - Use MLX lazy evaluation to minimize memory usage
