@@ -58,7 +58,9 @@ struct LipDubReuseE2ETests {
         // must survive between runs.
         let pipeline = LTXPipeline(model: .distilled, memoryOptimization: .disabled)
         try await pipeline.loadModels()
-        try await pipeline.loadAudioModels()
+        // includeEncoder: video-reference LipDub encodes the source audio track
+        // (same as the CLI's lipdub command).
+        try await pipeline.loadAudioModels(includeEncoder: true)
         let upscalerPath = try await pipeline.downloadUpscalerWeights()
 
         #expect(await pipeline.fusedLipDubLoRAPath == nil, "pristine after load")

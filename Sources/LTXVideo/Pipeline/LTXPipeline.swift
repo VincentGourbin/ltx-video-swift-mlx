@@ -884,10 +884,14 @@ public actor LTXPipeline {
         LTXDebug.log("Video text: \(videoTextEmbeddings.shape), Audio text: \(audioTextEmbeddings.shape)")
         profiler.end("Text Encoding")
 
-        // Unload Gemma
-        self.gemmaModel = nil
-        self.tokenizer = nil
-        Memory.clearCache()
+        // Unload Gemma — frees ~7.5 GB. Kept resident with unloadAfterUse == false
+        // (MemoryOptimizationConfig.disabled) so consecutive runs can re-encode
+        // text without reloading models.
+        if memoryOptimization.unloadAfterUse {
+            self.gemmaModel = nil
+            self.tokenizer = nil
+            Memory.clearCache()
+        }
 
         // 2. Create latent shapes
         let stage1Shape = VideoLatentShape.fromPixelDimensions(
@@ -1376,10 +1380,13 @@ public actor LTXPipeline {
         LTXDebug.log("Text encoding: video=\(videoTextEmbeddings.shape), audio=\(audioTextEmbeddings?.shape.description ?? "nil")")
         profiler.end("Text Encoding")
 
-        // Unload Gemma
-        self.gemmaModel = nil
-        self.tokenizer = nil
-        Memory.clearCache()
+        // Unload Gemma — kept resident with unloadAfterUse == false so
+        // consecutive runs can re-encode text without reloading models.
+        if memoryOptimization.unloadAfterUse {
+            self.gemmaModel = nil
+            self.tokenizer = nil
+            Memory.clearCache()
+        }
 
         // Phase 2: Single-stage denoising at native resolution
         let latentShape = VideoLatentShape.fromPixelDimensions(
@@ -1486,10 +1493,12 @@ public actor LTXPipeline {
             MLX.eval(negVideoTextEmbeddings!)
             if let nae = negAudioTextEmbeddings { MLX.eval(nae) }
 
-            // Unload Gemma again
-            self.gemmaModel = nil
-            self.tokenizer = nil
-            Memory.clearCache()
+            // Unload Gemma again (same unloadAfterUse gating as above)
+            if memoryOptimization.unloadAfterUse {
+                self.gemmaModel = nil
+                self.tokenizer = nil
+                Memory.clearCache()
+            }
         }
 
         LTXDebug.log("Retake: \(numSteps) steps, cfg=\(cfgScale), rescale=\(guidanceRescale), sigmas: \(sigmas)")
@@ -1976,10 +1985,15 @@ public actor LTXPipeline {
         let audioTextEmbeddings = encoderOutput.audioEncoding ?? videoTextEmbeddings
         let textMask = encoderOutput.attentionMask
         MLX.eval(videoTextEmbeddings, audioTextEmbeddings, textMask)
-        // Unload Gemma — frees ~7.5 GB before the dual-stream denoising loops
-        self.gemmaModel = nil
-        self.tokenizer = nil
-        Memory.clearCache()
+        // Unload Gemma — frees ~7.5 GB before the dual-stream denoising loops.
+        // Kept resident with unloadAfterUse == false (MemoryOptimizationConfig
+        // .disabled) so consecutive LipDub segments can re-encode their prompt
+        // without reloading models — the whole point of the fused-LoRA reuse.
+        if memoryOptimization.unloadAfterUse {
+            self.gemmaModel = nil
+            self.tokenizer = nil
+            Memory.clearCache()
+        }
 
         // 4. Stage 1 reference: VIDEO MODE uses the IC-LoRA multi-frame reference
         // at downscaled resolution; IMAGE MODE uses the I2V keyframe-append pattern
@@ -2300,6 +2314,10 @@ public actor LTXPipeline {
         MLX.eval(audioWaveform)
 
         LTXMemoryManager.resetCacheLimit()
+        // Free MLX workspace buffers between runs (weights stay resident). With
+        // unloadAfterUse == false nothing else clears the cache, and decode
+        // buffers accumulating across consecutive segments degrade later runs.
+        Memory.clearCache()
         let generationTime = Date().timeIntervalSince(generationStart)
         LTXDebug.log("[lipdub] total generation time: \(String(format: "%.1f", generationTime))s")
 
