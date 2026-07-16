@@ -59,6 +59,11 @@ public struct LoRATrainingConfig: Sendable {
     /// LR warmup steps
     public var warmupSteps: Int
 
+    /// LR schedule after warmup: "cosine" (decay to 10% of peak over the
+    /// remaining steps — the standard for LoRA fine-tuning) or "constant"
+    /// (the historical behavior). Uses the official MLXOptimizers schedulers.
+    public var lrSchedule: String
+
     /// Trigger word to prepend to all captions (e.g., "CAKEIFY")
     public var triggerWord: String?
 
@@ -137,6 +142,7 @@ public struct LoRATrainingConfig: Sendable {
         gradientAccumulationSteps: Int = 1,
         maxGradNorm: Float = 1.0,
         warmupSteps: Int = 100,
+        lrSchedule: String = "cosine",
         triggerWord: String? = nil,
         seed: UInt64? = nil,
         hfToken: String? = nil,
@@ -164,6 +170,7 @@ public struct LoRATrainingConfig: Sendable {
         self.gradientAccumulationSteps = gradientAccumulationSteps
         self.maxGradNorm = maxGradNorm
         self.warmupSteps = warmupSteps
+        self.lrSchedule = lrSchedule
         self.triggerWord = triggerWord
         self.seed = seed
         self.hfToken = hfToken
@@ -190,6 +197,9 @@ public struct LoRATrainingConfig: Sendable {
         }
         guard gradientAccumulationSteps >= 1 else {
             throw TrainingError.invalidConfig("Gradient accumulation steps must be >= 1, got \(gradientAccumulationSteps)")
+        }
+        guard ["cosine", "constant"].contains(lrSchedule) else {
+            throw TrainingError.invalidConfig("LR schedule must be 'cosine' or 'constant', got '\(lrSchedule)'")
         }
     }
 }

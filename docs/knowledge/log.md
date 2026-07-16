@@ -1,5 +1,13 @@
 # Directory Update Log
 
+## 2026-07-16 (evening)
+
+* **Update**: LoRA-training validation campaign (issue #1 revival):
+  added [training baselines](/docs/knowledge/benchmarks/lora-training-baselines-m3max.md)
+  and the [QLoRA training decision](/docs/knowledge/decisions/qlora-training-default.md)
+  (bf16 84.3 GB swapping vs qint8 43.6 GB / int4 37.5 GB, near-exact loss
+  parity through the frozen quantized base).
+
 ## 2026-07-16
 
 * **Creation**: Bootstrapped the knowledge bundle after the LipDub

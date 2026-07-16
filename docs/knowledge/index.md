@@ -17,6 +17,7 @@ or re-litigated.
 # Benchmarks
 
 * [Generation baselines on M3 Max 96 GB](benchmarks/generation-baselines-m3max.md) - healthy wall-clock numbers measured July 2026; anything far above them is contention/thermal/misconfiguration, not the engine
+* [LoRA training baselines on M3 Max 96 GB](benchmarks/lora-training-baselines-m3max.md) - wall-clock, peak memory and loss trajectories for the Disney overfit runs
 
 # Decisions
 
@@ -24,6 +25,7 @@ or re-litigated.
 * [Speech-window thresholds](decisions/speech-window-noise-floor.md) - absolute floor + credible noise-floor offset; peak-relative was tried and rejected
 * [LipDub fusion reuse policy](decisions/lipdub-fusion-reuse-policy.md) - identity by canonical path + mtime, guards instead of unfuse
 * [unloadAfterUse gates all mid-run unloads](decisions/unload-gating-semantics.md) - .disabled means keep everything; the trade-offs that buys
+* [QLoRA is the training default on ≤96 GB](decisions/qlora-training-default.md) - qint8 halves peak memory with near-exact loss parity; bf16 swaps
 
 # Pitfalls
 

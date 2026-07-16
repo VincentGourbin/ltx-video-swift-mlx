@@ -61,6 +61,9 @@ struct Train: AsyncParsableCommand {
     @Option(name: .long, help: "LR warmup steps (default: 100)")
     var warmupSteps: Int = 100
 
+    @Option(name: .long, help: "LR schedule after warmup: cosine (decay to 10% of peak) or constant (default: cosine)")
+    var lrSchedule: String = "cosine"
+
     @Option(name: .long, help: "Trigger word to prepend to all captions (e.g., CAKEIFY)")
     var triggerWord: String?
 
@@ -160,6 +163,7 @@ struct Train: AsyncParsableCommand {
         config.gradientAccumulationSteps = gradAccum
         config.maxGradNorm = maxGradNorm
         config.warmupSteps = warmupSteps
+        config.lrSchedule = lrSchedule
         config.triggerWord = triggerWord
         config.seed = seed
         config.hfToken = hfToken

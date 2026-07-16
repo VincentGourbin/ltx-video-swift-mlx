@@ -18,10 +18,14 @@ public struct TrainingProgress: Sendable {
     public let learningRate: Float
     public let elapsedSeconds: Double
     public let samplesPerSecond: Double
+    /// MLX peak GPU memory since process start (bytes) — the number to watch
+    /// when tuning presets/quantization against the machine's RAM.
+    public var peakMemoryBytes: Int = 0
 
     public var status: String {
         let pct = Int(Double(step) / Double(totalSteps) * 100)
-        return "Step \(step)/\(totalSteps) [\(pct)%] loss=\(String(format: "%.6f", loss)) lr=\(String(format: "%.2e", learningRate))"
+        let peak = String(format: "%.1f", Double(peakMemoryBytes) / 1_073_741_824)
+        return "Step \(step)/\(totalSteps) [\(pct)%] loss=\(String(format: "%.6f", loss)) lr=\(String(format: "%.2e", learningRate)) peak=\(peak)GB"
     }
 }
 
@@ -166,6 +170,9 @@ public class LoRATrainer {
         await pipeline.clearGemma()
         await pipeline.unloadVAEEncoder()
         Memory.clearCache()
+        print(String(format: "Memory after cache build: active=%.1f GB, peak=%.1f GB",
+                     Double(Memory.activeMemory) / 1_073_741_824,
+                     Double(Memory.peakMemory) / 1_073_741_824))
 
         // Step 5: Get transformer and inject LoRA
         let transformerRef = try await pipeline.getTransformerForTraining()
@@ -201,8 +208,34 @@ public class LoRATrainer {
             )
         }
 
-        // Step 6: Set up optimizer
+        // Step 6: Set up optimizer.
+        // Bias correction (mlx-swift 0.31.4+) matches torch.optim.AdamW behavior —
+        // without it the first steps take effectively larger updates.
         let optimizer = AdamW(learningRate: config.learningRate, weightDecay: config.weightDecay)
+        optimizer.biasCorrection = true
+
+        // LR schedule (official MLXOptimizers schedulers, mlx-swift 0.31.5+):
+        // linear warmup to the peak LR, then cosine decay to 10% of peak over the
+        // remaining steps ("cosine", the LoRA fine-tuning standard) or flat peak
+        // ("constant", the historical behavior).
+        let peakLR = config.learningRate
+        let postWarmup: (Int) -> Float
+        switch config.lrSchedule {
+        case "constant":
+            postWarmup = { _ in peakLR }
+        default:
+            postWarmup = cosineDecay(
+                config.learningRate,
+                decaySteps: max(1, config.maxSteps - config.warmupSteps),
+                end: config.learningRate * 0.1
+            )
+        }
+        let lrSchedule: (Int) -> Float = config.warmupSteps > 0
+            ? joinSchedules(
+                [linearSchedule(config.learningRate / 100, end: config.learningRate, steps: config.warmupSteps),
+                 postWarmup],
+                boundaries: [config.warmupSteps])
+            : postWarmup
 
         // Step 6b: Handle resume from checkpoint
         var firstStep = 0
@@ -423,14 +456,9 @@ public class LoRATrainer {
                     ctrl.notifyObservers { $0.trainingResumed(atStep: step) }
                 }
             }
-            // Apply LR warmup (before optimizer step)
-            let currentLR: Float
-            if step < config.warmupSteps {
-                currentLR = config.learningRate * Float(step + 1) / Float(config.warmupSteps)
-                optimizer.learningRate = currentLR
-            } else {
-                currentLR = config.learningRate
-            }
+            // Apply the LR schedule (warmup + cosine/constant) before the step
+            let currentLR = lrSchedule(step)
+            optimizer.learningRate = currentLR
 
             // Training step
             var accumGrads: ModuleParameters? = nil
@@ -501,7 +529,8 @@ public class LoRATrainer {
                 loss: accumLoss,
                 learningRate: currentLR,
                 elapsedSeconds: elapsed,
-                samplesPerSecond: Double(step + 1) / elapsed
+                samplesPerSecond: Double(step + 1) / elapsed,
+                peakMemoryBytes: Memory.peakMemory
             )
             onProgress?(progress)
 
@@ -563,6 +592,7 @@ public class LoRATrainer {
             print("\nTraining complete!")
             print("  Total time: \(String(format: "%.1f", totalTime))s")
             print("  Best loss: \(String(format: "%.6f", bestLoss))")
+            print(String(format: "  Peak GPU memory: %.1f GB", Double(Memory.peakMemory) / 1_073_741_824))
             print("  Saved \(savedCount) LoRA layers to \(finalPath)")
             controller?.setStatus(.completed)
             controller?.notifyObservers { $0.trainingFinished(success: true, message: "Completed at step \(config.maxSteps)") }

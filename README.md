@@ -469,6 +469,7 @@ ltx-video export-quantized \
 | `--grad-accum` | `1` | Gradient accumulation steps |
 | `--max-grad-norm` | `1.0` | Gradient clipping norm |
 | `--warmup-steps` | `100` | LR warmup steps |
+| `--lr-schedule` | `cosine` | LR schedule after warmup: `cosine` (decay to 10% of peak) or `constant` |
 | `--preset` | none | Memory preset: `compact`, `balanced`, `quality`, `max` |
 | `--beacon` | off | Advertise activity to external monitors (see [Activity Beacon](#activity-beacon-opt-in)) |
 
