@@ -141,9 +141,19 @@ cd $REPO
 TEST_RUNNER_LTX_E2E_LIPDUB=1 \
 TEST_RUNNER_LTX_E2E_LIPDUB_LORA=$LORA \
 xcodebuild -scheme ltx-video-swift-mlx-Package -destination 'platform=macOS' \
-  -derivedDataPath .xcodebuild-tests -skipPackagePluginValidation -skipMacroValidation \
-  -configuration Release test -only-testing:LTXVideoTests/LipDubReuseE2ETests
+  -derivedDataPath .xcodebuild-tests-rel -skipPackagePluginValidation -skipMacroValidation \
+  -configuration Release ENABLE_TESTABILITY=YES test \
+  -only-testing:LTXVideoTests/LipDubReuseE2ETests
 ```
+
+Deux pièges de cette commande :
+- `ENABLE_TESTABILITY=YES` est **obligatoire** en Release (`@testable import` n'est activé
+  par défaut qu'en Debug — sans lui : `unable to resolve Swift module dependency to a
+  compatible module: 'LTXVideo'`).
+- derivedDataPath **dédié** (`.xcodebuild-tests-rel`) : ne pas réutiliser celui des runs
+  Debug, les modules des deux configurations ne sont pas compatibles.
+- Les variables d'environnement doivent porter le préfixe `TEST_RUNNER_` pour atteindre
+  le process de test.
 
 Le test vérifie la machine à états complète :
 1. `fusedLipDubLoRAPath == nil` après chargement ;
