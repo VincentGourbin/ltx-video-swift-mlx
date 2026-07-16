@@ -200,19 +200,58 @@ public actor LTXPipeline {
     /// Whether a LoRA is currently fused into the transformer
     public var isLoRAFused: Bool { loraOriginalWeights != nil }
 
-    /// Path of the LipDub IC-LoRA currently fused into `ltx2Transformer`
+    /// Identity of the LipDub IC-LoRA currently fused into `ltx2Transformer`
     /// (nil = pristine weights). Unlike `loraFusedPath`, no original weights are
     /// kept (too large for the 22B transformer): consecutive `generateLipDub`
     /// runs with the SAME LoRA file reuse the fused transformer as-is; switching
-    /// LoRA requires reloading the models. Cleared wherever the transformer is
-    /// unloaded or recreated from the unified file.
-    private var lipdubFusedLoRAPath: String? = nil
+    /// LoRA — or the file changing under the same path — requires reloading the
+    /// models. Cleared wherever the transformer is unloaded or recreated.
+    private struct LipDubFusionRecord {
+        /// Canonical path (symlinks resolved, standardized) so path spelling
+        /// differences between segments don't force a needless 22B reload.
+        let path: String
+        /// File mtime at fusion time — detects the file being overwritten in
+        /// place between segments (same path, different weights).
+        let modificationDate: Date?
+    }
+    private var lipdubFusion: LipDubFusionRecord? = nil
 
-    /// Path of the LipDub IC-LoRA currently fused into the loaded transformer,
-    /// or nil when the transformer weights are pristine. Exposed so host apps can
-    /// decide whether the next LipDub segment can reuse the loaded pipeline
+    /// Canonical path of the LipDub IC-LoRA currently fused into the loaded
+    /// transformer, or nil when the weights are pristine. Exposed so host apps
+    /// can decide whether the next LipDub segment can reuse the loaded pipeline
     /// (same LoRA → no reload needed) or must call `loadModels()` again.
-    public var fusedLipDubLoRAPath: String? { lipdubFusedLoRAPath }
+    public var fusedLipDubLoRAPath: String? { lipdubFusion?.path }
+
+    private static func canonicalLoRAPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    private static func loraModificationDate(_ path: String) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+    }
+
+    /// Throws when the LipDub IC-LoRA is fused into the loaded transformer: its
+    /// delta is destructive (no pristine weights kept) and would corrupt any
+    /// non-LipDub use of the weights.
+    private func ensureNoLipDubLoRAFused(wouldCorrupt operation: String) throws {
+        if let fused = lipdubFusion {
+            throw LTXError.invalidConfiguration(
+                "The LipDub IC-LoRA is fused into the loaded transformer " +
+                "(\(fused.path)) and would corrupt \(operation). " +
+                "Call loadModels() + loadAudioModels() to restore pristine weights."
+            )
+        }
+    }
+
+    /// Unload Gemma + tokenizer (~7.5 GB) when the memory config asks for it.
+    /// Kept resident with `unloadAfterUse == false` so consecutive runs can
+    /// re-encode text without reloading models.
+    private func unloadGemmaIfConfigured() {
+        guard memoryOptimization.unloadAfterUse else { return }
+        gemmaModel = nil
+        tokenizer = nil
+        Memory.clearCache()
+    }
 
     /// Whether models are loaded (Gemma may be nil after unloading post-encoding)
     public var isLoaded: Bool {
@@ -559,7 +598,7 @@ public actor LTXPipeline {
         }
 
         ltx2Transformer = ltx2
-        lipdubFusedLoRAPath = nil  // fresh weights from the unified file
+        lipdubFusion = nil  // fresh weights from the unified file
 
         transformer = nil
         Memory.clearCache()
@@ -799,13 +838,7 @@ public actor LTXPipeline {
             throw LTXError.modelNotLoaded("No transformer loaded. Call loadModels() first.")
         }
 
-        guard lipdubFusedLoRAPath == nil else {
-            throw LTXError.invalidConfiguration(
-                "The LipDub IC-LoRA is fused into the loaded transformer " +
-                "(\(lipdubFusedLoRAPath!)) and would corrupt regular generation. " +
-                "Call loadModels() + loadAudioModels() to restore pristine weights."
-            )
-        }
+        try ensureNoLipDubLoRAFused(wouldCorrupt: "regular generation")
 
         let generationStart = Date()
 
@@ -884,14 +917,7 @@ public actor LTXPipeline {
         LTXDebug.log("Video text: \(videoTextEmbeddings.shape), Audio text: \(audioTextEmbeddings.shape)")
         profiler.end("Text Encoding")
 
-        // Unload Gemma — frees ~7.5 GB. Kept resident with unloadAfterUse == false
-        // (MemoryOptimizationConfig.disabled) so consecutive runs can re-encode
-        // text without reloading models.
-        if memoryOptimization.unloadAfterUse {
-            self.gemmaModel = nil
-            self.tokenizer = nil
-            Memory.clearCache()
-        }
+        unloadGemmaIfConfigured()
 
         // 2. Create latent shapes
         let stage1Shape = VideoLatentShape.fromPixelDimensions(
@@ -1160,7 +1186,7 @@ public actor LTXPipeline {
         if memoryOptimization.unloadAfterUse {
             self.ltx2Transformer = nil
             self.transformer = nil
-            self.lipdubFusedLoRAPath = nil
+            self.lipdubFusion = nil
             Memory.clearCache()
             LTXDebug.log("Transformer unloaded")
         }
@@ -1292,13 +1318,7 @@ public actor LTXPipeline {
             throw LTXError.modelNotLoaded("No transformer loaded. Call loadModels() first.")
         }
 
-        guard lipdubFusedLoRAPath == nil else {
-            throw LTXError.invalidConfiguration(
-                "The LipDub IC-LoRA is fused into the loaded transformer " +
-                "(\(lipdubFusedLoRAPath!)) and would corrupt retake generation. " +
-                "Call loadModels() + loadAudioModels() to restore pristine weights."
-            )
-        }
+        try ensureNoLipDubLoRAFused(wouldCorrupt: "retake generation")
 
         let generationStart = Date()
 
@@ -1380,13 +1400,7 @@ public actor LTXPipeline {
         LTXDebug.log("Text encoding: video=\(videoTextEmbeddings.shape), audio=\(audioTextEmbeddings?.shape.description ?? "nil")")
         profiler.end("Text Encoding")
 
-        // Unload Gemma — kept resident with unloadAfterUse == false so
-        // consecutive runs can re-encode text without reloading models.
-        if memoryOptimization.unloadAfterUse {
-            self.gemmaModel = nil
-            self.tokenizer = nil
-            Memory.clearCache()
-        }
+        unloadGemmaIfConfigured()
 
         // Phase 2: Single-stage denoising at native resolution
         let latentShape = VideoLatentShape.fromPixelDimensions(
@@ -1471,9 +1485,14 @@ public actor LTXPipeline {
         var negVideoTextEmbeddings: MLXArray? = nil
         var negAudioTextEmbeddings: MLXArray? = nil
         if useDevModel {
-            // Re-load Gemma for negative prompt encoding (was unloaded above)
+            // Re-load Gemma for negative prompt encoding — only when it was
+            // actually unloaded above (with unloadAfterUse == false it is still
+            // resident, and an unconditional loadModels() would rebuild the full
+            // Gemma + transformer + VAE stack mid-run on top of the live one).
             // Use empty string as negative prompt (matching Lightricks default for MLX)
-            try await loadModels(progressCallback: nil)
+            if gemmaModel == nil || tokenizer == nil {
+                try await loadModels(progressCallback: nil)
+            }
             guard let gemma2 = gemmaModel else {
                 throw LTXError.modelNotLoaded("Failed to reload Gemma for negative prompt")
             }
@@ -1493,12 +1512,7 @@ public actor LTXPipeline {
             MLX.eval(negVideoTextEmbeddings!)
             if let nae = negAudioTextEmbeddings { MLX.eval(nae) }
 
-            // Unload Gemma again (same unloadAfterUse gating as above)
-            if memoryOptimization.unloadAfterUse {
-                self.gemmaModel = nil
-                self.tokenizer = nil
-                Memory.clearCache()
-            }
+            unloadGemmaIfConfigured()
         }
 
         LTXDebug.log("Retake: \(numSteps) steps, cfg=\(cfgScale), rescale=\(guidanceRescale), sigmas: \(sigmas)")
@@ -1667,7 +1681,7 @@ public actor LTXPipeline {
         if memoryOptimization.unloadAfterUse {
             self.ltx2Transformer = nil
             self.transformer = nil
-            self.lipdubFusedLoRAPath = nil
+            self.lipdubFusion = nil
             Memory.clearCache()
             LTXDebug.log("Transformer unloaded")
         }
@@ -1917,39 +1931,57 @@ public actor LTXPipeline {
         }
         // [DIAGNOSTIC] LTX_LIPDUB_SKIP_LORA=1 bypasses LoRA fusion to isolate IC-LoRA contribution.
         let skipLoRA = ProcessInfo.processInfo.environment["LTX_LIPDUB_SKIP_LORA"] == "1"
+        let canonicalLoRA = Self.canonicalLoRAPath(lipdubLoraPath)
         if skipLoRA {
+            // The diagnostic is only meaningful on pristine weights: a transformer
+            // still fused from a previous run would silently compare fused vs fused.
+            try ensureNoLipDubLoRAFused(wouldCorrupt: "the LTX_LIPDUB_SKIP_LORA A/B diagnostic")
             print("[lipdub][DIAG] LTX_LIPDUB_SKIP_LORA=1 — skipping LoRA fusion")
-        } else if let alreadyFused = lipdubFusedLoRAPath {
+        } else if let fused = lipdubFusion {
             // Consecutive runs with the same LoRA (e.g. app-side segmentation of a
             // long dialogue) reuse the fused transformer — re-fusing would apply
             // the delta twice, and reloading the 22B per segment is needless.
-            guard alreadyFused == lipdubLoraPath else {
+            guard fused.path == canonicalLoRA else {
                 throw LTXError.invalidConfiguration(
                     "A different LipDub LoRA is already fused into the transformer " +
-                    "(\(alreadyFused)). No pristine weights are kept for the 22B model, " +
+                    "(\(fused.path)). No pristine weights are kept for the 22B model, " +
                     "so switching LoRA requires reloading: call loadModels() + loadAudioModels() first."
+                )
+            }
+            guard fused.modificationDate == Self.loraModificationDate(canonicalLoRA) else {
+                throw LTXError.invalidConfiguration(
+                    "The LipDub LoRA file changed on disk since it was fused " +
+                    "(\(fused.path)). Reusing the fused transformer would run stale " +
+                    "weights: call loadModels() + loadAudioModels() to re-fuse."
                 )
             }
             print("[lipdub] LoRA already fused (same file) — reusing fused transformer")
         } else {
+            // A generic LoRA fused via fuseLoRA() would be baked under the IC-LoRA
+            // delta, and a later unfuseLoRA() would partially wipe it — refuse the
+            // ambiguous stack instead of corrupting silently.
+            guard loraOriginalWeights == nil else {
+                throw LTXError.invalidConfiguration(
+                    "A LoRA is already fused via fuseLoRA() (\(loraFusedPath ?? "?")). " +
+                    "Call unfuseLoRA() before generateLipDub, or reload the models."
+                )
+            }
             LTXDebug.log("[lipdub] fusing LipDub IC-LoRA into LTX2Transformer...")
             let loraDebug = ProcessInfo.processInfo.environment["LTX_LIPDUB_LORA_DEBUG"] == "1"
             let prevDebug = LTXDebug.isEnabled
+            defer { LTXDebug.isEnabled = prevDebug }
             if loraDebug { LTXDebug.enableDebugMode() }
-            let probeWeights = try LoRALoader.load(
-                from: lipdubLoraPath,
-                config: LoRAConfig(weightsPath: lipdubLoraPath, scale: 1.0)
-            )
-            print("[lipdub] LoRA file contains \(probeWeights.layers.count) layer-pairs (lora_A+lora_B)")
+            // Record the mtime BEFORE fusing so an overwrite racing the fusion is
+            // detected as "changed" on the next run rather than missed.
+            let fusedMtime = Self.loraModificationDate(canonicalLoRA)
             let (_, fuseResult) = try ltx2.fuseLoRA(from: lipdubLoraPath, scale: 1.0)
-            let coverage = probeWeights.layers.count > 0
-                ? Float(fuseResult.modifiedLayerCount) / Float(probeWeights.layers.count) * 100.0
+            let coverage = fuseResult.totalLayerCount > 0
+                ? Float(fuseResult.modifiedLayerCount) / Float(fuseResult.totalLayerCount) * 100.0
                 : 0
-            print("[lipdub] LoRA fused: \(fuseResult.modifiedLayerCount) / \(probeWeights.layers.count) layer-pairs (\(String(format: "%.1f", coverage))%) — \(fuseResult.loraName)")
-            if !loraDebug { _ = prevDebug } else { LTXDebug.isEnabled = prevDebug }
+            print("[lipdub] LoRA fused: \(fuseResult.modifiedLayerCount) / \(fuseResult.totalLayerCount) layer-pairs (\(String(format: "%.1f", coverage))%) — \(fuseResult.loraName)")
             eval(ltx2.parameters())
             Memory.clearCache()
-            lipdubFusedLoRAPath = lipdubLoraPath
+            lipdubFusion = LipDubFusionRecord(path: canonicalLoRA, modificationDate: fusedMtime)
         }
 
         // 2. Snap target frame count to 8k+1 based on the reference video.
@@ -1985,15 +2017,10 @@ public actor LTXPipeline {
         let audioTextEmbeddings = encoderOutput.audioEncoding ?? videoTextEmbeddings
         let textMask = encoderOutput.attentionMask
         MLX.eval(videoTextEmbeddings, audioTextEmbeddings, textMask)
-        // Unload Gemma — frees ~7.5 GB before the dual-stream denoising loops.
-        // Kept resident with unloadAfterUse == false (MemoryOptimizationConfig
-        // .disabled) so consecutive LipDub segments can re-encode their prompt
-        // without reloading models — the whole point of the fused-LoRA reuse.
-        if memoryOptimization.unloadAfterUse {
-            self.gemmaModel = nil
-            self.tokenizer = nil
-            Memory.clearCache()
-        }
+        // Frees ~7.5 GB before the dual-stream denoising loops; kept resident
+        // with .disabled so consecutive LipDub segments can re-encode their
+        // prompt — the whole point of the fused-LoRA reuse.
+        unloadGemmaIfConfigured()
 
         // 4. Stage 1 reference: VIDEO MODE uses the IC-LoRA multi-frame reference
         // at downscaled resolution; IMAGE MODE uses the I2V keyframe-append pattern
@@ -2282,7 +2309,7 @@ public actor LTXPipeline {
         // fused transformer across consecutive same-LoRA segments.)
         if memoryOptimization.unloadAfterUse {
             self.ltx2Transformer = nil
-            self.lipdubFusedLoRAPath = nil
+            self.lipdubFusion = nil
             Memory.clearCache()
         }
 
@@ -2586,6 +2613,9 @@ public actor LTXPipeline {
     ///
     /// - Parameter path: Output safetensors file path
     public func exportQuantizedTransformer(to path: String) throws {
+        // Exporting a LipDub-fused transformer would persist the destructive
+        // IC-LoRA delta to disk as if it were pristine base weights.
+        try ensureNoLipDubLoRAFused(wouldCorrupt: "the exported weights (persisted to disk)")
         let beacon = RuntimeBeacon.begin(task: "export-quantized", model: self.model.rawValue)
         defer { beacon?.end() }
         let model: Module
@@ -3019,20 +3049,25 @@ public actor LTXPipeline {
     /// - Parameters:
     ///   - loraPath: Path to LoRA .safetensors file
     ///   - scale: LoRA scale factor
-    /// - Returns: Number of layers modified
+    /// - Returns: Number of LoRA layer-pairs fused (NOT the number of tensors
+    ///   saved for unfusing — quantized layers save weight+scales+biases)
     @discardableResult
     public func fuseLoRA(
         from loraPath: String,
         scale: Float = 1.0
     ) throws -> Int {
+        // Fusing a generic LoRA on top of the destructively-fused LipDub IC-LoRA
+        // would capture LipDub-contaminated weights as the "originals" — a later
+        // unfuseLoRA() would then restore corrupted weights as if pristine.
+        try ensureNoLipDubLoRAFused(wouldCorrupt: "fuseLoRA (its unfuse originals)")
         let target = try getTransformerModule()
-        let (originals, _) = try target.fuseLoRA(from: loraPath, scale: scale)
+        let (originals, result) = try target.fuseLoRA(from: loraPath, scale: scale)
         // Store state for unfusing
         self.loraOriginalWeights = originals
         self.loraFusedPath = loraPath
         self.loraFusedScale = scale
         Memory.clearCache()
-        return originals.count
+        return result.modifiedLayerCount
     }
 
     /// Restore transformer weights to pre-LoRA state.
@@ -3154,7 +3189,7 @@ public actor LTXPipeline {
         vaeDecoder = nil
         vaeEncoder = nil
         ltx2Transformer = nil
-        lipdubFusedLoRAPath = nil
+        lipdubFusion = nil
         audioVAE = nil
         vocoder = nil
         loraOriginalWeights = nil

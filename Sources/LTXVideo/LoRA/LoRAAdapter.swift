@@ -284,8 +284,13 @@ class LoRAAdapter {
 
 /// Result of applying LoRA to a model
 public struct LoRAApplicationResult: Sendable {
-    /// Number of layers modified
+    /// Number of LoRA layer-pairs actually fused into the model
     public let modifiedLayerCount: Int
+
+    /// Number of layer-pairs (lora_A+lora_B) present in the LoRA file —
+    /// the denominator for coverage reporting, so callers don't need a
+    /// second LoRALoader.load just to count.
+    public let totalLayerCount: Int
 
     /// Name of the applied LoRA
     public let loraName: String
@@ -334,6 +339,7 @@ class MultiLoRAAdapter {
             let count = adapter.applyFused(to: model)
             results.append(LoRAApplicationResult(
                 modifiedLayerCount: count,
+                totalLayerCount: adapter.loraWeights.layers.count,
                 loraName: adapter.loraWeights.info.name,
                 scale: adapter.loraWeights.scale,
                 fused: adapter.fused,
@@ -377,6 +383,7 @@ extension LTXTransformer {
 
         return LoRAApplicationResult(
             modifiedLayerCount: count,
+            totalLayerCount: weights.layers.count,
             loraName: weights.info.name,
             scale: scale,
             fused: true,
@@ -407,6 +414,7 @@ extension Module {
 
         let result = LoRAApplicationResult(
             modifiedLayerCount: fusedLayerCount,
+            totalLayerCount: weights.layers.count,
             loraName: weights.info.name,
             scale: scale,
             fused: true,

@@ -282,7 +282,7 @@ extension LTXTransformerConfig: CustomStringConvertible {
 ///
 /// ## Constraints
 /// - **Width/Height**: Must be divisible by 64 (for two-stage)
-/// - **Frame count**: Must be `8n + 1` (9, 17, 25, ..., 241)
+/// - **Frame count**: Must be `8n + 1` (9, 17, 25, ..., 481)
 ///
 /// ## Example
 /// ```swift
@@ -435,7 +435,7 @@ public struct LTXVideoGenerationConfig: Sendable {
 
         // Frames must be 8n + 1
         guard (numFrames - 1) % 8 == 0 else {
-            throw LTXError.invalidConfiguration("Number of frames must be 8n + 1 (e.g., 9, 17, 25, ..., 121), got \(numFrames)")
+            throw LTXError.invalidConfiguration("Number of frames must be 8n + 1 (e.g., 9, 17, 25, ..., 481), got \(numFrames)")
         }
 
         // Reasonable bounds

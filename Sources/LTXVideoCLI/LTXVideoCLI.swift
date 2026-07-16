@@ -263,7 +263,7 @@ struct Generate: AsyncParsableCommand {
             print("Fusing LoRA weights...")
             fflush(stdout)
             let fusedCount = try await pipeline.fuseLoRA(from: loraPath, scale: loraScale)
-            print("LoRA fused (\(fusedCount) weight updates)")
+            print("LoRA fused (\(fusedCount) layer-pairs)")
         }
 
         // Download upscaler (always needed for two-stage)
@@ -578,7 +578,7 @@ struct Retake: AsyncParsableCommand {
             print("Fusing LoRA weights...")
             fflush(stdout)
             let fusedCount = try await pipeline.fuseLoRA(from: loraPath, scale: loraScale)
-            print("LoRA fused (\(fusedCount) weight updates)")
+            print("LoRA fused (\(fusedCount) layer-pairs)")
         }
 
         // Build config

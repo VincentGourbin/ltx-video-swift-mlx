@@ -36,6 +36,13 @@ public enum AudioPreprocessor {
     /// "speech" (its floor plus the margin stays below `thresholdDB`, preserving
     /// the old behavior).
     ///
+    /// The floor estimate (10th-percentile frame RMS) is only trusted when the
+    /// clip has real silence to estimate from: on tightly-trimmed clips (<10%
+    /// silence) the percentile lands on quiet SPEECH, and a threshold derived
+    /// from it would clip soft onsets or reject every frame. The estimate is
+    /// therefore ignored unless it sits at least `floorDynamicRangeDB` below the
+    /// loudest frame — a real noise floor always does; quiet speech does not.
+    ///
     /// Frames below threshold at the head/tail are treated as silence;
     /// mid-utterance pauses are NOT trimmed (only leading/trailing silence is
     /// removed). Returns `(0, count)` if no frame exceeds threshold — including
@@ -66,14 +73,21 @@ public enum AudioPreprocessor {
         }
 
         // Noise floor = 10th-percentile frame RMS: silence frames cluster there,
-        // speech frames sit well above. (On an all-speech clip this is speech level
-        // and the floor-relative threshold exceeds every frame — the absolute
-        // threshold then decides, and the full-clip fallback covers the rest.)
+        // speech frames sit well above. Trust it only when it is far below the
+        // loudest frame (≥ floorDynamicRangeDB): on tightly-trimmed clips the
+        // percentile lands on quiet speech, and using that as a "floor" would
+        // regress exactly the clean recordings the absolute threshold handles.
+        let floorDynamicRangeDB: Float = 15
         let sortedRMS = frameRMS.sorted()
         let noiseFloor = sortedRMS[numFrames / 10]
+        let peakRMS = sortedRMS[numFrames - 1]
 
         let absoluteThreshold = pow(10.0, thresholdDB / 20.0)
-        let floorRelativeThreshold = noiseFloor * pow(10.0, noiseFloorMarginDB / 20.0)
+        let floorIsCredible = noiseFloor > 0
+            && peakRMS / noiseFloor >= pow(10.0, floorDynamicRangeDB / 20.0)
+        let floorRelativeThreshold = floorIsCredible
+            ? noiseFloor * pow(10.0, noiseFloorMarginDB / 20.0)
+            : 0
         let threshold = max(absoluteThreshold, floorRelativeThreshold)
 
         var firstActive = -1
