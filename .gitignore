@@ -28,6 +28,7 @@ DerivedData/
 
 # Xcode build output
 .xcodebuild/
+.xcodebuild-tests/
 
 # Model weights (large files)
 *.safetensors

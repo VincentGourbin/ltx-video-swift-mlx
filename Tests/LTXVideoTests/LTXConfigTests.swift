@@ -175,6 +175,20 @@ struct LTXVideoGenerationConfigTests {
         }
     }
 
+    // 481 frames = 20 s at 24 fps, the RoPE positional range (maxPos[0] = 20 s).
+    // Values used to be capped at 257 (~10.7 s) — too short for dubbing use cases.
+    @Test func testFrameCountUpToRoPERange() throws {
+        for n in [265, 361, 481] {
+            let config = LTXVideoGenerationConfig(width: 768, height: 512, numFrames: n)
+            try config.validate()
+        }
+    }
+
+    @Test func testFramesBeyondRoPERange() {
+        let config = LTXVideoGenerationConfig(width: 768, height: 512, numFrames: 489)
+        #expect(throws: LTXError.self) { try config.validate() }
+    }
+
     @Test func testWidthTooSmall() {
         let config = LTXVideoGenerationConfig(width: 32, height: 512)
         #expect(throws: LTXError.self) { try config.validate() }

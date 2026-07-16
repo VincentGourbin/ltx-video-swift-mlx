@@ -22,14 +22,30 @@ public enum AudioPreprocessor {
 
     /// Detect the speech-active window `[startSample, endSample)` in a mono waveform.
     ///
-    /// Uses fixed-size frame RMS vs a dBFS threshold to locate the first and last
-    /// frame containing speech. Frames below threshold at the head/tail are treated
-    /// as silence; mid-utterance pauses are NOT trimmed (only leading/trailing
-    /// silence is removed). Returns `(0, count)` if no frame exceeds threshold.
+    /// Uses fixed-size frame RMS against the *stricter* of two thresholds:
+    /// - `thresholdDB`, an absolute dBFS floor, and
+    /// - the waveform's own noise floor (10th-percentile frame RMS) plus
+    ///   `noiseFloorMarginDB`.
+    ///
+    /// The floor-relative term matters for synthesized/enrolled voices whose
+    /// "silences" carry a learned noise floor above the absolute threshold
+    /// (measured case: -32.5 dB floor vs the -35 dB default — every frame counted
+    /// as speech and no window was found). Anchoring to the signal's own floor
+    /// keeps detection working regardless of the recording's noise level, while
+    /// the absolute floor prevents a quiet noise-only clip from being promoted to
+    /// "speech" (its floor plus the margin stays below `thresholdDB`, preserving
+    /// the old behavior).
+    ///
+    /// Frames below threshold at the head/tail are treated as silence;
+    /// mid-utterance pauses are NOT trimmed (only leading/trailing silence is
+    /// removed). Returns `(0, count)` if no frame exceeds threshold — including
+    /// when the clip has no dynamic range (all speech or all noise), where "the
+    /// whole clip" is the only defensible window.
     public static func detectSpeechWindow(
         waveform: [Float],
         sampleRate: Int,
         thresholdDB: Float = -35,
+        noiseFloorMarginDB: Float = 10,
         frameMS: Int = 10
     ) -> (start: Int, end: Int) {
         let frameSamples = sampleRate * frameMS / 1000
@@ -37,11 +53,8 @@ public enum AudioPreprocessor {
             return (0, waveform.count)
         }
 
-        let threshold = pow(10.0, thresholdDB / 20.0)
         let numFrames = waveform.count / frameSamples
-
-        var firstActive = -1
-        var lastActive = -1
+        var frameRMS = [Float](repeating: 0, count: numFrames)
         for f in 0..<numFrames {
             var sumSq: Float = 0
             let base = f * frameSamples
@@ -49,11 +62,25 @@ public enum AudioPreprocessor {
                 let s = waveform[base + i]
                 sumSq += s * s
             }
-            let rms = sqrt(sumSq / Float(frameSamples))
-            if rms > threshold {
-                if firstActive < 0 { firstActive = f }
-                lastActive = f
-            }
+            frameRMS[f] = sqrt(sumSq / Float(frameSamples))
+        }
+
+        // Noise floor = 10th-percentile frame RMS: silence frames cluster there,
+        // speech frames sit well above. (On an all-speech clip this is speech level
+        // and the floor-relative threshold exceeds every frame — the absolute
+        // threshold then decides, and the full-clip fallback covers the rest.)
+        let sortedRMS = frameRMS.sorted()
+        let noiseFloor = sortedRMS[numFrames / 10]
+
+        let absoluteThreshold = pow(10.0, thresholdDB / 20.0)
+        let floorRelativeThreshold = noiseFloor * pow(10.0, noiseFloorMarginDB / 20.0)
+        let threshold = max(absoluteThreshold, floorRelativeThreshold)
+
+        var firstActive = -1
+        var lastActive = -1
+        for f in 0..<numFrames where frameRMS[f] > threshold {
+            if firstActive < 0 { firstActive = f }
+            lastActive = f
         }
 
         if firstActive < 0 {
@@ -188,17 +215,22 @@ public enum AudioPreprocessor {
     ///   - source: Mono source audio (for timing reference only).
     ///   - target: Mono target audio (the speech content to lip-sync to).
     ///   - sampleRate: Sample rate (Hz) — must match both inputs.
-    ///   - thresholdDB: RMS threshold for silence detection (dBFS).
+    ///   - thresholdDB: Absolute RMS floor for silence detection (dBFS).
+    ///   - noiseFloorMarginDB: Margin above each waveform's own estimated noise
+    ///     floor; the stricter of the two thresholds wins (see ``detectSpeechWindow``).
     /// - Returns: `(alignedWaveform, ratio, sourceWindow, targetWindow)` where ratio
     ///   is the stretch factor that was applied (1.0 means no stretch).
     public static func alignTargetToSource(
         source: [Float],
         target: [Float],
         sampleRate: Int,
-        thresholdDB: Float = -35
+        thresholdDB: Float = -35,
+        noiseFloorMarginDB: Float = 10
     ) throws -> (waveform: [Float], rate: Float, sourceWindow: (Int, Int), targetWindow: (Int, Int)) {
-        let srcWin = detectSpeechWindow(waveform: source, sampleRate: sampleRate, thresholdDB: thresholdDB)
-        let tgtWin = detectSpeechWindow(waveform: target, sampleRate: sampleRate, thresholdDB: thresholdDB)
+        let srcWin = detectSpeechWindow(waveform: source, sampleRate: sampleRate,
+                                        thresholdDB: thresholdDB, noiseFloorMarginDB: noiseFloorMarginDB)
+        let tgtWin = detectSpeechWindow(waveform: target, sampleRate: sampleRate,
+                                        thresholdDB: thresholdDB, noiseFloorMarginDB: noiseFloorMarginDB)
 
         let srcSpeechSamples = srcWin.end - srcWin.start
         let tgtSpeechSamples = tgtWin.end - tgtWin.start

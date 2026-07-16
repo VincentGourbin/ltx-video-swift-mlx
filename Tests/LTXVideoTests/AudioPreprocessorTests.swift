@@ -50,6 +50,44 @@ struct AudioPreprocessorTests {
         #expect(end == wave.count)
     }
 
+    // Regression for the enrolled-voice case (Fluxforge asks, B2): the voice's
+    // "silences" carry a learned noise floor of -32.5 dB — ABOVE the -35 dB
+    // absolute threshold, so every frame counted as speech and no window was
+    // found. The floor-relative term (noise floor + 10 dB) must recover the window.
+    @Test("detectSpeechWindow finds the window despite a -32.5 dB noise floor")
+    func testDetectSpeechWindowEnrolledVoiceNoiseFloor() {
+        let sr = 16000
+        let leadSamples = sr / 4
+        let speechSamples = sr / 2
+        let trailSamples = sr / 4
+        let noiseFloor: Float = 0.0237  // ≈ -32.5 dBFS RMS (measured on enrolled voice)
+        var wave = [Float](repeating: 0, count: leadSamples + speechSamples + trailSamples)
+        for i in 0..<wave.count {
+            // Deterministic pseudo-noise at the measured floor
+            wave[i] = noiseFloor * 1.414 * sin(2 * .pi * 1731 * Float(i) / Float(sr))
+        }
+        for i in 0..<speechSamples {
+            wave[leadSamples + i] = 0.3 * sin(2 * .pi * 440 * Float(i) / Float(sr))
+        }
+        let (start, end) = AudioPreprocessor.detectSpeechWindow(waveform: wave, sampleRate: sr)
+        #expect(abs(start - leadSamples) <= 160)
+        #expect(abs(end - (leadSamples + speechSamples)) <= 160)
+    }
+
+    // The absolute floor must keep quiet noise-only clips out of "speech": their
+    // peak − 25 dB lands below -35 dBFS, so no window is promoted (old behavior).
+    @Test("detectSpeechWindow still returns (0, count) for quiet noise-only audio")
+    func testDetectSpeechWindowQuietNoiseOnly() {
+        let sr = 16000
+        var wave = [Float](repeating: 0, count: sr)
+        for i in 0..<wave.count {
+            wave[i] = 0.005 * sin(2 * .pi * 997 * Float(i) / Float(sr))  // ≈ -49 dBFS RMS
+        }
+        let (start, end) = AudioPreprocessor.detectSpeechWindow(waveform: wave, sampleRate: sr)
+        #expect(start == 0)
+        #expect(end == wave.count)
+    }
+
     // MARK: - Time stretching
 
     @Test("timeStretch with rate=1.0 returns input unchanged")

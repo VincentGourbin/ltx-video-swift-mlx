@@ -182,6 +182,8 @@ ltx-video lipdub 'Speaking in Spanish saying: "Hola a todos..."' \
 
 See [docs/examples/lipdub/README.md](docs/examples/lipdub/README.md) for pipeline details and constraints.
 
+**Consecutive runs (Swift package):** the IC-LoRA is fused destructively into the 22B transformer. Consecutive `generateLipDub` calls with the same LoRA reuse the fused transformer without re-fusing — no model reload per segment — provided the transformer survives between runs (`MemoryOptimizationConfig.disabled`, i.e. `unloadAfterUse: false`). Switching LoRA, or running `generateVideo`/`generateRetake` while fused, throws until `loadModels()` + `loadAudioModels()` restore pristine weights. Check `pipeline.fusedLipDubLoRAPath` for the current state.
+
 ### LoRA Training (Beta)
 
 > **Status**: Theoretically functional, currently under validation. The full training pipeline runs end-to-end (dataset loading, latent caching, gradient computation, checkpoint saving, LoRA export). Validation is in progress with the [Cakeify dataset](https://huggingface.co/datasets/Lightricks/Cakeify-Dataset).
@@ -544,7 +546,7 @@ See [docs/benchmarks/](docs/benchmarks/) for full benchmark details and methodol
 
 ## Constraints
 
-- **Frame count**: Must be `8n + 1` (9, 17, 25, 33, 41, 49, 57, 65, 73, 81, 89, 97, 105, 113, 121, ...)
+- **Frame count**: Must be `8n + 1` (9, 17, 25, 33, 41, 49, 57, 65, 73, 81, 89, 97, 105, 113, 121, ...), up to 481 (= 20 s at 24 fps — the model's RoPE positional range; typical training clips are shorter, so expect some quality softening on very long videos)
 - **Resolution**: Width and height divisible by 64
 - **Recommended**: 768x512, 1024x576, 832x480
 

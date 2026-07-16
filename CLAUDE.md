@@ -40,7 +40,7 @@ MLX products used: `MLX`, `MLXNN`, `MLXRandom`, `Transformers`
 
 ## Model Constraints
 
-**Frame count**: Must be `8n + 1` (valid: 9, 17, 25, 33, 41, 49, 57, 65, 73, 81, 89, 97)
+**Frame count**: Must be `8n + 1` (valid: 9, 17, 25, ..., 481). Max 481 = 20 s at 24 fps, the RoPE positional range (`maxPos[0]` = 20 s).
 
 **Resolution**: Must be divisible by 32. Recommended: 512x512, 768x512, 512x768, 832x480, 1024x576
 

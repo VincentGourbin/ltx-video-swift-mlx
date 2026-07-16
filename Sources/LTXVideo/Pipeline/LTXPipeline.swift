@@ -200,6 +200,20 @@ public actor LTXPipeline {
     /// Whether a LoRA is currently fused into the transformer
     public var isLoRAFused: Bool { loraOriginalWeights != nil }
 
+    /// Path of the LipDub IC-LoRA currently fused into `ltx2Transformer`
+    /// (nil = pristine weights). Unlike `loraFusedPath`, no original weights are
+    /// kept (too large for the 22B transformer): consecutive `generateLipDub`
+    /// runs with the SAME LoRA file reuse the fused transformer as-is; switching
+    /// LoRA requires reloading the models. Cleared wherever the transformer is
+    /// unloaded or recreated from the unified file.
+    private var lipdubFusedLoRAPath: String? = nil
+
+    /// Path of the LipDub IC-LoRA currently fused into the loaded transformer,
+    /// or nil when the transformer weights are pristine. Exposed so host apps can
+    /// decide whether the next LipDub segment can reuse the loaded pipeline
+    /// (same LoRA → no reload needed) or must call `loadModels()` again.
+    public var fusedLipDubLoRAPath: String? { lipdubFusedLoRAPath }
+
     /// Whether models are loaded (Gemma may be nil after unloading post-encoding)
     public var isLoaded: Bool {
         textEncoder != nil && (transformer != nil || ltx2Transformer != nil) && vaeDecoder != nil
@@ -545,6 +559,7 @@ public actor LTXPipeline {
         }
 
         ltx2Transformer = ltx2
+        lipdubFusedLoRAPath = nil  // fresh weights from the unified file
 
         transformer = nil
         Memory.clearCache()
@@ -782,6 +797,14 @@ public actor LTXPipeline {
         // Need either video-only OR dual transformer
         guard transformer != nil || ltx2Transformer != nil else {
             throw LTXError.modelNotLoaded("No transformer loaded. Call loadModels() first.")
+        }
+
+        guard lipdubFusedLoRAPath == nil else {
+            throw LTXError.invalidConfiguration(
+                "The LipDub IC-LoRA is fused into the loaded transformer " +
+                "(\(lipdubFusedLoRAPath!)) and would corrupt regular generation. " +
+                "Call loadModels() + loadAudioModels() to restore pristine weights."
+            )
         }
 
         let generationStart = Date()
@@ -1133,6 +1156,7 @@ public actor LTXPipeline {
         if memoryOptimization.unloadAfterUse {
             self.ltx2Transformer = nil
             self.transformer = nil
+            self.lipdubFusedLoRAPath = nil
             Memory.clearCache()
             LTXDebug.log("Transformer unloaded")
         }
@@ -1262,6 +1286,14 @@ public actor LTXPipeline {
 
         guard transformer != nil || ltx2Transformer != nil else {
             throw LTXError.modelNotLoaded("No transformer loaded. Call loadModels() first.")
+        }
+
+        guard lipdubFusedLoRAPath == nil else {
+            throw LTXError.invalidConfiguration(
+                "The LipDub IC-LoRA is fused into the loaded transformer " +
+                "(\(lipdubFusedLoRAPath!)) and would corrupt retake generation. " +
+                "Call loadModels() + loadAudioModels() to restore pristine weights."
+            )
         }
 
         let generationStart = Date()
@@ -1626,6 +1658,7 @@ public actor LTXPipeline {
         if memoryOptimization.unloadAfterUse {
             self.ltx2Transformer = nil
             self.transformer = nil
+            self.lipdubFusedLoRAPath = nil
             Memory.clearCache()
             LTXDebug.log("Transformer unloaded")
         }
@@ -1741,6 +1774,16 @@ public actor LTXPipeline {
     /// > default 1.0) is hard-coded to 1.0 here — the reference is fully clean
     /// > (`denoise_mask = 0`). Partial-strength reference conditioning would require
     /// > adding per-token denoise-mask blending in `runDenoiseStep`; not implemented.
+    ///
+    /// ## Consecutive runs (segmentation)
+    /// The IC-LoRA is fused destructively (no pristine weights are kept for the 22B
+    /// transformer). Consecutive calls with the **same** `lipdubLoraPath` reuse the
+    /// fused transformer without re-fusing or reloading — provided the transformer
+    /// survives between runs, i.e. `memoryOptimization.unloadAfterUse == false`
+    /// (use ``MemoryOptimizationConfig/disabled``). Switching to a different LoRA,
+    /// or calling `generateVideo`/`generateRetake` while fused, throws until
+    /// `loadModels()` + `loadAudioModels()` restore pristine weights. Check
+    /// ``fusedLipDubLoRAPath`` to know the current state.
     public func generateLipDub(
         prompt: String,
         referenceVideoPath: String? = nil,
@@ -1867,6 +1910,18 @@ public actor LTXPipeline {
         let skipLoRA = ProcessInfo.processInfo.environment["LTX_LIPDUB_SKIP_LORA"] == "1"
         if skipLoRA {
             print("[lipdub][DIAG] LTX_LIPDUB_SKIP_LORA=1 — skipping LoRA fusion")
+        } else if let alreadyFused = lipdubFusedLoRAPath {
+            // Consecutive runs with the same LoRA (e.g. app-side segmentation of a
+            // long dialogue) reuse the fused transformer — re-fusing would apply
+            // the delta twice, and reloading the 22B per segment is needless.
+            guard alreadyFused == lipdubLoraPath else {
+                throw LTXError.invalidConfiguration(
+                    "A different LipDub LoRA is already fused into the transformer " +
+                    "(\(alreadyFused)). No pristine weights are kept for the 22B model, " +
+                    "so switching LoRA requires reloading: call loadModels() + loadAudioModels() first."
+                )
+            }
+            print("[lipdub] LoRA already fused (same file) — reusing fused transformer")
         } else {
             LTXDebug.log("[lipdub] fusing LipDub IC-LoRA into LTX2Transformer...")
             let loraDebug = ProcessInfo.processInfo.environment["LTX_LIPDUB_LORA_DEBUG"] == "1"
@@ -1881,10 +1936,11 @@ public actor LTXPipeline {
             let coverage = probeWeights.layers.count > 0
                 ? Float(fuseResult.modifiedLayerCount) / Float(probeWeights.layers.count) * 100.0
                 : 0
-            print("[lipdub] LoRA fused: \(fuseResult.modifiedLayerCount) / \(probeWeights.layers.count) layers (\(String(format: "%.1f", coverage))%) — \(fuseResult.loraName)")
+            print("[lipdub] LoRA fused: \(fuseResult.modifiedLayerCount) / \(probeWeights.layers.count) layer-pairs (\(String(format: "%.1f", coverage))%) — \(fuseResult.loraName)")
             if !loraDebug { _ = prevDebug } else { LTXDebug.isEnabled = prevDebug }
             eval(ltx2.parameters())
             Memory.clearCache()
+            lipdubFusedLoRAPath = lipdubLoraPath
         }
 
         // 2. Snap target frame count to 8k+1 based on the reference video.
@@ -2207,8 +2263,12 @@ public actor LTXPipeline {
         }
 
         // 14. Unload transformer before VAE decode if memory pressure is a concern.
+        // (With unloadAfterUse the fused transformer is gone — the next LipDub run
+        // must reload models. Use MemoryOptimizationConfig.disabled to keep the
+        // fused transformer across consecutive same-LoRA segments.)
         if memoryOptimization.unloadAfterUse {
             self.ltx2Transformer = nil
+            self.lipdubFusedLoRAPath = nil
             Memory.clearCache()
         }
 
@@ -3076,6 +3136,7 @@ public actor LTXPipeline {
         vaeDecoder = nil
         vaeEncoder = nil
         ltx2Transformer = nil
+        lipdubFusedLoRAPath = nil
         audioVAE = nil
         vocoder = nil
         loraOriginalWeights = nil

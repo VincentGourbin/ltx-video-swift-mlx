@@ -447,8 +447,17 @@ public struct LTXVideoGenerationConfig: Sendable {
             throw LTXError.invalidConfiguration("Height must be between 64 and 2048, got \(height)")
         }
 
-        guard numFrames >= 9 && numFrames <= 257 else {
-            throw LTXError.invalidConfiguration("Number of frames must be between 9 and 257, got \(numFrames)")
+        // The upper bound tracks the transformer's RoPE positional design, not an
+        // arbitrary limit: temporal coordinates are seconds (pixel frame / fps),
+        // normalized by LTXTransformerConfig.maxPos[0] = 20 s — i.e. 481 frames at
+        // 24 fps. Beyond that, fractional positions exceed 1.0, outside the range
+        // the embedding was designed (and trained) for. Note that typical training
+        // clips are shorter (~10 s), so quality may soften on very long videos even
+        // within this bound.
+        guard numFrames >= 9 && numFrames <= 481 else {
+            throw LTXError.invalidConfiguration(
+                "Number of frames must be between 9 and 481 (20 s at 24 fps — the RoPE " +
+                "positional range of the model), got \(numFrames)")
         }
 
         guard numSteps >= 1 && numSteps <= 100 else {

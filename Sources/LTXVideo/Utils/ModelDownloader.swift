@@ -1020,7 +1020,16 @@ class LTXWeightLoader {
 
         // Check for model parameters NOT loaded (would keep random initialization!)
         let loadedKeys = Set(updates.keys)
-        let missingFromModel = flatParameters.keys.filter { !loadedKeys.contains($0) }.sorted()
+        let notLoaded = flatParameters.keys.filter { !loadedKeys.contains($0) }.sorted()
+        // The block-level RMSNorms are affine-free in the official checkpoint (their
+        // scale/shift comes from the AdaLN scale_shift_table; only the attention
+        // q_norm/k_norm carry weights). MLXNN's RMSNorm still declares a weight,
+        // which stays at its default of 1 — expected, not a mapping hole.
+        let expectedAffineFree = notLoaded.filter(isAffineFreeBlockNorm)
+        let missingFromModel = notLoaded.filter { !isAffineFreeBlockNorm($0) }
+        if !expectedAffineFree.isEmpty {
+            LTXDebug.log("Transformer: \(expectedAffineFree.count) affine-free block norms left at default weight=1 (expected)")
+        }
 
         // Log weight stats (always for unmatched/missing, debug for success)
         if !unmatchedKeys.isEmpty || !missingFromModel.isEmpty {
@@ -1033,6 +1042,22 @@ class LTXWeightLoader {
             }
         }
         LTXDebug.log("Applied \(updates.count) weights to transformer (\(notFound) unmatched, \(missingFromModel.count) missing)")
+    }
+
+    /// Block-level RMSNorm weights that the official LTX-2 checkpoint does not
+    /// ship (affine-free norms; modulation is provided by the scale_shift_table).
+    /// Verified against ltx-2.3-22b-distilled.safetensors: no `*.norm{1,2,3}`,
+    /// `*.audio_norm{1,2,3}`, `*.audio_to_video_norm`, or `*.video_to_audio_norm`
+    /// weights exist for any block — only attention `q_norm`/`k_norm` do.
+    private static let affineFreeNormSuffixes = [
+        ".norm1.weight", ".norm2.weight", ".norm3.weight",
+        ".audio_norm1.weight", ".audio_norm2.weight", ".audio_norm3.weight",
+        ".audio_to_video_norm.weight", ".video_to_audio_norm.weight",
+    ]
+
+    private static func isAffineFreeBlockNorm(_ key: String) -> Bool {
+        key.hasPrefix("transformer_blocks.")
+            && affineFreeNormSuffixes.contains { key.hasSuffix($0) }
     }
 
     /// Apply weights to a VAE decoder model
