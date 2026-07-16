@@ -53,7 +53,7 @@ DerivedData/
 *.profraw
 *.profdata
 profile_results/
-benchmarks/
+/benchmarks/
 
 # Temporary files
 *.tmp
