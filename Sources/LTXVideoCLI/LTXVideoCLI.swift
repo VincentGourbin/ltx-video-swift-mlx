@@ -700,6 +700,9 @@ struct LipDub: AsyncParsableCommand {
     @Option(name: .long, help: "Target audio path (.wav/.m4a/.mp4) to lip-sync to. With --reference-video, the audio is auto-aligned (silence-aware time-stretch, pitch preserved) to the source's speech window and replaces the source audio. REQUIRED with --reference-image (used directly without alignment).")
     var targetAudio: String?
 
+    @Option(name: .long, help: "Segment chaining (image mode): short clip whose FIRST 9 frames are the previous segment's tail (e.g. ffmpeg -sseof -0.4). Replaces the still image as the frame-0 anchor, preserving position AND motion across the cut. Requires --target-audio; trim 1 frame at concatenation. Mutually exclusive with --reference-video.")
+    var continuationTail: String?
+
     @Option(name: .shortAndLong, help: "Output file path (default: lipdub.mp4)")
     var output: String = "lipdub.mp4"
 
@@ -752,9 +755,23 @@ struct LipDub: AsyncParsableCommand {
 
         print("LTX-2.3 LipDub")
         print("==============")
+        if let tail = continuationTail {
+            guard referenceVideo == nil else {
+                throw ValidationError("--continuation-tail is for image-mode segment chaining; with --reference-video, segment the source video instead.")
+            }
+            guard FileManager.default.fileExists(atPath: tail) else {
+                throw ValidationError("Continuation tail clip not found: \(tail)")
+            }
+            guard targetAudio != nil else {
+                throw ValidationError("--continuation-tail requires --target-audio.")
+            }
+            print("Continuation tail: \(tail) (last latent frame anchors frame 0 — trim 1 frame at concatenation)")
+        }
         switch (referenceVideo, referenceImage) {
         case (nil, nil):
-            throw ValidationError("Must provide exactly one of --reference-video or --reference-image.")
+            guard continuationTail != nil else {
+                throw ValidationError("Must provide one of --reference-video, --reference-image or --continuation-tail.")
+            }
         case (.some, .some):
             throw ValidationError("--reference-video and --reference-image are mutually exclusive.")
         case (.some(let vp), nil):
@@ -870,6 +887,7 @@ struct LipDub: AsyncParsableCommand {
             prompt: prompt,
             referenceVideoPath: referenceVideo,
             referenceImagePath: referenceImage,
+            continuationTailPath: continuationTail,
             lipdubLoraPath: loraPath,
             config: config,
             upscalerWeightsPath: upscalerPath,

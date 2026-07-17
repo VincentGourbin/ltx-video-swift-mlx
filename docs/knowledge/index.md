@@ -26,6 +26,7 @@ or re-litigated.
 * [LipDub fusion reuse policy](decisions/lipdub-fusion-reuse-policy.md) - identity by canonical path + mtime, guards instead of unfuse
 * [unloadAfterUse gates all mid-run unloads](decisions/unload-gating-semantics.md) - .disabled means keep everything; the trade-offs that buys
 * [QLoRA is the training default on ≤96 GB](decisions/qlora-training-default.md) - qint8 halves peak memory with near-exact loss parity; bf16 swaps
+* [LipDub segment continuation anchors on the tail latent](decisions/lipdub-continuation-anchor.md) - position 0 + overlap-and-trim; measured seam PSNR 17.4 → 24.6 dB
 
 # Pitfalls
 

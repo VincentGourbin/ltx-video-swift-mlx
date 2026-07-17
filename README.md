@@ -182,6 +182,8 @@ ltx-video lipdub 'Speaking in Spanish saying: "Hola a todos..."' \
 
 See [docs/examples/lipdub/README.md](docs/examples/lipdub/README.md) for pipeline details and constraints.
 
+**Segment chaining (image mode)**: long dialogues are generated as chained segments; `--continuation-tail tail.mp4` anchors a segment on the PREVIOUS segment's last 9 frames (extract with `ffmpeg -sseof -0.4 -i seg.mp4 ...`) instead of re-starting from the still image — preserving position and motion across the cut (measured seam PSNR: 17.4 dB photo re-anchor → 24.6 dB with continuation). The first output frame duplicates the anchor: drop one frame when concatenating.
+
 **Consecutive runs (Swift package):** the IC-LoRA is fused destructively into the 22B transformer. Consecutive `generateLipDub` calls with the same LoRA reuse the fused transformer without re-fusing — no model reload per segment — provided the transformer survives between runs (`MemoryOptimizationConfig.disabled`, i.e. `unloadAfterUse: false`). Switching LoRA, or running `generateVideo`/`generateRetake` while fused, throws until `loadModels()` + `loadAudioModels()` restore pristine weights. Check `pipeline.fusedLipDubLoRAPath` for the current state.
 
 ### LoRA Training (Beta)

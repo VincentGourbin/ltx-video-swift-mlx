@@ -2,6 +2,9 @@
 
 ## 2026-07-17
 
+* **Creation**: [LipDub continuation-anchor decision](/docs/knowledge/decisions/lipdub-continuation-anchor.md)
+  (issue #35 implemented and measured: seam PSNR 17.4 → 24.6 dB).
+
 * **Update**: Corrected the activation-memory sizing rule in the
   [training baselines](/docs/knowledge/benchmarks/lora-training-baselines-m3max.md)
   (per-regime marginal costs instead of one averaged slope that

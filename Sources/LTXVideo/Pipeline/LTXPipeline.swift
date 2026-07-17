@@ -1770,6 +1770,13 @@ public actor LTXPipeline {
     ///   - referenceVideoPath: Path to the source video file (.mp4) — both video frames and
     ///     (by default) audio track are extracted from this file. Provide either this OR
     ///     `referenceImagePath`, not both.
+    ///   - continuationTailPath: Segment chaining (issue #35, image mode only):
+    ///     path to a short clip whose FIRST 9 frames are the previous segment's
+    ///     tail. Its last latent frame replaces the still image as the frame-0
+    ///     anchor, preserving position AND velocity across the cut. Requires
+    ///     `targetAudioPath`; combinable with `referenceImagePath` (then only
+    ///     used for prompt enhancement). First output frame duplicates the
+    ///     anchor — trim one frame when concatenating.
     ///   - referenceImagePath: Path to a still image (.png/.jpg) used as the identity
     ///     anchor. Internally encoded as a single-frame I2V keyframe at pixel index 0
     ///     (same code path as `generate --image`), NOT as a multi-frame IC-LoRA video
@@ -1811,6 +1818,7 @@ public actor LTXPipeline {
         prompt: String,
         referenceVideoPath: String? = nil,
         referenceImagePath: String? = nil,
+        continuationTailPath: String? = nil,
         lipdubLoraPath: String,
         config: LTXVideoGenerationConfig,
         upscalerWeightsPath: String,
@@ -1857,11 +1865,34 @@ public actor LTXPipeline {
         // The trailing helpers below assume these two invariants — use
         // `videoRefPath` directly inside `!isImageMode` branches instead of
         // re-unwrapping `referenceVideoPath`.
+        // Continuation (issue #35) is an image-mode variant: the frame-0 anchor
+        // comes from the PREVIOUS segment's tail clip instead of the still image,
+        // so chained segments join with position AND motion continuity. Video
+        // mode never needs it — its continuity comes from the source video.
+        if let tailPath = continuationTailPath {
+            guard referenceVideoPath == nil else {
+                throw LTXError.invalidConfiguration(
+                    "continuationTailPath is for image-mode segment chaining; video mode " +
+                    "gets continuity from the source — segment the reference video instead.")
+            }
+            guard FileManager.default.fileExists(atPath: tailPath) else {
+                throw LTXError.fileNotFound("Continuation tail clip not found: \(tailPath)")
+            }
+            guard targetAudioPath != nil else {
+                throw LTXError.invalidConfiguration(
+                    "continuationTailPath requires targetAudioPath (the tail clip anchors " +
+                    "the visuals; the audio must come from the target track).")
+            }
+        }
         let isImageMode: Bool
         let videoRefPath: String
         switch (referenceVideoPath, referenceImagePath) {
         case (nil, nil):
-            throw LTXError.invalidConfiguration("LipDub requires either referenceVideoPath or referenceImagePath.")
+            guard continuationTailPath != nil else {
+                throw LTXError.invalidConfiguration("LipDub requires referenceVideoPath, referenceImagePath, or continuationTailPath.")
+            }
+            videoRefPath = ""  // sentinel — image mode never reads videoRefPath
+            isImageMode = true
         case (.some, .some):
             throw LTXError.invalidConfiguration("LipDub: pass referenceVideoPath OR referenceImagePath, not both.")
         case (.some(let vp), nil):
@@ -2032,7 +2063,14 @@ public actor LTXPipeline {
         let refS1Height = halfHeight / downscaleFactor
         var refLatentS1: MLXArray? = nil
         var s1ImageKeyframes: [EncodedKeyframe] = []
-        if let imagePath = referenceImagePath {
+        if let tailPath = continuationTailPath {
+            // Continuation overrides the still image as the frame-0 anchor: the
+            // tail latent carries the previous segment's final 8 frames of
+            // motion, not just a pose.
+            LTXDebug.log("[lipdub] continuation — encoding tail anchor at Stage 1 res \(halfWidth)x\(halfHeight)")
+            s1ImageKeyframes = [try await encodeContinuationTail(
+                path: tailPath, width: halfWidth, height: halfHeight)]
+        } else if let imagePath = referenceImagePath {
             LTXDebug.log("[lipdub] image mode — encoding I2V keyframe at Stage 1 res \(halfWidth)x\(halfHeight)")
             s1ImageKeyframes = try await encodeKeyframes(
                 [KeyframeInput(path: imagePath, pixelFrameIndex: 0)],
@@ -2228,7 +2266,11 @@ public actor LTXPipeline {
         let refS2Height = config.height / downscaleFactor
         var refLatentS2: MLXArray? = nil
         var s2ImageKeyframes: [EncodedKeyframe] = []
-        if let imagePath = referenceImagePath {
+        if let tailPath = continuationTailPath {
+            LTXDebug.log("[lipdub] continuation — encoding tail anchor at Stage 2 res \(config.width)x\(config.height)")
+            s2ImageKeyframes = [try await encodeContinuationTail(
+                path: tailPath, width: config.width, height: config.height)]
+        } else if let imagePath = referenceImagePath {
             LTXDebug.log("[lipdub] image mode — encoding I2V keyframe at Stage 2 res \(config.width)x\(config.height)")
             s2ImageKeyframes = try await encodeKeyframes(
                 [KeyframeInput(path: imagePath, pixelFrameIndex: 0)],
@@ -2526,6 +2568,30 @@ public actor LTXPipeline {
     ///
     /// Each keyframe is encoded independently (single-frame input) so the result is
     /// always a `(1, 128, 1, H/32, W/32)` latent that can be placed at any latent slot.
+    /// Encode a segment-continuation anchor from the PREVIOUS segment's tail
+    /// clip (issue #35): the clip's first 9 pixel frames are VAE-encoded
+    /// (2 latent frames) and the LAST latent frame — the one carrying 8 pixel
+    /// frames of actual motion — becomes a frame-0 guide keyframe. Unlike a
+    /// still-image anchor, it preserves velocity across the segment cut.
+    ///
+    /// Contract for callers: only the clip's FIRST 9 pixel frames are read,
+    /// so pass exactly the tail — the last 9 frames of the previous segment
+    /// (e.g. `ffmpeg -sseof -0.4 -i seg.mp4 tail.mp4`). A longer clip anchors
+    /// on the wrong moment. The new segment's first output frame reproduces
+    /// the anchor — drop one frame at concatenation (overlap-and-trim).
+    private func encodeContinuationTail(
+        path: String,
+        width: Int,
+        height: Int
+    ) async throws -> EncodedKeyframe {
+        let latent = try await encodeVideo(path: path, width: width, height: height, numFrames: 9)
+        let lastIdx = latent.dim(2) - 1
+        let tail = latent[0..., 0..., lastIdx..<(lastIdx + 1), 0..., 0...]
+        MLX.eval(tail)
+        LTXDebug.log("[lipdub] continuation tail latent \(tail.shape) (last of \(latent.dim(2)) latent frames)")
+        return EncodedKeyframe(latentIdx: 0, latent: tail, pixelFrameIndex: 0)
+    }
+
     private func encodeKeyframes(
         _ keyframes: [KeyframeInput],
         width: Int,
