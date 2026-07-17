@@ -19,6 +19,23 @@ AdamW bias-correction on. Release binary, M3 Max 96 GB.
 | int4 | 100 | 617 s (~10 min) | 37.5 GB |
 | bf16 | killed at ~30 | ~110 s/step observed | 84.3 GB (swapping) |
 
+Full style run (69 clips, dev base, qint8, rank 32, 49 frames):
+
+| Config | Tokens/sample | Outcome | Peak GPU |
+|---|---|---|---|
+| 448×256×49 | 784 (7×8×14) | **jetsam-killed at step ~40** | 95.4 GB |
+| **320×192×49** | 420 (7×6×10) | 1500 steps in **17097 s (~4 h 45)** | **61.2 GB, flat** |
+
+# Activation-memory sizing rule (no remat in mlx-swift)
+
+Peak memory ≈ quantized weights (~24 GB dev qint8) + a per-token activation
+cost across the 48 blocks. Measured points: 128 tokens → 43.6 GB,
+420 tokens → 61.2 GB, 784 tokens → >95 GB (death). Roughly **~60 MB per
+training token** on top of the base — size `latentFrames × H/32 × W/32`
+against the machine's RAM *before* launching, and keep ≥30 GB of headroom
+(the 448×256×49 run died with the GPU watchdog also killing the NEXT launch
+until the system settled).
+
 Fixed overhead per run: model load + on-the-fly quantization + latent-cache
 build ≈ 5-8 min; cache-build phase alone peaks at ~40 GB (Gemma + VAE
 encoder, unloaded before the loop). LoRA injection: 384 layers (48 blocks).
