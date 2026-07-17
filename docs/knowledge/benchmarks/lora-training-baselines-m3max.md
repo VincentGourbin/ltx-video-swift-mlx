@@ -28,13 +28,23 @@ Full style run (69 clips, dev base, qint8, rank 32, 49 frames):
 
 # Activation-memory sizing rule (no remat in mlx-swift)
 
-Peak memory ≈ quantized weights (~24 GB dev qint8) + a per-token activation
-cost across the 48 blocks. Measured points: 128 tokens → 43.6 GB,
-420 tokens → 61.2 GB, 784 tokens → >95 GB (death). Roughly **~60 MB per
-training token** on top of the base — size `latentFrames × H/32 × W/32`
-against the machine's RAM *before* launching, and keep ≥30 GB of headroom
-(the 448×256×49 run died with the GPU watchdog also killing the NEXT launch
-until the system settled).
+Peak memory ≈ quantized weights + a per-token activation cost across the 48
+blocks, and the cost is **not linear across regimes** — do not average the
+points below into one slope (an earlier revision of this doc did, and the
+resulting ~60 MB/token figure under-predicted exactly at the OOM threshold):
+
+| Regime | Points | Marginal cost |
+|---|---|---|
+| distilled, rank 16: 128 tokens → 43.6 GB | 1 point | (baseline, not comparable to dev/rank-32) |
+| dev, rank 32: 420 → 61.2 GB, 784 → ≥95.4 GB (killed) | 2 points | **≥94 MB/token** — and 95.4 is a floor, not the true demand |
+
+Practical sizing on a 96 GB machine (dev, qint8, rank 32): treat
+**~420 tokens (`latentFrames × H/32 × W/32`) as the validated envelope**,
+budget ≥94 MB/token for anything beyond it, and keep ≥30 GB of headroom —
+the 784-token run died at step ~40 with the GPU watchdog also killing the
+NEXT launch until the system settled. When in doubt, run 10 steps and read
+the `peak=` field (which since PR #38 measures the training loop itself,
+not the load phase) before committing to hours.
 
 Fixed overhead per run: model load + on-the-fly quantization + latent-cache
 build ≈ 5-8 min; cache-build phase alone peaks at ~40 GB (Gemma + VAE

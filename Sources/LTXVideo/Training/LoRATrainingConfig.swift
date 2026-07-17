@@ -59,10 +59,20 @@ public struct LoRATrainingConfig: Sendable {
     /// LR warmup steps
     public var warmupSteps: Int
 
-    /// LR schedule after warmup: "cosine" (decay to 10% of peak over the
-    /// remaining steps — the standard for LoRA fine-tuning) or "constant"
-    /// (the historical behavior). Uses the official MLXOptimizers schedulers.
-    public var lrSchedule: String
+    /// LR schedule applied after warmup. Uses the official MLXOptimizers
+    /// schedulers. Single source of truth for the valid values — the training
+    /// loop switches over this exhaustively, so adding a case cannot silently
+    /// fall through to the wrong schedule.
+    public enum LRSchedule: String, Sendable, CaseIterable {
+        /// Cosine decay from peak LR to 10% of peak over the remaining steps —
+        /// the LoRA fine-tuning standard, and the default since July 2026.
+        case cosine
+        /// Flat peak LR after warmup — the pre-July-2026 behavior. Note that
+        /// `constant` does NOT reproduce pre-July-2026 runs bit-for-bit:
+        /// AdamW bias correction is now always on (see TrainingLoop).
+        case constant
+    }
+    public var lrSchedule: LRSchedule
 
     /// Trigger word to prepend to all captions (e.g., "CAKEIFY")
     public var triggerWord: String?
@@ -137,12 +147,15 @@ public struct LoRATrainingConfig: Sendable {
         includeAudio: Bool = false,
         audioLossWeight: Float = 0.5,
         includeFFN: Bool = false,
-        transformerQuant: String = "bf16",
+        // qint8 by default: bf16 training peaks at 84+ GB and swaps on 96 GB
+        // machines, while qint8 halves the peak with near-exact loss parity
+        // (see docs/knowledge/decisions/qlora-training-default.md).
+        transformerQuant: String = "qint8",
         loraBlocks: Int = 0,
         gradientAccumulationSteps: Int = 1,
         maxGradNorm: Float = 1.0,
         warmupSteps: Int = 100,
-        lrSchedule: String = "cosine",
+        lrSchedule: LRSchedule = .cosine,
         triggerWord: String? = nil,
         seed: UInt64? = nil,
         hfToken: String? = nil,
@@ -198,8 +211,17 @@ public struct LoRATrainingConfig: Sendable {
         guard gradientAccumulationSteps >= 1 else {
             throw TrainingError.invalidConfig("Gradient accumulation steps must be >= 1, got \(gradientAccumulationSteps)")
         }
-        guard ["cosine", "constant"].contains(lrSchedule) else {
-            throw TrainingError.invalidConfig("LR schedule must be 'cosine' or 'constant', got '\(lrSchedule)'")
+        guard warmupSteps >= 0 && warmupSteps < maxSteps else {
+            throw TrainingError.invalidConfig(
+                "Warmup steps must be in 0..<maxSteps (\(maxSteps)), got \(warmupSteps) — " +
+                "warmup >= maxSteps would spend the whole run warming up and never reach the schedule")
+        }
+        // Training always quantizes the bf16 unified weights on the fly, which
+        // upstream mlx-swift does not support for nvfp4/mxfp8 (mlx-swift #285).
+        guard !["nvfp4", "mxfp8"].contains(transformerQuant) else {
+            throw TrainingError.invalidConfig(
+                "Transformer quantization '\(transformerQuant)' is not supported for training " +
+                "(on-the-fly quantization unavailable upstream, mlx-swift #285). Use bf16, qint8 or int4.")
         }
     }
 }

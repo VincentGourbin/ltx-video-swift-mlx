@@ -46,8 +46,8 @@ struct Train: AsyncParsableCommand {
     @Option(name: .shortAndLong, help: "Number of frames (must be 8n+1)")
     var frames: Int = 9
 
-    @Option(name: .long, help: "Transformer quantization: bf16 (default), qint8, int4")
-    var transformerQuant: String = "bf16"
+    @Option(name: .long, help: "Transformer quantization: qint8 (default — bf16 swaps on ≤96GB machines), int4, bf16")
+    var transformerQuant: String = "qint8"
 
     @Option(name: .long, help: "Number of last transformer blocks to apply LoRA to (0 = all, default)")
     var loraBlocks: Int = 0
@@ -61,7 +61,7 @@ struct Train: AsyncParsableCommand {
     @Option(name: .long, help: "LR warmup steps (default: 100)")
     var warmupSteps: Int = 100
 
-    @Option(name: .long, help: "LR schedule after warmup: cosine (decay to 10% of peak) or constant (default: cosine)")
+    @Option(name: .long, help: "LR schedule after warmup: cosine (decay to 10% of peak; default — NOTE: pre-July-2026 behavior was constant) or constant")
     var lrSchedule: String = "cosine"
 
     @Option(name: .long, help: "Trigger word to prepend to all captions (e.g., CAKEIFY)")
@@ -163,7 +163,10 @@ struct Train: AsyncParsableCommand {
         config.gradientAccumulationSteps = gradAccum
         config.maxGradNorm = maxGradNorm
         config.warmupSteps = warmupSteps
-        config.lrSchedule = lrSchedule
+        guard let schedule = LoRATrainingConfig.LRSchedule(rawValue: lrSchedule) else {
+            throw ValidationError("--lr-schedule must be one of: \(LoRATrainingConfig.LRSchedule.allCases.map(\.rawValue).joined(separator: ", "))")
+        }
+        config.lrSchedule = schedule
         config.triggerWord = triggerWord
         config.seed = seed
         config.hfToken = hfToken

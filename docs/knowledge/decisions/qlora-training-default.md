@@ -21,8 +21,15 @@ Measured July 2026 on M3 Max 96 GB — distilled base, 3-clip dataset,
   ~20× throughput (200 steps + load + on-the-fly quantization in 21 min).
 - Gradients through the frozen `QuantizedLinear` base are correct — the
   step-10 loss matches bf16 to 4 decimals on the same seed.
-- **Recommendation: `--transformer-quant qint8`** for training on ≤96 GB
-  machines; int4 for ~48 GB machines (accept the extra quantization noise).
+- **qint8 IS the training default** (`LoRATrainingConfig`/`--transformer-quant`,
+  since PR #38); bf16 remains available explicitly for >96 GB machines; int4
+  for ~48 GB machines (accept the extra quantization noise). `nvfp4`/`mxfp8`
+  are rejected at validate() — training always quantizes on the fly, which
+  upstream doesn't support for those modes (mlx-swift #285).
+- Related behavior notes pinned by the same PR: AdamW bias correction is
+  always on (loss curves are NOT comparable to pre-July-2026 runs, even with
+  `--lr-schedule constant`), and resume refuses checkpoints trained under a
+  different LR schedule (pre-PR checkpoints = `constant`).
 - Gradient checkpointing (remat) is NOT exposed by mlx-swift (verified
   0.31.6) — quantizing the frozen base is the memory lever, activations must
   be contained via resolution/frames presets.

@@ -82,6 +82,11 @@ public struct TrainingState: Codable, Sendable {
     /// Learning rate
     public var learningRate: Float
 
+    /// LR schedule the run was started with ("cosine"/"constant"). Optional so
+    /// pre-July-2026 checkpoints still decode; nil means the checkpoint predates
+    /// the schedule and was trained under the then-only behavior, "constant".
+    public var lrSchedule: String?
+
     /// RNG seed (if set)
     public var rngSeed: UInt64?
 
@@ -101,6 +106,7 @@ public struct TrainingState: Codable, Sendable {
         loraRank: Int,
         loraAlpha: Float,
         learningRate: Float,
+        lrSchedule: String? = nil,
         rngSeed: UInt64? = nil
     ) {
         self.currentStep = 0
@@ -115,6 +121,7 @@ public struct TrainingState: Codable, Sendable {
         self.loraRank = loraRank
         self.loraAlpha = loraAlpha
         self.learningRate = learningRate
+        self.lrSchedule = lrSchedule
         self.rngSeed = rngSeed
         self.status = .idle
         self.isPauseCheckpoint = false
@@ -183,9 +190,15 @@ public struct TrainingState: Codable, Sendable {
     }
 
     /// Verify that a checkpoint is compatible with the current config.
-    public func isCompatible(modelType: String, rank: Int, alpha: Float, lr: Float) -> Bool {
+    ///
+    /// The LR schedule must match too: resuming a constant-LR run under cosine
+    /// (or vice versa) would silently switch the LR trajectory mid-run. A
+    /// checkpoint without a recorded schedule (pre-July-2026) was trained under
+    /// the then-only behavior, "constant".
+    public func isCompatible(modelType: String, rank: Int, alpha: Float, lr: Float,
+                             lrSchedule schedule: String) -> Bool {
         let otherHash = Self.computeHash(modelType: modelType, rank: rank, alpha: alpha, lr: lr)
-        return configHash == otherHash
+        return configHash == otherHash && (lrSchedule ?? "constant") == schedule
     }
 
     // MARK: - Private

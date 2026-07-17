@@ -186,7 +186,9 @@ See [docs/examples/lipdub/README.md](docs/examples/lipdub/README.md) for pipelin
 
 ### LoRA Training (Beta)
 
-> **Status**: Theoretically functional, currently under validation. The full training pipeline runs end-to-end (dataset loading, latent caching, gradient computation, checkpoint saving, LoRA export). Validation is in progress with the [Cakeify dataset](https://huggingface.co/datasets/Lightricks/Cakeify-Dataset).
+> **Status**: Validated end-to-end (July 2026) on [Wild-Heart/Disney-VideoGeneration-Dataset](https://huggingface.co/datasets/Wild-Heart/Disney-VideoGeneration-Dataset): overfit + QLoRA parity runs, then a full 69-clip style LoRA (1500 steps, 4h45, 61 GB peak on M3 Max 96 GB), fused and used for generation. Measured baselines and the memory-sizing rule live in [docs/knowledge](docs/knowledge/benchmarks/lora-training-baselines-m3max.md).
+>
+> **Memory**: training defaults to a **qint8-quantized frozen base (QLoRA)** — bf16 training peaks at 84+ GB and swaps on 96 GB machines ([why](docs/knowledge/decisions/qlora-training-default.md)). Works on both `dev` (recommended for quality) and `distilled` bases.
 
 Train a LoRA on the dev model using QLoRA (quantized base weights) to fit on Apple Silicon:
 
@@ -454,7 +456,7 @@ ltx-video export-quantized \
 |------|---------|-------------|
 | `<dataset>` | required | Path to dataset directory (mp4 + txt pairs) |
 | `-o, --output` | required | Output directory for checkpoints and LoRA |
-| `--model` | `dev` | Model variant (`dev` required for training) |
+| `--model` | `dev` | Base model: `dev` (recommended for quality) or `distilled` (validated too) |
 | `--rank` | `16` | LoRA rank |
 | `--alpha` | same as rank | LoRA alpha |
 | `--lr` | `2e-4` | Learning rate |
@@ -463,13 +465,13 @@ ltx-video export-quantized \
 | `-w, --width` | `256` | Training video width (divisible by 32) |
 | `-h, --height` | `256` | Training video height (divisible by 32) |
 | `-f, --frames` | `9` | Frame count (must be 8n+1) |
-| `--transformer-quant` | `bf16` | Quantization: `bf16`, `qint8`, `int4`, `nvfp4`, `mxfp8` |
+| `--transformer-quant` | `qint8` | Base quantization: `qint8` (default), `int4`, `bf16` (swaps on ≤96 GB — see [QLoRA decision](docs/knowledge/decisions/qlora-training-default.md)); `nvfp4`/`mxfp8` rejected (no on-the-fly support) |
 | `--lora-blocks` | `0` | Train only last N blocks (0 = all). Reduces memory for long videos |
 | `--trigger-word` | none | Trigger word to prepend to captions |
 | `--grad-accum` | `1` | Gradient accumulation steps |
 | `--max-grad-norm` | `1.0` | Gradient clipping norm |
 | `--warmup-steps` | `100` | LR warmup steps |
-| `--lr-schedule` | `cosine` | LR schedule after warmup: `cosine` (decay to 10% of peak) or `constant` |
+| `--lr-schedule` | `cosine` | LR schedule after warmup: `cosine` (decay to 10% of peak) or `constant`. **Default changed July 2026** (was constant); resume of older checkpoints requires `constant` |
 | `--preset` | none | Memory preset: `compact`, `balanced`, `quality`, `max` |
 | `--beacon` | off | Advertise activity to external monitors (see [Activity Beacon](#activity-beacon-opt-in)) |
 

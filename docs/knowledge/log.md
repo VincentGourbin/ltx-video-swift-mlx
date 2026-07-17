@@ -1,14 +1,24 @@
 # Directory Update Log
 
-## 2026-07-16 (evening)
+## 2026-07-17
+
+* **Update**: Corrected the activation-memory sizing rule in the
+  [training baselines](/docs/knowledge/benchmarks/lora-training-baselines-m3max.md)
+  (per-regime marginal costs instead of one averaged slope that
+  under-predicted at the OOM threshold) and aligned the
+  [QLoRA decision](/docs/knowledge/decisions/qlora-training-default.md) with
+  the code: qint8 is now the actual training default (PR #38 review).
+
+## 2026-07-16
 
 * **Update**: LoRA-training validation campaign (issue #1 revival):
   added [training baselines](/docs/knowledge/benchmarks/lora-training-baselines-m3max.md)
   and the [QLoRA training decision](/docs/knowledge/decisions/qlora-training-default.md)
   (bf16 84.3 GB swapping vs qint8 43.6 GB / int4 37.5 GB, near-exact loss
-  parity through the frozen quantized base).
-
-## 2026-07-16
+  parity through the frozen quantized base). Note: this PR also materially
+  adds the [generation baselines](/docs/knowledge/benchmarks/generation-baselines-m3max.md)
+  concept — it was listed in the bootstrap entry below but a `benchmarks/`
+  gitignore rule had silently kept it out of PR #37.
 
 * **Creation**: Bootstrapped the knowledge bundle after the LipDub
   app-integration campaign (PR #36) and the RuntimeBeacon work (PR #34).
