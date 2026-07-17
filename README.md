@@ -443,6 +443,7 @@ ltx-video export-quantized \
 | `-f, --frames` | `121` | Frame count (must be 8n+1) |
 | `--seed` | random | Random seed |
 | `--distilled` | off | Use distilled model (8 steps, fast). Default: dev (30 steps + CFG) |
+| `--steps` | `30` | Inference steps — dev model only (the distilled model runs a fixed trained 8-step schedule; custom counts there produce artifacts) |
 | `--enhance-prompt` | off | Enhance prompt with Gemma VLM |
 | `--transformer-quant` | `bf16` | Quantization: `bf16`, `qint8`, `int4`, `nvfp4`, `mxfp8` |
 | `--mixed-precision` | off | Per-block quantization: first/last 6 blocks qint8, middle int4 |

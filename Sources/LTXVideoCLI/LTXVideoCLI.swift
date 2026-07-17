@@ -418,6 +418,9 @@ struct Retake: AsyncParsableCommand {
     @Flag(name: .long, help: "Use distilled model (8 steps, fast) instead of dev (30 steps + CFG)")
     var distilled: Bool = false
 
+    @Option(name: .long, help: "Inference steps (dev model only — the distilled model runs a fixed trained 8-step schedule; default: 30)")
+    var steps: Int?
+
     @Flag(name: .long, help: "Regenerate audio (instead of preserving source audio)")
     var regenerateAudio: Bool = false
 
@@ -581,12 +584,23 @@ struct Retake: AsyncParsableCommand {
             print("LoRA fused (\(fusedCount) layer-pairs)")
         }
 
+        // Resolve step count: configurable on dev (proper schedule for any
+        // count); the distilled model runs its fixed trained 8-step schedule
+        // (issue #33 — arbitrary counts there produce artifacts).
+        if steps != nil && distilled {
+            throw ValidationError(
+                "--steps requires the dev model: the distilled model runs a fixed " +
+                "trained 8-step sigma schedule and custom counts produce artifacts.")
+        }
+        let numSteps = steps ?? retakeModel.defaultSteps
+        if let s = steps { print("Inference steps: \(s) (dev)") }
+
         // Build config
         let config = LTXVideoGenerationConfig(
             width: width,
             height: height,
             numFrames: frames,
-            numSteps: 8,
+            numSteps: numSteps,
             seed: seed,
             enhancePrompt: enhancePrompt,
             videoPath: video,

@@ -847,6 +847,20 @@ public actor LTXPipeline {
             throw LTXError.invalidConfiguration("Two-stage requires width and height divisible by 64. Got \(config.width)x\(config.height)")
         }
 
+        // The two-stage pipeline is always distilled: stage 1 runs the fixed
+        // trained 9-value sigma schedule (8 steps) and stage 2 the fixed 4-value
+        // refinement schedule. Custom step counts are not honored here (they
+        // produce artifacts on a distilled model — issue #33); reject explicitly
+        // instead of silently ignoring config.numSteps. Configurable steps are
+        // available on the dev retake path.
+        guard config.numSteps == LTXModel.distilled.defaultSteps else {
+            throw LTXError.invalidConfiguration(
+                "generateVideo always runs the two-stage distilled schedule " +
+                "(fixed \(LTXModel.distilled.defaultSteps)+3 steps); numSteps=\(config.numSteps) " +
+                "cannot be honored. Use generateRetake with the dev model for configurable steps."
+            )
+        }
+
         let halfWidth = config.width / 2
         let halfHeight = config.height / 2
 
@@ -1464,9 +1478,21 @@ public actor LTXPipeline {
             LTXDebug.log("Regenerating \(regenFrames)/\(latentFrames) latent frames")
         }
 
-        // Determine model mode: dev (30 steps + CFG + STG) or distilled (8 steps, no guidance)
+        // Determine model mode: dev (CFG + STG, configurable steps) or distilled
+        // (8 steps, no guidance). Step count is only configurable on the dev
+        // path: the non-distilled scheduler computes a proper token-shifted
+        // sigma schedule for any count, whereas the distilled model was trained
+        // to jump the fixed 9-value sigma schedule — arbitrary counts there
+        // produce artifacts (issue #33).
         let useDevModel = (model == .dev)
-        let retakeSteps = useDevModel ? 30 : 8
+        if !useDevModel && config.numSteps != LTXModel.distilled.defaultSteps {
+            throw LTXError.invalidConfiguration(
+                "The distilled model runs a fixed \(LTXModel.distilled.defaultSteps)-step " +
+                "trained sigma schedule; custom step counts (got \(config.numSteps)) produce " +
+                "artifacts. Use the dev model for configurable steps."
+            )
+        }
+        let retakeSteps = useDevModel ? config.numSteps : 8
         let cfgScale: Float = useDevModel ? 3.0 : 1.0
         let stgScale: Float = useDevModel ? 1.0 : 0.0
         let stgBlocks: [Int] = useDevModel ? [28] : []  // LTX-2.3 default
@@ -1839,6 +1865,13 @@ public actor LTXPipeline {
 
         guard config.width % 64 == 0 && config.height % 64 == 0 else {
             throw LTXError.invalidConfiguration("LipDub requires width and height divisible by 64. Got \(config.width)x\(config.height)")
+        }
+        // LipDub runs the fixed distilled two-stage schedules (see generateVideo).
+        guard config.numSteps == LTXModel.distilled.defaultSteps else {
+            throw LTXError.invalidConfiguration(
+                "generateLipDub always runs the fixed distilled schedules; " +
+                "numSteps=\(config.numSteps) cannot be honored."
+            )
         }
         guard let textEncoder = textEncoder,
               let vaeDecoder = vaeDecoder,
