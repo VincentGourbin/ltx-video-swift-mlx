@@ -10,11 +10,20 @@ Image-mode LipDub segments used to re-anchor every segment on the same still
 image — visible jumps at each cut (issue #35). The shipped design
 (`continuationTailPath` / `--continuation-tail`):
 
-- The caller passes a clip whose **first 9 pixel frames** are the previous
-  segment's tail; its VAE encoding yields 2 latent frames and the **last one**
-  (carrying 8 frames of actual motion, not just a pose) becomes the frame-0
-  guide keyframe — the existing appended-guide-token machinery
-  (`EncodedKeyframe` at slot 0, σ=0, RoPE `(0+0.5)/fps`) is reused unchanged.
+- The caller passes the **previous segment's video**; the framework reads its
+  **last 9 pixel frames** itself (`loadVideo(tail: true)`, AVFoundation, frame
+  times derived from the track's own rate). Their VAE encoding yields 2 latent
+  frames and the **last one** (carrying 8 frames of actual motion, not just a
+  pose) becomes the frame-0 guide keyframe — the existing appended-guide-token
+  machinery (`EncodedKeyframe` at slot 0, σ=0, RoPE `(0+0.5)/fps`) is reused
+  unchanged.
+  - Originally the caller had to hand-cut a 9-frame clip, which the framework
+    then read from its *first* frame. That contract was withdrawn: every
+    seek-based ffmpeg recipe for it failed, and an over-long clip silently
+    anchored on the wrong frames (see
+    [the tail-clip pitfall](/docs/knowledge/pitfalls/continuation-tail-clip-encoding.md)).
+    Reading the last 9 frames is backward compatible — for a 9-frame clip they
+    are all of them — so old callers keep working.
 - **Position 0, not negative positions**: the first output frame reproduces
   the anchor, and the app drops one frame at concatenation
   (overlap-and-trim). Chosen over negative RoPE positions because it reuses

@@ -1797,9 +1797,11 @@ public actor LTXPipeline {
     ///     (by default) audio track are extracted from this file. Provide either this OR
     ///     `referenceImagePath`, not both.
     ///   - continuationTailPath: Segment chaining (issue #35, image mode only):
-    ///     path to a short clip whose FIRST 9 frames are the previous segment's
-    ///     tail. Its last latent frame replaces the still image as the frame-0
-    ///     anchor, preserving position AND velocity across the cut. Requires
+    ///     path to the **previous segment's video**. Its last 9 frames are read
+    ///     natively (no clip preparation, no external tool) and their last latent
+    ///     frame replaces the still image as the frame-0 anchor, preserving
+    ///     position AND velocity across the cut. A pre-trimmed 9-frame clip is
+    ///     also accepted (its last 9 frames are all of them). Requires
     ///     `targetAudioPath`; combinable with `referenceImagePath` (then only
     ///     used for prompt enhancement). First output frame duplicates the
     ///     anchor — trim one frame when concatenating.
@@ -2569,8 +2571,11 @@ public actor LTXPipeline {
     ///   - height: Target video height
     ///   - numFrames: Number of frames to extract
     /// - Returns: Video latent tensor (1, 128, latent_F, latent_H, latent_W)
-    private func encodeVideo(path: String, width: Int, height: Int, numFrames: Int) async throws -> MLXArray {
-        let videoTensor = try await loadVideo(from: path, width: width, height: height, numFrames: numFrames)
+    private func encodeVideo(
+        path: String, width: Int, height: Int, numFrames: Int, tail: Bool = false
+    ) async throws -> MLXArray {
+        let videoTensor = try await loadVideo(
+            from: path, width: width, height: height, numFrames: numFrames, tail: tail)
         MLX.eval(videoTensor)
         LTXDebug.log("Video loaded: \(videoTensor.shape)")
 
@@ -2624,38 +2629,26 @@ public actor LTXPipeline {
     ///
     /// Each keyframe is encoded independently (single-frame input) so the result is
     /// always a `(1, 128, 1, H/32, W/32)` latent that can be placed at any latent slot.
-    /// Encode a segment-continuation anchor from the PREVIOUS segment's tail
-    /// clip (issue #35): the clip's first 9 pixel frames are VAE-encoded
-    /// (2 latent frames) and the LAST latent frame — the one carrying 8 pixel
-    /// frames of actual motion — becomes a frame-0 guide keyframe. Unlike a
-    /// still-image anchor, it preserves velocity across the segment cut.
+    /// Encode a segment-continuation anchor from the PREVIOUS segment (issue
+    /// #35): its **last 9 pixel frames** are VAE-encoded (2 latent frames) and
+    /// the LAST latent frame — the one carrying 8 pixel frames of actual motion
+    /// — becomes a frame-0 guide keyframe. Unlike a still-image anchor, it
+    /// preserves velocity across the segment cut.
     ///
-    /// Contract for callers: only the clip's FIRST 9 pixel frames are read,
-    /// so pass exactly the tail — the last 9 frames of the previous segment.
-    /// A longer clip anchors on the wrong moment. The new segment's first
-    /// output frame reproduces the anchor — drop one frame at concatenation
-    /// (overlap-and-trim).
-    ///
-    /// The clip must be RE-ENCODED with frame 0 exactly at t=0: extraction
-    /// reads it with a zero-tolerance `AVAssetImageGenerator`, which refuses
-    /// (`AVFoundationErrorDomain -11832`) any clip whose first frame carries a
-    /// seek offset or an edit list. An input seek (`ffmpeg -sseof …`) produces
-    /// exactly such a clip, with or without `-c copy`. What works:
-    ///
-    /// ```
-    /// ffmpeg -i seg.mp4 -vf "select='gte(n,NFRAMES-9)',setpts=PTS-STARTPTS" -r 24 \
-    ///        -c:v libx264 -g 1 -crf 12 -pix_fmt yuv420p -an tail.mp4
-    /// ```
-    ///
-    /// Substitute `NFRAMES` with the segment's frame count. `PTS-STARTPTS`
-    /// rebases the first frame to t=0 without introducing a placeholder that
-    /// could be confused with ffmpeg's own per-frame `N` variable.
+    /// Contract for callers: **pass the previous segment's video file itself**.
+    /// The tail is located here, natively (`loadVideo(tail: true)` reads the
+    /// last 9 frames from the track's own frame rate), so no clip preparation
+    /// is required. A pre-trimmed 9-frame clip still works — its last 9 frames
+    /// are all of them — which keeps callers written against the old contract
+    /// valid. The new segment's first output frame reproduces the anchor: drop
+    /// one frame at concatenation (overlap-and-trim).
     private func encodeContinuationTail(
         path: String,
         width: Int,
         height: Int
     ) async throws -> EncodedKeyframe {
-        let latent = try await encodeVideo(path: path, width: width, height: height, numFrames: 9)
+        let latent = try await encodeVideo(
+            path: path, width: width, height: height, numFrames: 9, tail: true)
         let lastIdx = latent.dim(2) - 1
         let tail = latent[0..., 0..., lastIdx..<(lastIdx + 1), 0..., 0...]
         MLX.eval(tail)

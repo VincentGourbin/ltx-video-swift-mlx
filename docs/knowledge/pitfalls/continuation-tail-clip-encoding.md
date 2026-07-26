@@ -1,10 +1,18 @@
 ---
 type: Pitfall
-title: The continuation-tail clip must be re-encoded with frame 0 at t=0
-description: An input seek (ffmpeg -sseof) produces a clip whose first frame carries an offset; the zero-tolerance AVAssetImageGenerator refuses it with -11832 and the segment chain dies before denoising.
-tags: [lipdub, continuation, avfoundation, video-io]
+title: The continuation-tail clip must be re-encoded with frame 0 at t=0 (obsolete — the tail is now read natively)
+description: Historical. The API used to require a caller-prepared 9-frame clip, and every ffmpeg seek-based recipe for it failed. continuationTailPath now takes the previous segment directly and the framework reads its last 9 frames itself.
+tags: [lipdub, continuation, avfoundation, video-io, historical]
 timestamp: 2026-07-26T00:00:00Z
 ---
+
+> **Status: resolved by API change.** `continuationTailPath` now accepts the
+> **previous segment's video** and `loadVideo(tail: true)` reads its last 9
+> frames natively — no clip preparation, no external tool, no seek. A
+> pre-trimmed 9-frame clip still works (its last 9 frames are all of them), so
+> callers written against the old contract keep working. What follows is why the
+> old contract was a trap; it also stands as a warning for any future API that
+> asks a caller to hand-cut a clip.
 
 `encodeContinuationTail` reads the tail clip through `loadVideoFrames`
 (`LatentUtils.swift`), which uses an `AVAssetImageGenerator` with
@@ -51,8 +59,9 @@ ffmpeg -i seg.mp4 -vf "select='gte(n,NFRAMES-9)',setpts=PTS-STARTPTS" -r 24 \
 ```
 
 Substitute `NFRAMES` with the segment's frame count. `PTS-STARTPTS` rebases
-the first frame to t=0; `-g 1` makes every frame a keyframe. The CLI help and
-the `encodeContinuationTail` doc comment carry this recipe.
+the first frame to t=0; `-g 1` makes every frame a keyframe. **Only needed on
+versions predating the native tail read** — current callers pass the previous
+segment and skip all of this.
 
 **Do not write the placeholder as `N`.** `N` is also ffmpeg's own per-frame
 variable inside `setpts`, so a recipe using it twice (`select='gte(n,N-9)'`
@@ -65,12 +74,18 @@ substitution — which breaks, with a symptom that varies by ffmpeg build:
 | both `N` replaced by the frame count | **124 frames** (all stamped alike, then re-timed by `-r 24`), first PTS 0.000 — reads fine but is the wrong clip |
 | (reported on ffmpeg 6.1.1) | 3 frames at PTS 5.0 → `-11832` |
 
-The 124-frame case is the dangerous one: `loadVideoFrames` samples its 9
-frames **uniformly across the clip's whole duration**, so a tail clip longer
-than 9 frames silently anchors on frames spread over the entire segment
-instead of its last 0.375 s. No error, wrong anchor. Hence: exactly 9 frames
-in the clip, and a placeholder that cannot be confused with a filter
-variable.
+The 124-frame case is the dangerous one: the uniform read samples its 9 frames
+**across the clip's whole duration**, so a tail clip longer than 9 frames
+silently anchors on frames spread over the entire segment instead of its last
+0.375 s. No error, wrong anchor.
+
+That failure mode is what motivated the API change: an argument whose
+correctness depends on the caller having cut *exactly* 9 frames, with
+timestamps starting at zero, using a recipe whose placeholder collides with an
+ffmpeg variable, is a contract that will be broken. Reading the tail inside the
+framework removes all three failure surfaces at once — and the length
+requirement disappears entirely, since "the last 9 frames" is well-defined for
+any input length.
 
 Framework-side hardening left undone (deliberate): the extractor could accept
 a non-zero tolerance for frame 0, or surface a message naming the clip

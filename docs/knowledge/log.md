@@ -12,6 +12,14 @@
   — the LTX audio decoder cleared by three measurements, the real losses being
   upstream in Voxtral enrollment (mlx-voxtral-swift#44).
 
+* **Update**: The continuation anchor reads the tail **natively** — the
+  [tail-clip pitfall](/docs/knowledge/pitfalls/continuation-tail-clip-encoding.md)
+  is now historical (marked as such, kept because it explains why an API that
+  asks callers to hand-cut a clip is a trap), and
+  [the continuation decision](/docs/knowledge/decisions/lipdub-continuation-anchor.md)
+  records the withdrawn contract. No ffmpeg mention remains anywhere in
+  `Sources/`.
+
 * **Creation**: [The LipDub audio contract](/docs/knowledge/pitfalls/lipdub-audio-contract.md)
   — one place for what an integrator must respect on the audio side (ship the
   generated track, verbatim transcript, ≤233-frame segments, reference quality,

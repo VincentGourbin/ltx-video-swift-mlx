@@ -290,9 +290,16 @@ func loadImage(from path: String, width: Int, height: Int) throws -> MLXArray {
 ///   - width: Target width in pixels
 ///   - height: Target height in pixels
 ///   - numFrames: Number of frames to extract (must be 8n+1)
+///   - tail: When true, read the video's **last** `numFrames` frames instead of
+///     sampling uniformly across its duration. Frame times are computed from the
+///     track's frame rate and requested mid-frame with a half-frame tolerance, so
+///     a clip whose PTS do not start exactly at zero still resolves (the uniform
+///     path keeps its zero tolerance and exact-boundary requests).
 /// - Returns: Normalized video tensor ready for VAE encoding
 /// - Throws: LTXError.fileNotFound if video cannot be loaded
-func loadVideo(from path: String, width: Int, height: Int, numFrames: Int) async throws -> MLXArray {
+func loadVideo(
+    from path: String, width: Int, height: Int, numFrames: Int, tail: Bool = false
+) async throws -> MLXArray {
     let url = URL(fileURLWithPath: path)
     guard FileManager.default.fileExists(atPath: path) else {
         throw LTXError.fileNotFound("Video file not found: \(path)")
@@ -310,16 +317,41 @@ func loadVideo(from path: String, width: Int, height: Int, numFrames: Int) async
 
     let generator = AVAssetImageGenerator(asset: asset)
     generator.appliesPreferredTrackTransform = true
-    generator.requestedTimeToleranceBefore = .zero
-    generator.requestedTimeToleranceAfter = .zero
     generator.maximumSize = CGSize(width: width, height: height)
 
-    // Uniformly sample numFrames times from the video duration
     var requestTimes: [CMTime] = []
-    for i in 0..<numFrames {
-        let fraction = Double(i) / Double(max(numFrames - 1, 1))
-        let seconds = fraction * durationSeconds
-        requestTimes.append(CMTime(seconds: seconds, preferredTimescale: 600))
+    if tail {
+        // Last numFrames frames. Frame times come from the track's own frame rate;
+        // each request lands mid-frame with a half-frame tolerance so a clip whose
+        // PTS are offset (a stream copy, a container edit list) still resolves to
+        // the intended frame instead of failing outright.
+        let track = try await asset.loadTracks(withMediaType: .video).first
+        let nominalFPS = try await track?.load(.nominalFrameRate) ?? 0
+        let fps = Double(nominalFPS > 0 ? nominalFPS : 24)
+        let totalFrames = max(1, Int((durationSeconds * fps).rounded()))
+        guard totalFrames >= numFrames else {
+            throw LTXError.videoProcessingFailed(
+                "Video has \(totalFrames) frame(s) at \(String(format: "%.2f", fps)) fps but "
+                + "\(numFrames) are needed for the tail read: \(path)")
+        }
+        let halfFrame = CMTime(seconds: 0.5 / fps, preferredTimescale: 600)
+        generator.requestedTimeToleranceBefore = halfFrame
+        generator.requestedTimeToleranceAfter = halfFrame
+        for i in 0..<numFrames {
+            let frameIndex = totalFrames - numFrames + i
+            let seconds = (Double(frameIndex) + 0.5) / fps
+            requestTimes.append(CMTime(seconds: seconds, preferredTimescale: 600))
+        }
+        LTXDebug.log("Tail read: frames \(totalFrames - numFrames)..<\(totalFrames) of \(totalFrames) at \(String(format: "%.2f", fps)) fps")
+    } else {
+        // Uniformly sample numFrames times from the video duration
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        for i in 0..<numFrames {
+            let fraction = Double(i) / Double(max(numFrames - 1, 1))
+            let seconds = fraction * durationSeconds
+            requestTimes.append(CMTime(seconds: seconds, preferredTimescale: 600))
+        }
     }
 
     // Extract and process frames

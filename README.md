@@ -182,13 +182,14 @@ ltx-video lipdub 'Speaking in Spanish saying: "Hola a todos..."' \
 
 See [docs/examples/lipdub/README.md](docs/examples/lipdub/README.md) for pipeline details and constraints.
 
-**Segment chaining (image mode)**: long dialogues are generated as chained segments; `--continuation-tail tail.mp4` anchors a segment on the PREVIOUS segment's last 9 frames instead of re-starting from the still image — preserving position and motion across the cut (measured seam PSNR: 17.4 dB photo re-anchor → 24.6 dB with continuation). The first output frame duplicates the anchor: drop one frame when concatenating. Cut segments inside speech pauses: both sides of the seam then have a closed mouth, which hides any residual discontinuity.
-
-The tail clip must contain exactly those 9 frames, with frame 0 at `t=0` — an input seek (`-sseof`) leaves an offset that the zero-tolerance frame extractor refuses (`AVFoundationErrorDomain -11832`). Use a frame filter instead, substituting `NFRAMES` with the segment's frame count:
+**Segment chaining (image mode)**: long dialogues are generated as chained segments. Pass the **previous segment's video** to `--continuation-tail` — the framework reads its last 9 frames itself (natively, via AVFoundation; no clip preparation, no external tool) and anchors the new segment on them instead of re-starting from the still image, preserving position and motion across the cut (measured seam PSNR: 17.4 dB photo re-anchor → 24.6 dB with continuation). The first output frame duplicates the anchor: drop one frame when concatenating. Cut segments inside speech pauses: both sides of the seam then have a closed mouth, which hides any residual discontinuity.
 
 ```bash
-ffmpeg -i seg.mp4 -vf "select='gte(n,NFRAMES-9)',setpts=PTS-STARTPTS" -r 24 \
-       -c:v libx264 -g 1 -crf 12 -pix_fmt yuv420p -an tail.mp4
+# segment 2 continues segment 1 — no intermediate clip
+ltx-video lipdub 'Speaking in French saying: "…suite du dialogue."' \
+    --continuation-tail segment1.mp4 \
+    --target-audio segment2_tts.wav \
+    -w 704 -h 1024 -f 233
 ```
 
 **Consecutive runs (Swift package):** the IC-LoRA is fused destructively into the 22B transformer. Consecutive `generateLipDub` calls with the same LoRA reuse the fused transformer without re-fusing — no model reload per segment — provided the transformer survives between runs (`MemoryOptimizationConfig.disabled`, i.e. `unloadAfterUse: false`). Switching LoRA, or running `generateVideo`/`generateRetake` while fused, throws until `loadModels()` + `loadAudioModels()` restore pristine weights. Check `pipeline.fusedLipDubLoRAPath` for the current state.

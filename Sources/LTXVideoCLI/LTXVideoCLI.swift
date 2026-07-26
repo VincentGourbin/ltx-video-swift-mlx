@@ -714,7 +714,7 @@ struct LipDub: AsyncParsableCommand {
     @Option(name: .long, help: "Target audio path (.wav/.m4a/.mp4) to lip-sync to. With --reference-video, the audio is auto-aligned (silence-aware time-stretch, pitch preserved) to the source's speech window and replaces the source audio. REQUIRED with --reference-image (used directly without alignment).")
     var targetAudio: String?
 
-    @Option(name: .long, help: "Segment chaining (image mode): short clip whose FIRST 9 frames are the previous segment's tail, and which contains ONLY those 9 frames. Must be re-encoded with frame 0 at t=0 — an input seek (-sseof) yields a clip the extractor rejects; use: ffmpeg -i seg.mp4 -vf \"select='gte(n,NFRAMES-9)',setpts=PTS-STARTPTS\" -r 24 -c:v libx264 -g 1 -crf 12 -pix_fmt yuv420p -an tail.mp4 (substitute NFRAMES with the segment's frame count). Replaces the still image as the frame-0 anchor, preserving position AND motion across the cut. Requires --target-audio; trim 1 frame at concatenation. Mutually exclusive with --reference-video.")
+    @Option(name: .long, help: "Segment chaining (image mode): path to the PREVIOUS segment's video. Its last 9 frames are read natively — no clip preparation needed. Replaces the still image as the frame-0 anchor, preserving position AND motion across the cut. Requires --target-audio; trim 1 frame at concatenation. Mutually exclusive with --reference-video.")
     var continuationTail: String?
 
     @Option(name: .shortAndLong, help: "Output file path (default: lipdub.mp4)")
