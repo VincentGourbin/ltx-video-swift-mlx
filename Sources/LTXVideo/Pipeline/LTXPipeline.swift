@@ -3259,7 +3259,20 @@ AESTHETIC QUALITY (in addition to the above, without breaking the objective capt
     /// thought channel, so reasoning and loop protection now coexist.
     /// Reasoning costs ~350 tokens before the answer, hence the raised budget.
     private let enhancerThinking = true
-    private let enhancerNGram = true
+
+    /// N-gram blocking stays off, now as a measured choice rather than a
+    /// workaround. gemma-4-swift-mlx 1.5.0 made it *possible* to run it
+    /// alongside reasoning (its window can skip the thought channel), and that
+    /// works — but a four-prompt bench against the reference service found it
+    /// inert on three prompts (byte-identical captions) and harmful on the
+    /// fourth, the one dense with repeated timestamps: two marker formats
+    /// instead of one, and 250 characters lost. Its purpose is loop protection,
+    /// and no loop has ever been observed here.
+    ///
+    /// Flip to `true` if a prompt ever loops; the machinery is in place.
+    private var enhancerNGram: Bool {
+        ProcessInfo.processInfo.environment["LTX_ENH_NGRAM"].map { $0 == "1" } ?? false
+    }
 
     /// LTX-2.5 prompt enhancement through our own `Gemma4Swift` stack.
     ///
@@ -3300,9 +3313,11 @@ AESTHETIC QUALITY (in addition to the above, without breaking the objective capt
                 // folding it into the user message (gemma-4-swift-mlx 1.3.0).
                 systemPrompt: Self.promptEnhancementGemma4I2VSystemPrompt,
                 temperature: 0.0,
-                // Reasoning costs ~350 tokens before the answer starts; at 600 a
-                // long caption gets truncated mid-sentence (measured upstream).
-                maxTokens: enhancerThinking ? 1200 : 600,
+                // Reasoning costs ~350 tokens on a short answer, but it scales
+                // with the prompt: a plain scene description reasoned long
+                // enough to leave the caption cut mid-word at 1200. The budget
+                // has to cover thought *and* answer, so it is generous.
+                maxTokens: enhancerThinking ? 2400 : 600,
                 noRepeatNGramSize: enhancerNGram ? 5 : nil,
                 // Deliberate deviation from HF semantics (and from the reference
                 // space): ban only n-grams repeated within the GENERATED text, so
@@ -3341,6 +3356,14 @@ AESTHETIC QUALITY (in addition to the above, without breaking the objective capt
         guard !cleaned.isEmpty else {
             print("Enhancement produced an empty result; keeping the original prompt")
             return prompt
+        }
+        // A caption cut mid-sentence is worse than no enhancement: it encodes a
+        // truncated scene as if it were the whole one. Say so loudly rather
+        // than letting it through silently.
+        if let last = cleaned.last, !".!?\"".contains(last) {
+            print("⚠️ Enhanced prompt looks truncated (ends \"…\(cleaned.suffix(30))\") — "
+                + "the reasoning likely consumed the token budget. Using it anyway; "
+                + "re-run without --enhance-prompt if the result ignores part of the scene.")
         }
         print("Enhanced prompt (Gemma 4 E2B-it):\n\(cleaned)")
         fflush(stdout)
