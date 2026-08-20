@@ -3253,14 +3253,13 @@ AESTHETIC QUALITY (in addition to the above, without breaking the objective capt
     /// | on       | on      | *no* timestamps at all                   |
     ///
     /// Reasoning is what fixes the timeline arithmetic; the n-gram ban then
-    /// forbids the caption from repeating what the reasoning just wrote, which
-    /// erases the markers entirely. So thinking is on and n-gram blocking is
-    /// off until the window can skip the thought channel (asked upstream);
-    /// loop protection is what we trade away meanwhile, measured harmless on
-    /// the bench prompts. Reasoning costs ~350 tokens before the answer, hence
-    /// the raised budget.
+    /// forbade the caption from repeating what the reasoning had just written,
+    /// which erased the markers entirely — so the two could not both be on.
+    /// gemma-4-swift-mlx 1.5.0 resolves that: the ban window can skip the
+    /// thought channel, so reasoning and loop protection now coexist.
+    /// Reasoning costs ~350 tokens before the answer, hence the raised budget.
     private let enhancerThinking = true
-    private let enhancerNGram = false
+    private let enhancerNGram = true
 
     /// LTX-2.5 prompt enhancement through our own `Gemma4Swift` stack.
     ///
@@ -3311,6 +3310,9 @@ AESTHETIC QUALITY (in addition to the above, without breaking the objective capt
                 // with the prompt in the window, timestamps come out mangled and
                 // the duration head over-predicts ~5 s (docs/knowledge pitfall).
                 noRepeatNGramIncludesPrompt: false,
+                // The reasoning must not count as "already written", or the
+                // caption cannot restate the timeline it just worked out.
+                noRepeatNGramIncludesThinking: false,
                 templateVariables: enhancerThinking ? ["enable_thinking": true] : nil)
         } else {
             stream = try await g4.chatStream(
