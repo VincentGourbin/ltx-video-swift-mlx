@@ -71,11 +71,19 @@ share is the decoder's behaviour on a latent spanning one pixel frame instead of
 eight. Artefacts: `docs/examples/ltx-2.5/keyframe-slots/`.
 
 Fed back through `interpolate --anchors`, two slots measurably improve the
-temporal round on a 121→241 clip, against the same run without them: worst
-inter-frame spike z 5.76 → **2.94**, mean fidelity 23.98 → **24.86 dB**, worst
-frame 16.97 → 18.01 dB, mean inter-frame delta unchanged at 0.0105. One seed,
-one clip, a single window — but three metrics agreeing, and the halved spike is
-the one that matters, since a spike is what a seam looks like.
+temporal round on a 121→241 clip. Three conditions, one seed, one clip, a single
+window:
+
+| | source anchors + slots | source anchors only | slots only |
+|---|---|---|---|
+| worst inter-frame spike | z 2.94 | z 5.76 | **z 2.01** |
+| mean fidelity | **24.86 dB** | 23.98 dB | 22.64 dB |
+| mean inter-frame delta | 0.0105 | 0.0105 | **0.0098** |
+
+**Source anchors buy fidelity, generated keyframes buy continuity.** Two slots
+alone give the smoothest result of the three while drifting furthest from the
+source — two anchors constrain far less than eight. Both together win on
+fidelity and still halve the spike, which is the combination the defaults use.
 
 Cost: 242 s with two slots against baselines of 187.6 s and 229.0 s at the same
 seed and geometry. Two slots add 12.5% tokens, and the spread between the two

@@ -40,15 +40,21 @@ inspectable.
 round, which is what they are for. Against the same run without them (seed 3,
 121 → 241 frames, single window):
 
-| | anchored | control |
-|---|---|---|
-| worst inter-frame spike | **z 2.94** | z 5.76 |
-| mean fidelity vs source | **24.86 dB** | 23.98 dB |
-| worst frame | **18.01 dB** | 16.97 dB |
-| mean inter-frame delta | 0.0105 | 0.0105 |
+| | source anchors + slots | source anchors only | slots only |
+|---|---|---|---|
+| worst inter-frame spike | z 2.94 | z 5.76 | **z 2.01** |
+| mean fidelity vs source | **24.86 dB** | 23.98 dB | 22.64 dB |
+| worst frame | **18.01 dB** | 16.97 dB | 16.65 dB |
+| mean inter-frame delta | 0.0105 | 0.0105 | **0.0098** |
 
-`interpolate-anchored-241f.mp4` is the anchored result. The halved spike is the
-number that matters: a spike is what a seam looks like.
+`interpolate-anchored-241f.mp4` is the first column.
+
+The three columns say something the first two alone did not: **source anchors
+buy fidelity, generated keyframes buy continuity.** Two slots alone (with
+`--anchor-every 0`) give the smoothest result of the three — lowest delta and
+lowest spike — while drifting furthest from the source, because two anchors
+constrain far less than eight. Using both is what wins on fidelity, and it still
+halves the spike.
 
 Cost, three runs at 768x512 / 121 frames on an M3 Max: 187.6 s and 229.0 s
 without slots, 242.0 s with two. Two slots add 12.5% tokens, and the spread
