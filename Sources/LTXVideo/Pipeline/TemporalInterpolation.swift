@@ -164,7 +164,13 @@ extension LTXPipeline {
                 frames: (tile.length - 1) * 8 + 1, height: height, width: width)
 
             var anchorContext: AppendKeyframeContext? = nil
-            if effectiveAnchorEvery > 0, let cfg = (transformer?.config ?? ltx2Transformer?.config) {
+            // Three independent sources of anchors, each with its own switch:
+            // source frames (`anchorEvery`), the previous tile's output
+            // (`carryForward`), and generated keyframes (`anchorsPath`). They
+            // shared one gate once, so `--anchor-every 0 --anchors file` threw
+            // the file away without a word.
+            let wantsAnchors = effectiveAnchorEvery > 0 || carryForward || slotAnchors != nil
+            if wantsAnchors, let cfg = (transformer?.config ?? ltx2Transformer?.config) {
                 var guides: [AppendedGuideTokens] = []
                 var anchored: [Int] = []
                 var anchoredSlots: [Int] = []
@@ -215,18 +221,21 @@ extension LTXPipeline {
                 // Source frames sit at even indices of the densified latent; a
                 // tile anchors those falling inside its own window, addressed
                 // locally so its RoPE grid matches.
-                var positions = Set(
-                    stride(from: 0, to: latent.dim(2), by: 2 * effectiveAnchorEvery)
-                        .filter { $0 >= tile.start && $0 < tile.endExclusive })
+                var positions = Set<Int>()
+                if effectiveAnchorEvery > 0 {
+                    positions = Set(
+                        stride(from: 0, to: latent.dim(2), by: 2 * effectiveAnchorEvery)
+                            .filter { $0 >= tile.start && $0 < tile.endExclusive })
                 // Always anchor the seam itself. A strided anchor grid does not
                 // generally land on a tile boundary, and a weakly anchored seam
                 // is exactly where the two tiles' inventions fail to meet:
                 // measured a 38.4 inter-frame spike (z = +11) at a seam with no
                 // anchor within four frames, against none at a seam that had one.
                 // Source frames sit at even indices, so round the boundary down.
-                for boundary in [tile.start, tile.start + tile.dropPrefix]
-                where boundary < tile.endExclusive {
-                    positions.insert(boundary - (boundary % 2))
+                    for boundary in [tile.start, tile.start + tile.dropPrefix]
+                    where boundary < tile.endExclusive {
+                        positions.insert(boundary - (boundary % 2))
+                    }
                 }
                 for global in positions.sorted() {
                     let local = global - tile.start

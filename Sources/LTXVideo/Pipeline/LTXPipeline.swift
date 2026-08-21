@@ -573,6 +573,12 @@ public actor LTXPipeline {
         progressCallback?(DownloadProgress(progress: 0.5, message: "Loading transformer..."))
 
         let transformerConfig = model.transformerConfig
+        // These "Load" phases read in milliseconds, and that is not a mistake to
+        // be proud of: MLX memory-maps the weights and evaluates lazily, so the
+        // phase covers building the modules and dispatching the update, while
+        // the real I/O and materialisation land inside the first phase that
+        // touches a weight. They are not comparable to an eager framework's
+        // load time.
         LTXVideoProfiler.shared.start("Load Transformer")
         transformer = LTXTransformer(config: transformerConfig, memoryOptimization: memoryOptimization)
 
