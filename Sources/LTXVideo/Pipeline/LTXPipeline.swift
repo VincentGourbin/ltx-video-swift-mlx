@@ -573,11 +573,13 @@ public actor LTXPipeline {
         progressCallback?(DownloadProgress(progress: 0.5, message: "Loading transformer..."))
 
         let transformerConfig = model.transformerConfig
+        LTXVideoProfiler.shared.start("Load Transformer")
         transformer = LTXTransformer(config: transformerConfig, memoryOptimization: memoryOptimization)
 
         stepStart = Date()
         LTXDebug.log("Applying \(transformerWeights.count) transformer weights...")
         try LTXWeightLoader.applyTransformerWeights(transformerWeights, to: transformer!)
+        LTXVideoProfiler.shared.end("Load Transformer")
         LTXDebug.log("[TIME] Apply transformer weights: \(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
 
         // Evaluate transformer weights to ensure they're fully materialized
@@ -610,6 +612,7 @@ public actor LTXPipeline {
         // Step 4: Create and load VAE decoder
         progressCallback?(DownloadProgress(progress: 0.7, message: "Loading VAE decoder..."))
 
+        LTXVideoProfiler.shared.start("Load Video VAE")
         vaeDecoder = VideoDecoder()
         // LTX-2.3 unified file doesn't include standalone vae/config.json;
         // timestep_conditioning defaults to false (matching LTX-2.3 behavior)
@@ -617,6 +620,7 @@ public actor LTXPipeline {
         stepStart = Date()
         LTXDebug.log("Applying \(vaeWeights.count) VAE weights...")
         try LTXWeightLoader.applyVAEWeights(vaeWeights, to: vaeDecoder!)
+        LTXVideoProfiler.shared.end("Load Video VAE")
         LTXDebug.log("[TIME] VAE load: \(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
 
         // Step 5: Create and load text encoder (connector)
@@ -724,8 +728,10 @@ public actor LTXPipeline {
         }
         let audioVAEWeights = try LTXWeightLoader.loadAudioVAEWeights(from: audioVAEPath.path, includeEncoder: includeEncoder)
 
+        LTXVideoProfiler.shared.start("Load Audio VAE")
         audioVAE = AudioVAE(includeEncoder: includeEncoder)
         try LTXWeightLoader.applyAudioVAEWeights(audioVAEWeights, to: audioVAE!)
+        LTXVideoProfiler.shared.end("Load Audio VAE")
         LTXDebug.log("Audio VAE loaded from \(audioVAEPath.lastPathComponent)")
 
         // Step 2: Download and load Vocoder
@@ -758,7 +764,9 @@ public actor LTXPipeline {
         )
 
         // Apply weights with audio key mapping enabled
+        LTXVideoProfiler.shared.start("Load Dual Transformer")
         try LTXWeightLoader.applyTransformerWeights(transformerWeights, to: ltx2, includeAudio: true)
+        LTXVideoProfiler.shared.end("Load Dual Transformer")
 
         // Apply quantization if configured
         if let mixedConfig = quantization.mixedPrecision {
@@ -1516,6 +1524,7 @@ public actor LTXPipeline {
         var audioSampleRate: Int? = nil
         if hasAudio, let ap = audioLatentPacked, let audioVAE = audioVAE, let vocoder = vocoder {
             LTXDebug.log("Decoding audio latents...")
+            profiler.start("Audio Decode")
             let audioLatentUnpacked = unpackAudioLatents(ap, numFrames: audioNumFrames)
             let waveform = decodeAudio(
                 latents: audioLatentUnpacked,
@@ -1523,6 +1532,7 @@ public actor LTXPipeline {
                 vocoder: vocoder
             )
             MLX.eval(waveform)
+            profiler.end("Audio Decode")
             audioWaveform = waveform
             audioSampleRate = vocoder.outputSampleRate
             LTXDebug.log("Audio waveform: \(waveform.shape)")
@@ -3399,6 +3409,10 @@ AESTHETIC QUALITY (in addition to the above, without breaking the objective capt
     ) async throws -> String {
         print("Prompt enhancer: Gemma 4 E2B-it bf16 via Gemma4Swift (downloading if needed, ~10GB)...")
         fflush(stdout)
+        // Its own phase: enhancement is a separate model and a separate cost,
+        // and folding it into text encoding would misattribute both.
+        LTXVideoProfiler.shared.start("Prompt Enhancement")
+        defer { LTXVideoProfiler.shared.end("Prompt Enhancement") }
         let dir = try await downloader.downloadGemma4Enhancer { p in
             if let f = p.currentFile { print("  \(f)"); fflush(stdout) }
         }

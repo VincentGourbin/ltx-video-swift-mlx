@@ -45,6 +45,7 @@ extension LTXPipeline {
         maxTileLatentFrames: Int = 32,
         sourceFPS: Float = 24.0,
         carryForward: Bool = false,
+        anchorsPath: String? = nil,
         onProgress: (@Sendable (GenerationProgress) -> Void)? = nil
     ) async throws -> VideoGenerationResult {
         // A round doubles the frame count at constant duration, so the refined
@@ -106,6 +107,35 @@ extension LTXPipeline {
                 + (renoiseFrom != nil || anchorEvery != nil ? " (caller override)" : " (tiled defaults)"))
         }
 
+        // Generated keyframe slots from the run that produced this clip. They
+        // are anchors the model made itself, at full quality, in the same pass —
+        // stronger than anchoring on a source frame, which has been through a
+        // VAE round trip and a temporal upsample since.
+        var slotAnchors: (latents: MLXArray, pixelFrames: [Int])? = nil
+        if let anchorsPath {
+            let (arrays, _) = try MLX.loadArraysAndMetadata(
+                url: URL(fileURLWithPath: anchorsPath))
+            guard let latents = arrays["keyframes"],
+                  let indices = arrays["pixel_frame_indices"] else {
+                throw LTXError.invalidConfiguration(
+                    "\(anchorsPath) carries no `keyframes` / `pixel_frame_indices` — "
+                    + "it is not a --slots-out file")
+            }
+            let frames = indices.asArray(Int32.self).map(Int.init)
+            guard latents.dim(3) == height / 32, latents.dim(4) == width / 32 else {
+                throw LTXError.invalidConfiguration(
+                    "anchors are \(latents.dim(3))×\(latents.dim(4)) latent cells, this clip is "
+                    + "\(height / 32)×\(width / 32) — they come from a different geometry")
+            }
+            guard latents.dim(2) == frames.count else {
+                throw LTXError.invalidConfiguration(
+                    "anchors: \(latents.dim(2)) keyframes for \(frames.count) indices")
+            }
+            slotAnchors = (latents.asType(.float32), frames)
+            LTXDebug.log("[temporal] \(frames.count) generated-keyframe anchors at source "
+                + "pixel frames \(frames)")
+        }
+
         let sigmas = temporalSigmas.filter { $0 <= effectiveRenoise || $0 == 0 }
         guard sigmas.count >= 2 else {
             throw LTXError.invalidConfiguration(
@@ -137,6 +167,7 @@ extension LTXPipeline {
             if effectiveAnchorEvery > 0, let cfg = (transformer?.config ?? ltx2Transformer?.config) {
                 var guides: [AppendedGuideTokens] = []
                 var anchored: [Int] = []
+                var anchoredSlots: [Int] = []
 
                 // Optional: carry the previous tile's *denoised* output into
                 // this one's lead-in, anchoring on what was actually rendered
@@ -157,10 +188,30 @@ extension LTXPipeline {
                         guides.append(buildKeyframeGuideToken(
                             encodedLatent: previous[
                                 0..., 0..., inPrevious ..< (inPrevious + 1), 0..., 0...],
-                            temporalPosition: Self.gridTemporalPosition(latentFrame: local)))
+                            temporalPosition: Self.gridTemporalPosition(
+                                latentFrame: local, fps: denseFPS)))
                         anchored.append(local)
                     }
                 }
+                // Generated keyframes, when the caller supplied them. A slot
+                // made at source pixel frame p sits at 2p once the clip is
+                // densified — the frame count doubles at constant duration, the
+                // way upstream scales its carried seam positions. Unlike a
+                // source-frame anchor, a slot spans a single pixel frame, so it
+                // is placed by pixel index rather than on the latent grid.
+                if let anchors = slotAnchors {
+                    for (slot, sourceFrame) in anchors.pixelFrames.enumerated() {
+                        guard let localPixel = Self.slotLocalPixel(
+                            sourceFrame: sourceFrame, tile: tile) else { continue }
+                        guides.append(buildKeyframeGuideToken(
+                            encodedLatent: anchors.latents[
+                                0..., 0..., slot ..< (slot + 1), 0..., 0...],
+                            pixelFrameIndex: localPixel,
+                            fps: denseFPS))
+                        anchoredSlots.append(localPixel)
+                    }
+                }
+
                 // Source frames sit at even indices of the densified latent; a
                 // tile anchors those falling inside its own window, addressed
                 // locally so its RoPE grid matches.
@@ -192,7 +243,9 @@ extension LTXPipeline {
                         guides: guides, shape: windowShape, hasAudio: false,
                         refConfig: cfg, stageLabel: "tile \(index) anchors", fps: denseFPS)
                     LTXDebug.log("[temporal] tile \(index) frames \(tile.start)..<\(tile.endExclusive), "
-                        + "anchors at local \(anchored)")
+                        + "anchors at local \(anchored)"
+                        + (anchoredSlots.isEmpty ? ""
+                           : ", generated keyframes at local pixel \(anchoredSlots)"))
                 }
             }
 
@@ -242,6 +295,26 @@ extension LTXPipeline {
     /// four steps starting below the high-noise region, since the input already
     /// carries the composition.
     var temporalSigmas: [Float] { Array(DISTILLED_SIGMA_VALUES.dropFirst(4)) }
+
+    /// Where a generated keyframe lands inside one tile, or `nil` when it falls
+    /// outside it.
+    ///
+    /// Two rebasings compose here, and getting either wrong puts a perfectly
+    /// good anchor on the wrong moment — which reads as the model changing its
+    /// mind rather than as a bug:
+    ///
+    /// * a round doubles the frame count at constant duration, so a slot made at
+    ///   source pixel frame `p` is at `2p` in the densified clip (upstream
+    ///   scales its carried seam positions the same way);
+    /// * a tile is denoised standalone with positions restarting at 0, and its
+    ///   first latent frame covers pixels from `8·start − 7` (the causal grid
+    ///   clamps that to 0 for the first frame).
+    static func slotLocalPixel(sourceFrame: Int, tile: TemporalTile) -> Int? {
+        let tilePixelStart = max(8 * tile.start - 7, 0)
+        let tilePixelCount = (tile.length - 1) * 8 + 1
+        let local = 2 * sourceFrame - tilePixelStart
+        return (local >= 0 && local < tilePixelCount) ? local : nil
+    }
 
     /// Temporal coordinate the position grid gives a latent frame — the
     /// midpoint of the pixel span it covers, after the causal shift, over fps.

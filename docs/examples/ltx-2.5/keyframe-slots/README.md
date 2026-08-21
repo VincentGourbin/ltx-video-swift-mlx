@@ -34,6 +34,22 @@ and clearly further from a frame two seconds away. Slots are consumed as latents
 by later stages and never decoded in normal use; the decode exists to make them
 inspectable.
 
+## Fed back as anchors
+
+`ltx-video interpolate --anchors slots.safetensors` reuses them in the temporal
+round, which is what they are for. Against the same run without them (seed 3,
+121 → 241 frames, single window):
+
+| | anchored | control |
+|---|---|---|
+| worst inter-frame spike | **z 2.94** | z 5.76 |
+| mean fidelity vs source | **24.86 dB** | 23.98 dB |
+| worst frame | **18.01 dB** | 16.97 dB |
+| mean inter-frame delta | 0.0105 | 0.0105 |
+
+`interpolate-anchored-241f.mp4` is the anchored result. The halved spike is the
+number that matters: a spike is what a seam looks like.
+
 Cost, three runs at 768x512 / 121 frames on an M3 Max: 187.6 s and 229.0 s
 without slots, 242.0 s with two. Two slots add 12.5% tokens, and the spread
 between two identical baselines (41 s) is as large as the difference — the

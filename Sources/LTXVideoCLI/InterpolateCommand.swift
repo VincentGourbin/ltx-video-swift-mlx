@@ -52,6 +52,9 @@ struct Interpolate: AsyncParsableCommand {
     @Option(name: .long, help: "Source frame rate; the refined clip is positioned at twice it, capped at 60")
     var sourceFps: Float = 24.0
 
+    @Option(name: .long, help: "Generated keyframes written by `generate --slots-out`, reused as anchors. They come from the pass that produced the clip, so they carry no VAE round trip")
+    var anchors: String?
+
     @Flag(name: .long, help: "Anchor each tile on the previous tile's output as well as on the source. Measured slightly worse than the tiled defaults for twice the time; kept for experimentation")
     var carryForward: Bool = false
 
@@ -122,7 +125,7 @@ struct Interpolate: AsyncParsableCommand {
             videoPath: input, prompt: prompt, upscalerPath: upscalerPath,
             width: width, height: height, numFrames: frames, seed: seed, eta: eta,
             renoiseFrom: renoiseFrom, anchorEvery: anchorEvery, maxTileLatentFrames: tileFrames,
-            sourceFPS: sourceFps, carryForward: carryForward,
+            sourceFPS: sourceFps, carryForward: carryForward, anchorsPath: anchors,
             onProgress: { progress in
                 print("  Step \(progress.currentStep + 1)/\(progress.totalSteps) [\(progress.phase)]")
                 fflush(stdout)

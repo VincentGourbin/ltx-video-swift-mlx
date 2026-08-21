@@ -32,6 +32,12 @@
 
 ## 2026-08-21
 
+* **Creation**: [LTX-2.5 against MiniMax-H3 on a 10 s case](/docs/knowledge/benchmarks/ltx25-vs-h3-starship-2026-08.md)
+  — 50 min 50 against 3 h 55 for the same work, one full-resolution step 4.9×
+  cheaper, and a 2.8× spread between two identical LTX runs that dwarfs most of
+  what it measures. Each model wins half the timecode criterion; prompt
+  enhancement moved the event *away* from the requested time.
+
 * **Creation**: [The enhancer's residual defects are the reference's](/docs/knowledge/investigations/enhancer-residual-defects-2026-08.md)
   — four prompts against the Space's own inference: viewpoint stacking appears
   in both (verbatim the same phrase on one prompt), detached adverbs three times

@@ -165,6 +165,12 @@ ltx-video generate "A red vintage 2CV lifting off a gravel driveway" \
 Slots need LTX-2.5's learned keyframe marker; asking for them on an earlier
 checkpoint is refused up front. Each costs one latent frame's worth of tokens.
 
+`interpolate --anchors anchors.safetensors` feeds them back in, which is what
+they are for: unlike a source frame, a slot has been through no VAE round trip
+and no temporal upsample since it was made. Measured on a 121→241 frame clip
+with two slots, against the same run without them: worst inter-frame spike
+z 5.76 → **2.94**, mean fidelity 23.98 → **24.86 dB**, smoothness unchanged.
+
 ### LoRA
 
 ```bash
@@ -574,6 +580,7 @@ Doubles the frame rate through the temporal upscaler. Duration is unchanged.
 | `--anchor-every` | auto | Anchor every Nth source frame (0 disables) — `4` single-window, `1` tiled |
 | `--tile-frames` | `32` | Max latent frames denoised at once; lower trades speed for memory |
 | `--source-fps` | `24` | Source frame rate; the refined clip is positioned at twice it, capped at 60 |
+| `--anchors` | none | Generated keyframes from `generate --slots-out`, reused as anchors |
 | `--carry-forward` | off | Also anchor each tile on the previous tile's output — measured slightly worse than the tiled defaults for twice the time, kept for experimentation |
 | `--seed` | random | Random seed |
 | `--model` | `2.5-distilled` | Temporal upsampling ships with LTX-2.5 |

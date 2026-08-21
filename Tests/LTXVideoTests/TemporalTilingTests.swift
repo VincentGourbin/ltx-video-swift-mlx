@@ -90,3 +90,44 @@ struct DensifiedClipRateTests {
         }
     }
 }
+
+@Suite("Generated keyframes as tile anchors")
+struct SlotAnchorPlacementTests {
+
+    /// A single window covering a 121-frame source densified to 241.
+    static let whole = TemporalTile(start: 0, endExclusive: 31, dropPrefix: 0)
+
+    @Test func aSlotLandsAtTwiceItsSourceFrame() {
+        // The round doubles the frame count at constant duration, so the moment
+        // a slot captured at source frame 40 is at dense frame 80. Anchoring it
+        // at 40 would pin it a whole second early.
+        #expect(LTXPipeline.slotLocalPixel(sourceFrame: 0, tile: Self.whole) == 0)
+        #expect(LTXPipeline.slotLocalPixel(sourceFrame: 40, tile: Self.whole) == 80)
+        #expect(LTXPipeline.slotLocalPixel(sourceFrame: 80, tile: Self.whole) == 160)
+    }
+
+    @Test func aTileRebasesToItsOwnOrigin() {
+        // Tiles are denoised standalone with positions restarting at 0. A tile
+        // beginning at latent frame 16 covers pixels from 8·16 − 7 = 121, so a
+        // slot at source frame 80 (dense 160) sits at local 39.
+        let tile = TemporalTile(start: 16, endExclusive: 31, dropPrefix: 2)
+        #expect(LTXPipeline.slotLocalPixel(sourceFrame: 80, tile: tile) == 160 - 121)
+        // Everything before the window is refused rather than clamped to 0 —
+        // clamping would stack every earlier anchor onto the tile's first frame.
+        #expect(LTXPipeline.slotLocalPixel(sourceFrame: 40, tile: tile) == nil)
+    }
+
+    @Test func slotsOutsideTheWindowAreRefused() {
+        // The last pixel a 31-frame window covers is (31 − 1)·8 = 240.
+        #expect(LTXPipeline.slotLocalPixel(sourceFrame: 120, tile: Self.whole) == 240)
+        #expect(LTXPipeline.slotLocalPixel(sourceFrame: 121, tile: Self.whole) == nil)
+    }
+
+    @Test func theFirstLatentFrameIsClampedLikeTheGrid() {
+        // The causal grid collapses frame 0's span, so a tile starting at 0 has
+        // pixel origin 0, not −7. An unclamped origin would shift every anchor
+        // in the first tile by seven frames.
+        let first = TemporalTile(start: 0, endExclusive: 8, dropPrefix: 0)
+        #expect(LTXPipeline.slotLocalPixel(sourceFrame: 1, tile: first) == 2)
+    }
+}
