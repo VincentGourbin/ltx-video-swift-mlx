@@ -64,8 +64,6 @@ struct AppendKeyframeContext {
         self.slotInitialTokens = slotInitialTokens
     }
 
-    /// Total appended tokens — frozen guides plus denoised slots.
-    var appendedCount: Int { guideCount + (slots?.tokenCount ?? 0) }
 }
 
 /// Assemble a context from guide tokens the caller already built.

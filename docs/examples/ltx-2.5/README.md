@@ -15,6 +15,7 @@ clips live in [`docs/knowledge/`](../../knowledge/index.md).
 | `transition-compare-strip.png` | Frames 0/30/60/90/120, top 2.3 / bottom 2.5 |  |
 | `upscale-source-384x256.mp4` → `upscale-25-stage1.mp4` → `upscale-25-final-768x512.mp4` | The pixel spatial upscaler chain on 2.5: 8-step stage 1 with the IC-LoRA at source resolution, latent upscale, 3-step refinement. Subject identity holds end-to-end — see the [stage-2 decision](../../knowledge/decisions/iclora-stage2-keeps-adapter-and-reference.md) for why adapter and reference both stay active | 2.5-distilled, x2 1.0 adapter, seed 42 |
 | `lipdub-23-bigvgan-vocoder.mp4` | LipDub (2.3) through the checkpoint's real vocoder — 48 kHz, BigVGAN + bandwidth extension | distilled (2.3), 121f, seed 42 |
+| [`keyframe-slots/`](keyframe-slots/) | Generated keyframe slots: the clip, a slot decoded on its own, the matching frame, and the one-frame VAE round trip that is the control for reading them | 2.5-distilled, 121f, seed 42, slots at 40 and 80 |
 
 ## Distilled vs dev quality series (August 15-16)
 

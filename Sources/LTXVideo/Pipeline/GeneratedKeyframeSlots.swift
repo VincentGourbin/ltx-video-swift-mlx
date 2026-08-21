@@ -102,21 +102,6 @@ enum GeneratedKeyframeSlots {
         return MLX.concatenated(frames, axis: 2)
     }
 
-    /// Default slot placement for a clip: one keyframe every `every` pixel
-    /// frames, starting at the first frame the model actually generates.
-    ///
-    /// Frame 0 is excluded when the clip is image-conditioned — it already has a
-    /// given keyframe there, and a slot on top of it would compete with it.
-    static func defaultPositions(
-        numFrames: Int,
-        every: Int = 96,
-        skipFirst: Bool
-    ) -> [Int] {
-        precondition(every > 0, "slot spacing must be positive")
-        var positions = stride(from: skipFirst ? every : 0, to: numFrames, by: every).map { $0 }
-        if positions.isEmpty { positions = [0] }
-        return positions
-    }
 }
 
 /// Slice the slot span out of an extended velocity, `nil` when the stage has no

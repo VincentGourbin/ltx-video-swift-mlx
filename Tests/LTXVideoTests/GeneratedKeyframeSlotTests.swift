@@ -131,18 +131,6 @@ struct GeneratedKeyframeSlotTests {
         #expect(sliceSlotVelocity(velocity, layout: nil) == nil)
     }
 
-    @Test func defaultPositionsSkipAGivenOpeningFrame() {
-        // An image-conditioned clip already has a keyframe at frame 0; a slot on
-        // top of it would compete with the conditioning rather than add an anchor.
-        #expect(GeneratedKeyframeSlots.defaultPositions(numFrames: 241, every: 96, skipFirst: true)
-            == [96, 192])
-        #expect(GeneratedKeyframeSlots.defaultPositions(numFrames: 241, every: 96, skipFirst: false)
-            == [0, 96, 192])
-        // A clip shorter than one spacing still gets an anchor.
-        #expect(GeneratedKeyframeSlots.defaultPositions(numFrames: 49, every: 96, skipFirst: true)
-            == [0])
-    }
-
     @Test func invalidRequestsAreRefused() throws {
         #expect(throws: LTXError.self) { try validatedSlotIndices([0, 300], numFrames: 241) }
         #expect(throws: LTXError.self) { try validatedSlotIndices([96, 8], numFrames: 241) }
