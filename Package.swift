@@ -27,13 +27,11 @@ let package = Package(
         // LTX-2.5 encodes prompts with `gemma4-12b-ltx-v1`, a gemma4_unified derivative.
         // Reused rather than re-ported: that package already implements the architecture
         // (global_head_dim, attention_k_eq_v, layer_scalar, partial-rotary RoPE).
-        // Pinned by revision, not by branch: SwiftPM refuses a transitive branch
-        // requirement under a semver-tagged package, which would make this package
-        // unconsumable from its first tagged release. The last tag (1.0.0) predates
-        // `forwardCollectingHiddenStates`; move to `from: "1.4.0"` once it ships.
+        // 1.5.0 carries the n-gram window that can skip the thinking channel,
+        // without which reasoning and loop protection could not both be on.
         .package(
             url: "https://github.com/VincentGourbin/gemma-4-swift-mlx",
-            from: "1.1.0"
+            from: "1.5.0"
         ),
     ],
     targets: [

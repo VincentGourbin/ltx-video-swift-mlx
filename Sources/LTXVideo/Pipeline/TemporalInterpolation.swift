@@ -44,6 +44,7 @@ extension LTXPipeline {
         anchorEvery: Int? = nil,
         maxTileLatentFrames: Int = 32,
         sourceFPS: Float = 24.0,
+        carryForward: Bool = false,
         onProgress: (@Sendable (GenerationProgress) -> Void)? = nil
     ) async throws -> VideoGenerationResult {
         // A round doubles the frame count at constant duration, so the refined
@@ -124,6 +125,7 @@ extension LTXPipeline {
         // seam it shares with the previous tile.
         let stepper = AncestralEulerStep(eta: eta)
         var refined: [MLXArray] = []
+        var carried: MLXArray? = nil        // previous tile's denoised window
 
         for (index, tile) in tiles.enumerated() {
             var window = latent[0..., 0..., tile.start ..< tile.endExclusive, 0..., 0...]
@@ -135,6 +137,30 @@ extension LTXPipeline {
             if effectiveAnchorEvery > 0, let cfg = (transformer?.config ?? ltx2Transformer?.config) {
                 var guides: [AppendedGuideTokens] = []
                 var anchored: [Int] = []
+
+                // Optional: carry the previous tile's *denoised* output into
+                // this one's lead-in, anchoring on what was actually rendered
+                // next door rather than on the interpolated source.
+                //
+                // Off by default because it lost its own bake-off. It does fix
+                // the high-noise failure it was written for (identity 13.4 →
+                // 23.5 dB at a seam), but the simple tiled defaults reach
+                // 24.3 dB with a smaller seam spike and half the wall time —
+                // our lead-in is two latent frames, too little carried signal
+                // to pay for doubling the anchor count. It would come into its
+                // own with upstream's multi-round structure, where far more is
+                // carried; kept for that, not for today.
+                if carryForward, let previous = carried, tile.dropPrefix > 0 {
+                    for local in 0 ..< tile.dropPrefix {
+                        let inPrevious = previous.dim(2) - tile.dropPrefix + local
+                        guard inPrevious >= 0 else { continue }
+                        guides.append(buildKeyframeGuideToken(
+                            encodedLatent: previous[
+                                0..., 0..., inPrevious ..< (inPrevious + 1), 0..., 0...],
+                            temporalPosition: Self.gridTemporalPosition(latentFrame: local)))
+                        anchored.append(local)
+                    }
+                }
                 // Source frames sit at even indices of the densified latent; a
                 // tile anchors those falling inside its own window, addressed
                 // locally so its RoPE grid matches.
@@ -153,6 +179,7 @@ extension LTXPipeline {
                 }
                 for global in positions.sorted() {
                     let local = global - tile.start
+                    if anchored.contains(local) { continue }   // carried already covers it
                     guides.append(buildKeyframeGuideToken(
                         encodedLatent: sourceLatentDensified[
                             0..., 0..., global ..< (global + 1), 0..., 0...],
@@ -192,6 +219,7 @@ extension LTXPipeline {
             }
 
             refined.append(window[0..., 0..., tile.dropPrefix ..< tile.length, 0..., 0...])
+            carried = window
         }
 
         latent = refined.count == 1 ? refined[0] : MLX.concatenated(refined, axis: 2)

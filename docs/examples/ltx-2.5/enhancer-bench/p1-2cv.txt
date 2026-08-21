@@ -1,0 +1,7 @@
+For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.
+
+integrated_multimodal_description: [Shot 1] Cinematic, locked-off medium side profile shot of the vibrant red vintage Citroën 2CV from the reference image, parked on light gravel in front of a dense green hedge. At 00:01.000 the car begins to rise straight up off the gravel, dust swirling beneath it, its skinny wheels hanging slack in the air. From 00:02.500 to 00:07.000 it holds a perfectly stationary hover about two metres above the ground, the body rocking almost imperceptibly, the hedge and trees still behind it. At 00:07.500 the 2CV snaps forward and rockets toward the horizon in a single violent burst of acceleration, leaving two blazing horizontal trails of orange fire hanging in the air where it passed, exactly like Back to the Future. From 00:08.000 to 00:14.000 the frame holds on the empty gravel and hedge as the twin fire trails burn, flicker and slowly fade, dust settling back down, the car long gone.
+
+overall_soundscape: A low sustained propulsion hum rises as the car lifts off, settling into a steady droning thrum through the hover. At 00:07.500, exactly as the car launches, a colossal missile detonation tears through — a deep concussive blast with a searing rocket roar that doppler-shifts away into the distance. The fire trails crackle and hiss in the silence that follows, with the light wind returning through the hedge.
+
+non_diegetic_music: N/A
