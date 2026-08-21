@@ -15,7 +15,9 @@ Swift implementation of [LTX-2](https://github.com/Lightricks/LTX-2) video gener
 | Quantization (qint8/int4) | **Done** | [Benchmarked](docs/benchmarks/) — int4 halves memory |
 | LTX-2.5 (text/image-to-video) | **Done** | Gated repo; bundled Gemma 4 encoder, split checkpoint |
 | LTX-2.5 auto-duration | **Done** | `--frames auto` predicts the length from the prompt |
-| LTX-2.5 diffusion decoder / temporal upscaler | Not implemented | The conv decoder ships alongside and is what loads |
+| LTX-2.5 diffusion decoder | **Done** (opt-in) | `--diffvae`; element-wise parity with upstream, ~2x the decode cost |
+| LTX-2.5 temporal interpolation | **Done** | `interpolate` doubles the frame rate through the temporal upscaler |
+| LTX-2.5 generated keyframe slots | **Done** | `--keyframe-slot`; anchors the model generates and later stages reuse |
 
 ## Requirements
 
@@ -122,6 +124,46 @@ The scale factor is not an option — it comes from the adapter's
 it is refused rather than asking the model for a mapping it never learned. The
 reference must cover the same shot, duration and framing as the target: this is
 not a reframing model.
+
+### Temporal interpolation (LTX-2.5)
+
+The `interpolate` command doubles a clip's frame rate through the temporal
+upscaler, then refines the densified latent so the invented frames carry real
+motion rather than a blend of their neighbours. Duration is unchanged: 121
+frames at 24 fps become 241 at 48.
+
+```bash
+ltx-video interpolate "A red vintage 2CV lifting off a gravel driveway" \
+    --input clip_121f.mp4 \
+    --width 768 --height 512 --frames 121 \
+    --model 2.5-distilled \
+    -o clip_241f.mp4
+```
+
+Long canvases are refined in overlapping tiles, each anchored on the source
+frames inside its own window. Renoise level and anchor spacing follow from
+whether the canvas tiles at all — a level that is safe in a single window
+redraws the subject across a seam, which is
+[measured and recorded](docs/knowledge/pitfalls/renoise-level-needs-its-anchor.md).
+
+### Generated keyframe slots (LTX-2.5)
+
+`--keyframe-slot N` asks the model to generate a keyframe at pixel frame `N`
+alongside the video — a token it denoises, not a frame it is given. The result
+is an anchor produced by the same pass that produced the clip, at full quality:
+what a later stage or a later temporal tile conditions on to hold one identity
+across a seam.
+
+```bash
+ltx-video generate "A red vintage 2CV lifting off a gravel driveway" \
+    --model 2.5-distilled -w 768 -h 512 -f 241 \
+    --keyframe-slot 96 --keyframe-slot 192 \
+    --slots-out anchors.safetensors \
+    -o clip.mp4
+```
+
+Slots need LTX-2.5's learned keyframe marker; asking for them on an earlier
+checkpoint is refused up front. Each costs one latent frame's worth of tokens.
 
 ### LoRA
 
@@ -466,6 +508,9 @@ flowchart TD
 | `--audio` | off | Enable audio generation |
 | `--audio-gain` | `1.0` | Audio gain (linear) |
 | `--enhance-prompt` | off | Enhance prompt with Gemma VLM |
+| `--diffvae` | off | Decode with LTX-2.5's diffusion VAE (finer detail, ~2x the decode cost) |
+| `--keyframe-slot` | none | Repeatable pixel-frame index for a generated keyframe slot (LTX-2.5) |
+| `--slots-out` | none | Write the generated keyframes (latents) to this path |
 | `--transformer-quant` | `bf16` | Quantization: `bf16`, `qint8`, `int4`, `nvfp4`, `mxfp8` |
 | `--mixed-precision` | off | Per-block quantization: first/last 6 blocks qint8, middle int4 |
 | `--bitrate` | auto | Video bitrate in kbps |
@@ -511,6 +556,29 @@ ltx-video export-quantized \
 | `--regenerate-audio` | off | Regenerate audio via dual denoising (default: preserve source audio) |
 | `--beacon` | off | Advertise activity to external monitors (see [Activity Beacon](#activity-beacon-opt-in)) |
 | `--profile` | off | GPU/CPU profiling report + Chrome Trace export |
+
+### `ltx-video interpolate`
+
+Doubles the frame rate through the temporal upscaler. Duration is unchanged.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `<prompt>` | required | Describes the clip — the refinement still conditions on text |
+| `-i, --input` | required | Source video |
+| `-o, --output` | `interpolated.mp4` | Output file path |
+| `-w, --width` / `-h, --height` | `768` / `512` | Source geometry (must match the clip) |
+| `-f, --frames` | `121` | Source frame count (8n+1) |
+| `--fps` | `48` | Output frame rate; twice the source's 24 |
+| `--eta` | `0.5` | How ancestral the refinement is: 0 interpolates, 1 invents most |
+| `--renoise-from` | auto | Level the refinement starts from — `0.975` single-window, `0.725` tiled |
+| `--anchor-every` | auto | Anchor every Nth source frame (0 disables) — `4` single-window, `1` tiled |
+| `--tile-frames` | `32` | Max latent frames denoised at once; lower trades speed for memory |
+| `--seed` | random | Random seed |
+| `--model` | `2.5-distilled` | Temporal upsampling ships with LTX-2.5 |
+
+The two `auto` defaults are measured, not guessed: an independent tile started
+at 0.975 stops agreeing with its neighbour at the seam, and the anchors are what
+make the high level viable in a single window.
 
 ### `ltx-video train`
 
