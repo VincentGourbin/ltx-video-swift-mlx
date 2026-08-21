@@ -32,6 +32,12 @@
 
 ## 2026-08-21
 
+* **Creation**: [Cross-attention's q_norm is not the block's pre-norm](/docs/knowledge/pitfalls/cross-attention-prenorm.md)
+  — the first bug the new *transformer* parity harness found, on its first run:
+  the legacy 6-value block fed cross-attention the raw residual (1.1e-2 relative
+  error, 6.2e-6 after). No shipped generation used that path; both real block
+  variants now pin at ~5e-6 against upstream.
+
 * **Creation**: [Generated keyframe slots are appended, denoised and marked](/docs/knowledge/decisions/generated-keyframe-slots.md)
   — DFR's last missing primitive, and the audit finding that came with it: the
   2.5 "detailing LoRA" is the pixel spatial upscaler this package already

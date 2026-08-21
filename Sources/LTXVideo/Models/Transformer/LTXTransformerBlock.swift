@@ -263,9 +263,16 @@ class BasicTransformerBlock: Module {
             }
             x = x + crossOut * gateCA
         } else {
-            // LTX-2: cross-attention without AdaLN (qNorm inside attn2 handles Q normalization)
+            // LTX-2: cross-attention without AdaLN, but *not* without normalization.
+            // Upstream feeds cross-attention the RMS-normalized self-attention
+            // output (`post_sa_function` returns `x + gate * attn_out` and its
+            // norm; `_apply_text_cross_attention` documents that it does not
+            // normalize again). The attention's own q_norm acts on the projected
+            // query, which is a different operation and does not stand in for it.
+            // Caught by the transformer parity harness: 1.1e-2 relative without,
+            // 1e-6 with. The 9-value path below normalizes inside `adaln`.
             var crossOut = attn2(
-                x,
+                rmsNorm(x, eps: normEps),
                 context: args.context,
                 mask: args.contextMask,
                 useKVCache: args.useTextKVCache

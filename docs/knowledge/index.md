@@ -49,6 +49,7 @@ or re-litigated.
 * [CFG against an empty negative erases the prompt](pitfalls/empty-cfg-negative-erases-the-prompt.md) - the dev paths inherited "" from the MLX port; one A/B apart, the official negative restored a 14-second choreography
 * [no_repeat_ngram bans quoting the prompt](pitfalls/ngram-blocking-mangles-prompt-quoting.md) - enhancer timestamps mangled, duration over-predicted ~5 s; reference-space limitation, fix pending in gemma-4-swift-mlx
 * [Smoothness metrics miss identity drift](pitfalls/smoothness-metrics-miss-identity-drift.md) - a seam where each tile drifted gradually to a different subject reads as perfectly smooth
+* [Cross-attention's q_norm is not the block's pre-norm](pitfalls/cross-attention-prenorm.md) - found by the transformer parity harness; the legacy block skipped the RMS norm before cross-attention
 * [A densified clip must be positioned at its new rate](pitfalls/densified-clip-keeps-its-rate.md) - a temporal round doubles frames and fps; keeping the source's fps reads as twice the duration
 * [A renoise level needs its anchoring](pitfalls/renoise-level-needs-its-anchor.md) - upstream's sigma 0.975 redraws the subject without the keyframe seams that make it viable there
 * [Tiled-attention mask caches need the whole window pattern](pitfalls/na-tile-mask-cache-key.md) - border and interior tiles collide on a summary key; 8% error in one stage, invisible without a reference
