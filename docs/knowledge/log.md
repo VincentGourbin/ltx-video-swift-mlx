@@ -30,6 +30,20 @@
   — temporal interpolation shipped; upstream's sigma redrew the subject until
   the refinement was started lower (identity 14.4 → 20.1 dB).
 
+## 2026-08-21
+
+* **Creation**: [Generated keyframe slots are appended, denoised and marked](/docs/knowledge/decisions/generated-keyframe-slots.md)
+  — DFR's last missing primitive, and the audit finding that came with it: the
+  2.5 "detailing LoRA" is the pixel spatial upscaler this package already
+  drives, so only the slots needed porting. Records the three properties that
+  separate a slot from an appended guide token, and the parity check against
+  Lightricks' own `_slot_positions`.
+
+* **Creation**: [A densified clip must be positioned at its new rate](/docs/knowledge/pitfalls/densified-clip-keeps-its-rate.md)
+  — the temporal round doubles frames *and* fps; positioning at the source's
+  rate made the model read a 4.9 s clip as 9.8 s. Quiet because the grid and the
+  anchors agreed with each other.
+
 ## 2026-08-19
 
 * **Creation**: [Tiled-attention mask caches need the whole window pattern](/docs/knowledge/pitfalls/na-tile-mask-cache-key.md)
