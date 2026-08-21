@@ -84,6 +84,13 @@ struct Generate: AsyncParsableCommand {
             help: "Keyframe constraint, format PATH:FRAME_IDX[:STRENGTH]. Repeatable. Example: --keyframe first.png:0 --keyframe last.png:120. Latent stride is 8, so two keyframes within the same 8-frame group cannot coexist.")
     var keyframe: [String] = []
 
+    @Option(name: .long, parsing: .singleValue,
+            help: "Generate a keyframe at this pixel frame and keep it as an anchor. Repeatable, strictly increasing. LTX-2.5 only. Example: --keyframe-slot 96 --keyframe-slot 192")
+    var keyframeSlot: [Int] = []
+
+    @Option(name: .long, help: "Write the generated keyframes (latents) here, for `interpolate --anchors` to reuse")
+    var slotsOut: String?
+
     @Flag(name: .long, help: "Generate audio alongside video (dual video/audio denoising)")
     var audio: Bool = false
 
@@ -395,6 +402,8 @@ struct Generate: AsyncParsableCommand {
                     print("  \(progress.status)")
                     fflush(stdout)
                 },
+                keyframeSlots: keyframeSlot,
+                slotsOutputPath: slotsOut
             )
         }
 

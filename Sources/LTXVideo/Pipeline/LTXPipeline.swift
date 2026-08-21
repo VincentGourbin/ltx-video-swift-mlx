@@ -842,6 +842,15 @@ public actor LTXPipeline {
     internal struct StepVelocity {
         let video: MLXArray
         let audio: MLXArray?
+        /// Velocity for the generated-keyframe slots, when the stage has any.
+        /// The caller steps it with the same rule it uses for `video`.
+        let slots: MLXArray?
+
+        init(video: MLXArray, audio: MLXArray?, slots: MLXArray? = nil) {
+            self.video = video
+            self.audio = audio
+            self.slots = slots
+        }
     }
 
     /// One forward pass through the active transformer (video-only `LTXTransformer`
@@ -871,19 +880,32 @@ public actor LTXPipeline {
         audioNumFrames: Int,
         videoTextEmbeddings: MLXArray,
         audioTextEmbeddings: MLXArray,
-        textMask: MLXArray?
+        textMask: MLXArray?,
+        slotLatent: MLXArray? = nil
     ) -> StepVelocity {
         let videoPatchified = patchify(videoLatent).asType(.bfloat16)
 
         // --- Extend the video stream when videoAppendCtx is provided ---
         let extTokensVideo: MLXArray
         let videoTimestep: MLXArray
+        var keyframeRange: Range<Int>? = nil
         if let ctx = videoAppendCtx {
-            extTokensVideo = MLX.concatenated([videoPatchified, ctx.guideTokens], axis: 1)
+            var pieces = [videoPatchified]
+            if let guides = ctx.guideTokens { pieces.append(guides) }
+            if let layout = ctx.slots {
+                guard let slotLatent else {
+                    fatalError("stage declares \(layout.slotCount) keyframe slots but no slot latent "
+                        + "was passed — the slots would be denoised from nothing")
+                }
+                pieces.append(slotLatent.asType(.bfloat16))
+                keyframeRange = layout.tokenRange
+            }
+            extTokensVideo = pieces.count == 1 ? videoPatchified : MLX.concatenated(pieces, axis: 1)
             videoTimestep = buildExtendedTimestep(
                 sigma: sigma,
                 originalCount: ctx.originalCount,
-                guideCount: ctx.guideCount
+                guideCount: ctx.guideCount,
+                slotCount: ctx.slots?.tokenCount ?? 0
             )
         } else {
             extTokensVideo = videoPatchified
@@ -925,7 +947,8 @@ public actor LTXPipeline {
                 precomputedVideoRoPE: videoAppendCtx?.extRoPE,
                 precomputedCrossVideoRoPE: videoAppendCtx?.extCrossVideoRoPE,
                 precomputedAudioRoPE: audioRefCtx?.extRoPE,
-                precomputedCrossAudioRoPE: audioRefCtx?.extCrossRoPE
+                precomputedCrossAudioRoPE: audioRefCtx?.extCrossRoPE,
+                keyframeTokenRange: keyframeRange
             )
             let videoVel = videoAppendCtx
                 .map { cropToOriginal(velocity: videoVelExt, originalCount: $0.originalCount) }
@@ -935,7 +958,8 @@ public actor LTXPipeline {
                 ?? audioVelExt
             return StepVelocity(
                 video: unpatchify(videoVel, shape: shape).asType(.float32),
-                audio: audioVel.asType(.float32)
+                audio: audioVel.asType(.float32),
+                slots: sliceSlotVelocity(videoVelExt, layout: videoAppendCtx?.slots)
             )
         } else if let videoTransformer = transformer {
             // Audio reference is meaningless without ltx2Transformer — caller's bug if set.
@@ -946,14 +970,16 @@ public actor LTXPipeline {
                 timesteps: videoTimestep,
                 contextMask: nil,
                 latentShape: (frames: shape.frames, height: shape.height, width: shape.width),
-                precomputedRoPE: videoAppendCtx?.extRoPE
+                precomputedRoPE: videoAppendCtx?.extRoPE,
+                keyframeTokenRange: keyframeRange
             )
             let vel = videoAppendCtx
                 .map { cropToOriginal(velocity: velExt, originalCount: $0.originalCount) }
                 ?? velExt
             return StepVelocity(
                 video: unpatchify(vel, shape: shape).asType(.float32),
-                audio: nil
+                audio: nil,
+                slots: sliceSlotVelocity(velExt, layout: videoAppendCtx?.slots)
             )
         } else {
             fatalError("runDenoiseStep called without any transformer loaded — guarded by generateVideo")
@@ -982,6 +1008,8 @@ public actor LTXPipeline {
         config: LTXVideoGenerationConfig,
         upscalerWeightsPath: String,
         onProgress: GenerationProgressCallback? = nil,
+        keyframeSlots: [Int] = [],
+        slotsOutputPath: String? = nil
     ) async throws -> VideoGenerationResult {
         try config.validate()
 
@@ -1159,13 +1187,38 @@ public actor LTXPipeline {
         // Pre-build guide tokens, extended positions, and RoPE for the append path.
         // These are constant across denoising steps, so compute once. Returns nil
         // when there are no keyframes — `runDenoiseStep` handles both paths.
+        // Generated keyframe slots (LTX-2.5 only): extra denoised tokens at chosen
+        // pixel frames. They cost K × H × W tokens and come back as full-quality
+        // single frames that later stages and later temporal tiles anchor on.
+        if !keyframeSlots.isEmpty {
+            // Checked before anything expensive happens, the way upstream checks it:
+            // the answer comes from the checkpoint config alone, and a slot denoised
+            // without the marker is off-distribution rather than merely unmarked.
+            guard model.transformerConfig.keyframesAbsPosEmbedding else {
+                throw LTXError.invalidConfiguration(
+                    "\(model.rawValue) has no keyframe absolute-position embedding, so it cannot "
+                    + "generate keyframe slots. Use an LTX-2.5 checkpoint.")
+            }
+        }
+        let slotIndices = keyframeSlots.isEmpty
+            ? [] : try validatedSlotIndices(keyframeSlots, numFrames: config.numFrames)
         let stage1AppendCtx: AppendKeyframeContext? = prepareKeyframeAppend(
             encoded: halfResKeyframes,
             shape: stage1Shape,
             hasAudio: hasAudio,
             refConfig: transformer?.config ?? ltx2Transformer?.config ?? .default,
-            stageLabel: "Stage 1"
+            stageLabel: "Stage 1",
+            slotIndices: slotIndices
         )
+
+        // Slots start as pure noise scaled by σ₀, exactly like the video latent:
+        // upstream's `denoise_mask = 1` means the noiser ignores any clean content
+        // and treats the slot as something to generate from scratch.
+        var slotLatent: MLXArray? = stage1AppendCtx?.slots.map { layout in
+            MLXRandom.normal([1, layout.tokenCount, stage1Shape.channels])
+                .asType(.float32) * stage1Sigmas[0]
+        }
+        if let s = slotLatent { MLX.eval(s) }
 
         // === STAGE 1: Denoise at half resolution ===
         let stage1NumSteps = stage1Sigmas.count - 1
@@ -1197,12 +1250,20 @@ public actor LTXPipeline {
                 audioNumFrames: audioNumFrames,
                 videoTextEmbeddings: videoTextEmbeddings,
                 audioTextEmbeddings: audioTextEmbeddings,
-                textMask: textMask
+                textMask: textMask,
+                slotLatent: slotLatent
             )
             videoLatent = stage1Scheduler.step(
                 latent: videoLatent, velocity: vel.video,
                 sigma: sigma, sigmaNext: sigmaNext
             )
+            if let sv = vel.slots, let current = slotLatent {
+                // Plain Euler on the same schedule. The scheduler's token-count shift
+                // is already folded into the sigmas the two streams share.
+                let stepped = current + MLXArray(sigmaNext - sigma) * sv
+                slotLatent = stepped
+                MLX.eval(stepped)
+            }
             if let av = vel.audio, let ap = audioLatentPacked {
                 let updatedAudio = ap + (sigmaNext - sigma) * av
                 audioLatentPacked = updatedAudio
@@ -1257,6 +1318,19 @@ public actor LTXPipeline {
         videoLatent = (upscaledLatent - mean5d) / std5d
         MLX.eval(videoLatent)
 
+        // The slots ride the same upscale so stage 2 can start from them: they are
+        // latent frames like any other, just one pixel frame wide.
+        var upscaledSlots: MLXArray? = nil
+        if let layout = stage1AppendCtx?.slots, let tokens = slotLatent {
+            let packed = GeneratedKeyframeSlots.unpack(
+                tokens: tokens, layout: layout, shape: stage1Shape)
+            let denormed = packed * std5d + mean5d
+            let up = upscaler(denormed)
+            upscaledSlots = (up - mean5d) / std5d
+            MLX.eval(upscaledSlots!)
+            LTXDebug.log("[slots] upscaled \(layout.slotCount) keyframe(s) to \(upscaledSlots!.shape)")
+        }
+
         LTXDebug.log("Upscale time: \(String(format: "%.1f", Date().timeIntervalSince(upscaleStart)))s, shape: \(videoLatent.shape)")
         profiler.end("Upscaler 2x")
 
@@ -1307,8 +1381,21 @@ public actor LTXPipeline {
             shape: stage2Shape,
             hasAudio: hasAudio,
             refConfig: transformer?.config ?? ltx2Transformer?.config ?? .default,
-            stageLabel: "Stage 2"
+            stageLabel: "Stage 2",
+            slotIndices: slotIndices,
+            slotInitial: upscaledSlots
         )
+
+        // Stage 2 re-noises the slots to the same level as the video, so they are
+        // refined at full resolution rather than carried over untouched.
+        if let layout = stage2AppendCtx?.slots, let initial = stage2AppendCtx?.slotInitialTokens {
+            let slotNoise = MLXRandom.normal([1, layout.tokenCount, stage2Shape.channels])
+                .asType(.float32)
+            let renoised = MLXArray(noiseScale) * slotNoise
+                + MLXArray(1.0 - noiseScale) * initial.asType(.float32)
+            slotLatent = renoised
+            MLX.eval(renoised)
+        }
 
         // Dump re-noised latent
         if LTXDebug.isEnabled {
@@ -1341,10 +1428,16 @@ public actor LTXPipeline {
                 audioNumFrames: audioNumFrames,
                 videoTextEmbeddings: videoTextEmbeddings,
                 audioTextEmbeddings: audioTextEmbeddings,
-                textMask: textMask
+                textMask: textMask,
+                slotLatent: slotLatent
             )
             let dt = sigmaNext - sigma
             videoLatent = videoLatent + MLXArray(dt) * vel.video
+            if let sv = vel.slots, let current = slotLatent {
+                let stepped = current + MLXArray(dt) * sv
+                slotLatent = stepped
+                MLX.eval(stepped)
+            }
             if let av = vel.audio, let ap = audioLatentPacked {
                 let updatedAudio = ap + MLXArray(dt) * av
                 audioLatentPacked = updatedAudio
@@ -1360,6 +1453,23 @@ public actor LTXPipeline {
         }
         LTXDebug.log("Stage 2 complete: \(String(format: "%.1f", Date().timeIntervalSince(stage2Start)))s")
         profiler.end("Denoising Stage 2")
+
+        // Hand the generated keyframes back as latents. They are what a later
+        // temporal round anchors on, and re-encoding them from decoded pixels
+        // would put a VAE round trip between the anchor and what produced it.
+        if let path = slotsOutputPath, let layout = stage2AppendCtx?.slots,
+           let tokens = slotLatent {
+            let keyframes = GeneratedKeyframeSlots.unpack(
+                tokens: tokens, layout: layout, shape: stage2Shape)
+            MLX.eval(keyframes)
+            try MLX.save(
+                arrays: [
+                    "keyframes": keyframes,
+                    "pixel_frame_indices": MLXArray(layout.pixelFrameIndices.map { Int32($0) }),
+                ],
+                url: URL(fileURLWithPath: path))
+            LTXDebug.log("[slots] wrote \(layout.slotCount) generated keyframe(s) to \(path)")
+        }
 
         // Unload transformer
         if memoryOptimization.unloadAfterUse {

@@ -1252,7 +1252,12 @@ class LTXWeightLoader {
         // q_norm/k_norm carry weights). MLXNN's RMSNorm still declares a weight,
         // which stays at its default of 1 — expected, not a mapping hole.
         let expectedAffineFree = notLoaded.filter(isAffineFreeBlockNorm)
-        let missingFromModel = notLoaded.filter { !isAffineFreeBlockNorm($0) }
+        // The keyframe marker ships only with LTX-2.5. Absent, it stays at its
+        // zero initialisation, which adds nothing to any token — the same no-op
+        // upstream relies on for pre-2.5 checkpoints.
+        let missingFromModel = notLoaded.filter {
+            !isAffineFreeBlockNorm($0) && $0 != "keyframes_abs_pos_embedding"
+        }
         if !expectedAffineFree.isEmpty {
             LTXDebug.log("Transformer: \(expectedAffineFree.count) affine-free block norms left at default weight=1 (expected)")
         }

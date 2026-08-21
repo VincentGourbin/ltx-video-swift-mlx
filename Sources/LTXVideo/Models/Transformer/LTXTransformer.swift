@@ -38,6 +38,11 @@ class LTXTransformer: Module {
     // Input projection
     @ModuleInfo(key: "patchify_proj") var patchifyProj: Linear
 
+    /// Learned "this token is a single-pixel-frame keyframe" marker.
+    /// Zeros unless the checkpoint ships one (LTX-2.5), which makes it an
+    /// exact no-op on every earlier generation. See `applyKeyframeMarker`.
+    @ParameterInfo(key: "keyframes_abs_pos_embedding") var keyframesEmbedding: MLXArray
+
     // AdaLN for timestep
     @ModuleInfo(key: "adaln_single") var adalnSingle: AdaLayerNormSingle
 
@@ -79,6 +84,7 @@ class LTXTransformer: Module {
 
         // Input projection: project latent channels to inner dimension
         self._patchifyProj.wrappedValue = Linear(config.inChannels, innerDim, bias: true)
+        self._keyframesEmbedding.wrappedValue = MLXArray.zeros([1, innerDim], dtype: .bfloat16)
 
         // AdaLN for timestep
         let numEmb = config.crossAttentionAdaLN ? 9 : 6
@@ -263,7 +269,8 @@ class LTXTransformer: Module {
         timesteps: MLXArray,
         contextMask: MLXArray? = nil,
         latentShape: (frames: Int, height: Int, width: Int),
-        precomputedRoPE: (cos: MLXArray, sin: MLXArray)? = nil
+        precomputedRoPE: (cos: MLXArray, sin: MLXArray)? = nil,
+        keyframeTokenRange: Range<Int>? = nil
     ) -> MLXArray {
         let startTime = Date()
         var lastTime = startTime
@@ -280,7 +287,8 @@ class LTXTransformer: Module {
         let dumpMode = LTXTransformer.dumpNextForwardPass
 
         // Project latents to inner dimension
-        let x = patchifyProj(latent)
+        let x = applyKeyframeMarker(
+            patchifyProj(latent), range: keyframeTokenRange, embedding: keyframesEmbedding)
         eval(x)
         var now = Date()
         LTXDebug.log("  [TIME] patchifyProj: \(String(format: "%.3f", now.timeIntervalSince(lastTime)))s")

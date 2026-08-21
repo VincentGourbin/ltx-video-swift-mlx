@@ -32,6 +32,9 @@ class LTX2Transformer: Module {
 
     // --- Video modules (same keys as LTXTransformer) ---
     @ModuleInfo(key: "patchify_proj") var patchifyProj: Linear
+
+    /// See `applyKeyframeMarker` — zeros on checkpoints without the weight.
+    @ParameterInfo(key: "keyframes_abs_pos_embedding") var keyframesEmbedding: MLXArray
     @ModuleInfo(key: "adaln_single") var adalnSingle: AdaLayerNormSingle
     @ModuleInfo(key: "caption_projection") var captionProjection: PixArtAlphaTextProjection?
     @ModuleInfo(key: "norm_out") var normOut: LayerNorm
@@ -83,6 +86,7 @@ class LTX2Transformer: Module {
 
         // --- Video ---
         self._patchifyProj.wrappedValue = Linear(config.inChannels, videoDim, bias: true)
+        self._keyframesEmbedding.wrappedValue = MLXArray.zeros([1, videoDim], dtype: .bfloat16)
         self._adalnSingle.wrappedValue = AdaLayerNormSingle(innerDim: videoDim, numEmbeddings: numEmb)
         if !config.captionProjBeforeConnector && config.captionChannels != videoDim {
             self._captionProjection.wrappedValue = PixArtAlphaTextProjection(
@@ -243,7 +247,8 @@ class LTX2Transformer: Module {
         precomputedVideoRoPE: (cos: MLXArray, sin: MLXArray)? = nil,
         precomputedCrossVideoRoPE: (cos: MLXArray, sin: MLXArray)? = nil,
         precomputedAudioRoPE: (cos: MLXArray, sin: MLXArray)? = nil,
-        precomputedCrossAudioRoPE: (cos: MLXArray, sin: MLXArray)? = nil
+        precomputedCrossAudioRoPE: (cos: MLXArray, sin: MLXArray)? = nil,
+        keyframeTokenRange: Range<Int>? = nil
     ) -> (video: MLXArray, audio: MLXArray) {
         let batchSize = videoLatent.dim(0)
         let videoDim = config.innerDim
@@ -252,7 +257,8 @@ class LTX2Transformer: Module {
         let numEmb = config.crossAttentionAdaLN ? 9 : 6
 
         // --- Video preparation ---
-        let videoX = patchifyProj(videoLatent)
+        let videoX = applyKeyframeMarker(
+            patchifyProj(videoLatent), range: keyframeTokenRange, embedding: keyframesEmbedding)
         let scaledVideoTs = videoTimesteps * Float(config.timestepScaleMultiplier)
         let (videoTemb, videoEmbeddedTs) = adalnSingle(scaledVideoTs.flattened())
         let videoTembReshaped = videoTemb.reshaped([batchSize, -1, numEmb, videoDim])

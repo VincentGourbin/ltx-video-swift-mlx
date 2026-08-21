@@ -43,8 +43,14 @@ extension LTXPipeline {
         renoiseFrom: Float? = nil,
         anchorEvery: Int? = nil,
         maxTileLatentFrames: Int = 32,
+        sourceFPS: Float = 24.0,
         onProgress: (@Sendable (GenerationProgress) -> Void)? = nil
     ) async throws -> VideoGenerationResult {
+        // A round doubles the frame count at constant duration, so the refined
+        // clip runs at twice the source rate — and must be positioned at that
+        // rate. Upstream caps conditioning at 60 fps; past two rounds from 24
+        // the cap is what the model actually sees.
+        let denseFPS = min(sourceFPS * 2, 60.0)
         let startTime = Date()
         guard FileManager.default.fileExists(atPath: videoPath) else {
             throw LTXError.fileNotFound("Video not found: \(videoPath)")
@@ -150,13 +156,14 @@ extension LTXPipeline {
                     guides.append(buildKeyframeGuideToken(
                         encodedLatent: sourceLatentDensified[
                             0..., 0..., global ..< (global + 1), 0..., 0...],
-                        temporalPosition: Self.gridTemporalPosition(latentFrame: local)))
+                        temporalPosition: Self.gridTemporalPosition(
+                            latentFrame: local, fps: denseFPS)))
                     anchored.append(local)
                 }
                 if !guides.isEmpty {
                     anchorContext = assembleAppendContext(
                         guides: guides, shape: windowShape, hasAudio: false,
-                        refConfig: cfg, stageLabel: "tile \(index) anchors")
+                        refConfig: cfg, stageLabel: "tile \(index) anchors", fps: denseFPS)
                     LTXDebug.log("[temporal] tile \(index) frames \(tile.start)..<\(tile.endExclusive), "
                         + "anchors at local \(anchored)")
                 }

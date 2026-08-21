@@ -33,11 +33,39 @@ struct AppendedGuideTokens {
 ///   scheduler step operates on after `cropToOriginal`.
 /// - `guideCount`: total appended guide token count (sum over all keyframes).
 struct AppendKeyframeContext {
-    let guideTokens: MLXArray
+    let guideTokens: MLXArray?
     let extRoPE: (cos: MLXArray, sin: MLXArray)
     let extCrossVideoRoPE: (cos: MLXArray, sin: MLXArray)?
     let originalCount: Int
     let guideCount: Int
+    /// Layout of the trailing generated-keyframe slots, when the stage asked for
+    /// any. Slots are denoised rather than frozen, so unlike `guideTokens` their
+    /// content changes at every step and lives with the caller's latent state.
+    let slots: GeneratedKeyframeLayout?
+    /// Starting content for those slots — zeros for a first stage, the previous
+    /// stage's slots for a refinement.
+    let slotInitialTokens: MLXArray?
+
+    init(
+        guideTokens: MLXArray?,
+        extRoPE: (cos: MLXArray, sin: MLXArray),
+        extCrossVideoRoPE: (cos: MLXArray, sin: MLXArray)?,
+        originalCount: Int,
+        guideCount: Int,
+        slots: GeneratedKeyframeLayout? = nil,
+        slotInitialTokens: MLXArray? = nil
+    ) {
+        self.guideTokens = guideTokens
+        self.extRoPE = extRoPE
+        self.extCrossVideoRoPE = extCrossVideoRoPE
+        self.originalCount = originalCount
+        self.guideCount = guideCount
+        self.slots = slots
+        self.slotInitialTokens = slotInitialTokens
+    }
+
+    /// Total appended tokens — frozen guides plus denoised slots.
+    var appendedCount: Int { guideCount + (slots?.tokenCount ?? 0) }
 }
 
 /// Assemble a context from guide tokens the caller already built.
@@ -47,17 +75,27 @@ struct AppendKeyframeContext {
 /// explicit coordinates, so the shared half lives here.
 func assembleAppendContext(
     guides: [AppendedGuideTokens],
+    slotIndices: [Int] = [],
+    slotInitial: MLXArray? = nil,
     shape: VideoLatentShape,
     hasAudio: Bool,
     refConfig: LTXTransformerConfig,
-    stageLabel: String
+    stageLabel: String,
+    fps: Float = 24.0
 ) -> AppendKeyframeContext? {
-    guard !guides.isEmpty else { return nil }
+    guard !guides.isEmpty || !slotIndices.isEmpty else { return nil }
+    // `fps` is the rate of the sequence being denoised, not of its source. A
+    // temporally densified clip runs at twice the source rate and must be
+    // positioned at that rate, or the model reads it as a clip of twice the
+    // duration — half-speed motion, and temporal coordinates that can run past
+    // the RoPE range on a long canvas.
     let basePos = createPositionGrid(
-        batchSize: 1, frames: shape.frames, height: shape.height, width: shape.width)
+        batchSize: 1, frames: shape.frames, height: shape.height, width: shape.width,
+        fps: fps)
     return buildContext(
-        guides: guides, basePos: basePos, shape: shape,
-        hasAudio: hasAudio, refConfig: refConfig, stageLabel: stageLabel)
+        guides: guides, slotIndices: slotIndices, slotInitial: slotInitial,
+        basePos: basePos, shape: shape,
+        hasAudio: hasAudio, refConfig: refConfig, stageLabel: stageLabel, fps: fps)
 }
 
 /// Build the constant-across-steps `AppendKeyframeContext` for one stage.
@@ -77,9 +115,11 @@ func prepareKeyframeAppend(
     shape: VideoLatentShape,
     hasAudio: Bool,
     refConfig: LTXTransformerConfig,
-    stageLabel: String
+    stageLabel: String,
+    slotIndices: [Int] = [],
+    slotInitial: MLXArray? = nil
 ) -> AppendKeyframeContext? {
-    guard !encoded.isEmpty else { return nil }
+    guard !encoded.isEmpty || !slotIndices.isEmpty else { return nil }
 
     let basePos = createPositionGrid(
         batchSize: 1,
@@ -95,24 +135,44 @@ func prepareKeyframeAppend(
         )
     }
     return buildContext(
-        guides: guides, basePos: basePos, shape: shape,
+        guides: guides, slotIndices: slotIndices, slotInitial: slotInitial,
+        basePos: basePos, shape: shape,
         hasAudio: hasAudio, refConfig: refConfig, stageLabel: stageLabel)
 }
 
 private func buildContext(
     guides: [AppendedGuideTokens],
+    slotIndices: [Int] = [],
+    slotInitial: MLXArray? = nil,
     basePos: MLXArray,
     shape: VideoLatentShape,
     hasAudio: Bool,
     refConfig: LTXTransformerConfig,
-    stageLabel: String
+    stageLabel: String,
+    fps: Float = 24.0
 ) -> AppendKeyframeContext {
-    let allGuideTokens = MLX.concatenated(guides.map { $0.tokens }, axis: 1)
-    let allGuidePositions = MLX.concatenated(guides.map { $0.positions }, axis: 2)
+    let allGuideTokens = guides.isEmpty
+        ? nil : MLX.concatenated(guides.map { $0.tokens }, axis: 1)
     let originalCount = shape.tokenCount
-    let guideCount = allGuideTokens.dim(1)
+    let guideCount = allGuideTokens?.dim(1) ?? 0
 
-    let extPositions = MLX.concatenated([basePos, allGuidePositions], axis: 2)
+    // Slots come last so the marked, denoised span is trailing and contiguous.
+    var slotLayout: GeneratedKeyframeLayout? = nil
+    var slotTokens: MLXArray? = nil
+    var slotGuides: [AppendedGuideTokens] = []
+    if !slotIndices.isEmpty {
+        let built = GeneratedKeyframeSlots.build(
+            pixelFrameIndices: slotIndices, shape: shape, initial: slotInitial, fps: fps)
+        slotGuides = built.guides
+        slotTokens = MLX.concatenated(slotGuides.map { $0.tokens }, axis: 1)
+        slotLayout = GeneratedKeyframeLayout(
+            pixelFrameIndices: built.layout.pixelFrameIndices,
+            tokensPerSlot: built.layout.tokensPerSlot,
+            firstToken: originalCount + guideCount)
+    }
+
+    let appendedPositions = (guides + slotGuides).map { $0.positions }
+    let extPositions = MLX.concatenated([basePos] + appendedPositions, axis: 2)
 
     let pe = precomputeFreqsCis(
         indicesGrid: extPositions,
@@ -141,14 +201,17 @@ private func buildContext(
         crossPE = crossRoPE
     }
 
-    LTXDebug.log("[append] \(stageLabel) extended sequence: \(originalCount) video + \(guideCount) guide tokens")
+    LTXDebug.log("[append] \(stageLabel) extended sequence: \(originalCount) video + "
+        + "\(guideCount) guide + \(slotLayout?.tokenCount ?? 0) slot tokens")
 
     return AppendKeyframeContext(
         guideTokens: allGuideTokens,
         extRoPE: pe,
         extCrossVideoRoPE: crossPE,
         originalCount: originalCount,
-        guideCount: guideCount
+        guideCount: guideCount,
+        slots: slotLayout,
+        slotInitialTokens: slotTokens
     )
 }
 
@@ -159,11 +222,14 @@ func buildExtendedTimestep(
     sigma: Float,
     originalCount: Int,
     guideCount: Int,
+    slotCount: Int = 0,
     batchSize: Int = 1
 ) -> MLXArray {
-    let totalCount = originalCount + guideCount
+    let totalCount = originalCount + guideCount + slotCount
+    // Video tokens and slot tokens are both being denoised, so both carry the
+    // schedule's sigma; only the frozen guides in between sit at 0.
     var values = [Float](repeating: sigma, count: totalCount)
-    for i in originalCount..<totalCount {
+    for i in originalCount ..< (originalCount + guideCount) {
         values[i] = 0.0
     }
     let arr = MLXArray(values, [1, totalCount])

@@ -104,7 +104,7 @@ struct BuildVideoReferenceTests {
         )
         #expect(ctx.guideCount == 32)              // 2 * 4 * 4
         #expect(ctx.originalCount == 128)          // 2 * 8 * 8
-        #expect(ctx.guideTokens.shape == [1, 32, 128])
+        #expect(ctx.guideTokens?.shape == [1, 32, 128])
         #expect(ctx.extCrossVideoRoPE == nil)      // hasAudio=false → no cross-modal RoPE
     }
 
