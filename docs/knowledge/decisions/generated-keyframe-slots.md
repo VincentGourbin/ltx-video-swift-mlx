@@ -60,3 +60,17 @@ from the config alone, before any model is loaded.
 Slot positions are pinned against Lightricks' own `_slot_positions` via
 `scripts/keyframe_slot_reference.py`: temporal coordinates and the full spatial
 grid match to 1e-5. The port's own round trip (build → tokens → unpack) is exact.
+
+End to end, a real run wrote `[1, 128, 2, 16, 24]` for two slots at 768x512 —
+the shape the layout predicts — and each slot decodes to the scene at its own
+frame. The number that makes that readable is the control: a *real* frame of the
+same clip, put through the same one-latent-frame VAE round trip, comes back at
+16.01 dB against itself, and the slot scores 16.18 dB against that frame. The
+slot is as close to the frame as the VAE's own round trip is; the softness both
+share is the decoder's behaviour on a latent spanning one pixel frame instead of
+eight. Artefacts: `docs/examples/ltx-2.5/keyframe-slots/`.
+
+Cost: 242 s with two slots against baselines of 187.6 s and 229.0 s at the same
+seed and geometry. Two slots add 12.5% tokens, and the spread between the two
+identical baselines is as large as the difference — small, and not separable
+from run-to-run variance at this sample size.
