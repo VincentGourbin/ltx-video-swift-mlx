@@ -32,6 +32,12 @@
 
 ## 2026-08-21
 
+* **Creation**: [The enhancer's residual defects are the reference's](/docs/knowledge/investigations/enhancer-residual-defects-2026-08.md)
+  — four prompts against the Space's own inference: viewpoint stacking appears
+  in both (verbatim the same phrase on one prompt), detached adverbs three times
+  more often upstream, and only the Space breaks spacing inside quoted dialogue.
+  Nothing here to fix; what is left is a product choice.
+
 * **Creation**: [Cross-attention's q_norm is not the block's pre-norm](/docs/knowledge/pitfalls/cross-attention-prenorm.md)
   — the first bug the new *transformer* parity harness found, on its first run:
   the legacy 6-value block fed cross-attention the raw residual (1.1e-2 relative
