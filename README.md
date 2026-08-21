@@ -573,6 +573,8 @@ Doubles the frame rate through the temporal upscaler. Duration is unchanged.
 | `--renoise-from` | auto | Level the refinement starts from — `0.975` single-window, `0.725` tiled |
 | `--anchor-every` | auto | Anchor every Nth source frame (0 disables) — `4` single-window, `1` tiled |
 | `--tile-frames` | `32` | Max latent frames denoised at once; lower trades speed for memory |
+| `--source-fps` | `24` | Source frame rate; the refined clip is positioned at twice it, capped at 60 |
+| `--carry-forward` | off | Also anchor each tile on the previous tile's output — measured slightly worse than the tiled defaults for twice the time, kept for experimentation |
 | `--seed` | random | Random seed |
 | `--model` | `2.5-distilled` | Temporal upsampling ships with LTX-2.5 |
 
