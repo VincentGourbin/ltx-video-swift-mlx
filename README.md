@@ -5,7 +5,7 @@ Swift implementation of [LTX-2](https://github.com/Lightricks/LTX-2) video gener
 ## Features
 
 | Feature | Status | Notes |
-|---------|--------|-------|
+| --- | --- | --- |
 | Text-to-Video (two-stage distilled) | **Done** | Matches HuggingFace Space quality |
 | Image-to-Video (two-stage distilled) | **Done** | Condition on first frame |
 | Video-to-Video (Retake) | **Done** | Full + partial temporal retake |
@@ -25,33 +25,282 @@ Swift implementation of [LTX-2](https://github.com/Lightricks/LTX-2) video gener
 - Apple Silicon Mac (M1/M2/M3/M4)
 - 32 GB+ unified memory recommended
 - Xcode 26+
+- Xcode Metal Toolchain installed
+- Significant free disk space for model weights and caches
+
+> **Disk usage:** the CLI binary itself is relatively small, but the AI model weights are not.  
+> LTX-2.3 Distilled reports approximately **46 GB** for the main 22B checkpoint on first use, with additional space required for Gemma/text-encoder weights, caches, temporary files and generated videos. Keep at least **55–70 GB free** for a practical LTX-2.3 setup. LTX-2.5 requires substantially more.
 
 ## Quick Start
 
-### Option 1: Download the pre-built CLI (fastest)
+### Option 1: Download the pre-built CLI
 
-Grab the latest release binary from the [Releases page](https://github.com/VincentGourbin/ltx-video-swift-mlx/releases) — no build step required.
+Grab the latest release from the [Releases page](https://github.com/VincentGourbin/ltx-video-swift-mlx/releases).
+
+> [!IMPORTANT]
+> The executable **cannot run by itself**. MLX requires its Metal resource bundle:
+>
+> ```text
+> ltx-video
+> mlx-swift_Cmlx.bundle/
+> └── Contents/
+>     └── Resources/
+>         └── default.metallib
+> ```
+>
+> If a release archive contains only `ltx-video`, the executable will start but fail when MLX initializes with an error similar to:
+>
+> ```text
+> MLX error: Failed to load the default metallib.
+> library not found
+> ```
+>
+> In that case, build from source using the instructions below. Do not use a standalone `ltx-video` binary without the accompanying `mlx-swift_Cmlx.bundle`.
 
 ### Option 2: Build from source
 
-> **Important**: Use `xcodebuild` (not `swift build`) to run the CLI. MLX requires Metal shaders (`default.metallib`) that are only bundled correctly by `xcodebuild`. `swift build` works for syntax checking but the resulting binary will fail at runtime with a "metallib not found" error. See [#3](https://github.com/VincentGourbin/ltx-video-swift-mlx/issues/3).
+Use **`xcodebuild`**, not `swift build`.
+
+MLX requires Metal shaders (`default.metallib`) that are bundled correctly by the Xcode build. A binary produced without its resource bundle will fail at runtime with a `metallib not found` error. See [#3](https://github.com/VincentGourbin/ltx-video-swift-mlx/issues/3).
+
+#### 1. Clone the repository
 
 ```bash
 git clone https://github.com/VincentGourbin/ltx-video-swift-mlx.git
 cd ltx-video-swift-mlx
-
-# Build Release
-xcodebuild -scheme ltx-video -configuration Release -derivedDataPath .xcodebuild \
-  -destination 'platform=macOS' build
-
-# Run from the build directory (required — the metallib bundle must be alongside the binary)
-.xcodebuild/Build/Products/Release/ltx-video generate "A cat" -w 768 -h 512 -f 121
 ```
 
-To run from another location, copy both the binary and its resource bundle:
+#### 2. Install the Xcode Metal Toolchain
+
+A normal Xcode installation may not include the separate Metal Toolchain component.
+
+Install it before building:
+
 ```bash
-cp .xcodebuild/Build/Products/Release/ltx-video /usr/local/bin/
-cp -R .xcodebuild/Build/Products/Release/mlx-swift_Cmlx.bundle /usr/local/bin/
+sudo xcodebuild -downloadComponent MetalToolchain
+```
+
+Verify that the Metal compiler is available:
+
+```bash
+xcrun metal --version
+```
+
+If the Metal Toolchain is missing, the build will fail with:
+
+```text
+error: cannot execute tool 'metal' due to missing Metal Toolchain;
+use: xcodebuild -downloadComponent MetalToolchain
+```
+
+#### 3. Build the release CLI
+
+The project dependencies use both a Swift package build plugin and Swift macros.
+
+When building non-interactively from the command line, Xcode may otherwise stop with errors such as:
+
+```text
+Validate plug-in “CudaBuild” in package “mlx-swift”
+```
+
+or:
+
+```text
+Macro “MLXHuggingFaceMacros” from package “mlx-swift-lm”
+must be enabled before it can be used
+```
+
+Build with package-plugin and macro validation explicitly skipped:
+
+```bash
+xcodebuild \
+  -scheme ltx-video \
+  -configuration Release \
+  -derivedDataPath .xcodebuild \
+  -destination 'platform=macOS,arch=arm64' \
+  -skipPackagePluginValidation \
+  -skipMacroValidation \
+  build
+```
+
+A successful build ends with:
+
+```text
+** BUILD SUCCEEDED **
+```
+
+#### 4. Verify the Metal library
+
+Confirm that MLX's `default.metallib` was produced:
+
+```bash
+find .xcodebuild/Build/Products/Release \
+  -name 'default.metallib' \
+  -print
+```
+
+Expected output:
+
+```text
+.xcodebuild/Build/Products/Release/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib
+```
+
+You can also inspect the bundle directly:
+
+```bash
+ls -la \
+  .xcodebuild/Build/Products/Release/mlx-swift_Cmlx.bundle/Contents/Resources/
+```
+
+#### 5. Run directly from the build output
+
+```bash
+.xcodebuild/Build/Products/Release/ltx-video --help
+```
+
+Example generation:
+
+```bash
+.xcodebuild/Build/Products/Release/ltx-video generate \
+  "A cat walking on the beach" \
+  -w 768 \
+  -h 512 \
+  -f 121 \
+  -o output.mp4
+```
+
+### Portable/local installation
+
+The runtime should keep the executable and the MLX resource bundle together.
+
+Create a clean directory:
+
+```bash
+mkdir -p ~/ltx-video
+```
+
+Copy the runtime files:
+
+```bash
+cp .xcodebuild/Build/Products/Release/ltx-video \
+  ~/ltx-video/
+
+cp -R .xcodebuild/Build/Products/Release/mlx-swift_Cmlx.bundle \
+  ~/ltx-video/
+```
+
+The resulting layout should be:
+
+```text
+~/ltx-video/
+├── ltx-video
+└── mlx-swift_Cmlx.bundle/
+    └── Contents/
+        ├── Info.plist
+        └── Resources/
+            └── default.metallib
+```
+
+Test it:
+
+```bash
+cd ~/ltx-video
+./ltx-video --help
+```
+
+Then try a small generation before committing to a high-resolution render:
+
+```bash
+./ltx-video generate \
+  "A small white cloud of smoke drifting slowly against a pure solid black background. Static camera. No text. No other objects." \
+  -w 512 \
+  -h 512 \
+  -f 25 \
+  --seed 12345 \
+  -o test.mp4
+```
+
+### Install globally
+
+If you want `ltx-video` available from your shell PATH, copy **both** the executable and the MLX bundle:
+
+```bash
+sudo cp \
+  .xcodebuild/Build/Products/Release/ltx-video \
+  /usr/local/bin/
+
+sudo cp -R \
+  .xcodebuild/Build/Products/Release/mlx-swift_Cmlx.bundle \
+  /usr/local/bin/
+```
+
+Then:
+
+```bash
+ltx-video --help
+```
+
+Do not copy only `ltx-video`; the executable requires `mlx-swift_Cmlx.bundle` at runtime.
+
+### First run and model downloads
+
+Models are downloaded automatically when first required.
+
+For example, the default LTX-2.3 distilled text-to-video pipeline may report:
+
+```text
+LTX-2.3 Distilled (~46GB) — Video Generation (Two-Stage Distilled)
+...
+Downloading ltx-2.3-22b-distilled.safetensors...
+```
+
+This is expected. The output resolution does **not** determine the checkpoint download size. A `512x512` test render still uses the same underlying 22B model unless a different model/quantization is selected.
+
+Once downloaded, model files are cached and reused by later runs.
+
+Before starting a large download, check available disk space:
+
+```bash
+df -h ~
+```
+
+### Resolution and frame constraints
+
+Generation currently requires:
+
+- width divisible by **64**
+- height divisible by **64**
+- frame count of the form **`8n + 1`**
+
+For example, `1920x1080` is **not** valid because `1080` is not divisible by 64.
+
+Use:
+
+```text
+1920x1088
+```
+
+and crop to 1080p afterwards if required:
+
+```bash
+ffmpeg -i input.mp4 \
+  -vf "crop=1920:1080:0:4" \
+  -c:v libx264 \
+  -crf 18 \
+  -preset slow \
+  output-1080p.mp4
+```
+
+For an 8-second clip at 24 fps, use:
+
+```text
+193 frames
+```
+
+because:
+
+```text
+(193 - 1) / 24 = 8 seconds
 ```
 
 ### Generate a Video
@@ -309,7 +558,7 @@ A `learning_curve.svg` is generated live in the output directory for monitoring.
 **Memory presets** (all use int4 quantization for the 22B model):
 
 | Preset | RAM | Rank | Resolution | Frames |
-|--------|-----|------|-----------|--------|
+| --- | --- | --- | --- | --- |
 | `compact` | 32GB | 16 | 256x256 | 9 |
 | `balanced` | 64GB | 32 | 384x384 | 9 |
 | `quality` | 96GB | 64 | 512x512 | 9 |
@@ -326,6 +575,96 @@ ltx-video models          # variants, licences, gating and what actually runs to
 ltx-video generate --model 2.5-distilled --frames auto \
     --image first-frame.png "your prompt"
 ```
+
+## Troubleshooting
+
+### `Failed to load the default metallib`
+
+Example:
+
+```text
+MLX error: Failed to load the default metallib.
+library not found
+```
+
+Cause: `mlx-swift_Cmlx.bundle` or its `default.metallib` resource is missing from the runtime directory.
+
+Verify:
+
+```bash
+find . -name 'default.metallib' -print
+```
+
+A valid local runtime should contain:
+
+```text
+./mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib
+```
+
+If it does not, rebuild with `xcodebuild` as described above.
+
+### `Validate plug-in "CudaBuild" in package "mlx-swift"`
+
+Use:
+
+```text
+-skipPackagePluginValidation
+```
+
+in the `xcodebuild` command.
+
+The plugin may still run during an Apple Silicon build and report:
+
+```text
+CUDA Build Plugin
+CUDA is disabled
+```
+
+That message is normal on macOS/Apple Silicon.
+
+### `MLXHuggingFaceMacros ... must be enabled`
+
+Use:
+
+```text
+-skipMacroValidation
+```
+
+in the `xcodebuild` command.
+
+### `cannot execute tool 'metal' due to missing Metal Toolchain`
+
+Install the Metal Toolchain:
+
+```bash
+sudo xcodebuild -downloadComponent MetalToolchain
+```
+
+Then verify:
+
+```bash
+xcrun metal --version
+```
+
+and rebuild.
+
+### Width and height must be divisible by 64
+
+For example:
+
+```text
+1920x1080
+```
+
+fails because `1080` is not divisible by 64.
+
+Use a compatible canvas such as:
+
+```text
+1920x1088
+```
+
+and crop after generation if a strict delivery resolution is required.
 
 ## Swift Package Integration
 
@@ -500,7 +839,7 @@ flowchart TD
 ### `ltx-video generate`
 
 | Flag | Default | Description |
-|------|---------|-------------|
+| --- | --- | --- |
 | `<prompt>` | required | Text prompt |
 | `-o, --output` | `output.mp4` | Output file path |
 | `-w, --width` | `768` | Video width (divisible by 64) |
@@ -536,7 +875,7 @@ ltx-video export-quantized \
 ```
 
 | Flag | Default | Description |
-|------|---------|-------------|
+| --- | --- | --- |
 | `--input` | required | Path to bf16 unified weights |
 | `-o, --output` | required | Output safetensors path |
 | `--mode` | `nvfp4` | Quantization mode: `nvfp4`, `mxfp8`, `qint8`, `int4` |
@@ -544,7 +883,7 @@ ltx-video export-quantized \
 ### `ltx-video retake`
 
 | Flag | Default | Description |
-|------|---------|-------------|
+| --- | --- | --- |
 | `<prompt>` | required | New text prompt (describe full scene or replacement instruction) |
 | `--video` | required | Source video path |
 | `--start-time` | none | Start of region to regenerate (seconds) |
@@ -568,7 +907,7 @@ ltx-video export-quantized \
 Doubles the frame rate through the temporal upscaler. Duration is unchanged.
 
 | Flag | Default | Description |
-|------|---------|-------------|
+| --- | --- | --- |
 | `<prompt>` | required | Describes the clip — the refinement still conditions on text |
 | `-i, --input` | required | Source video |
 | `-o, --output` | `interpolated.mp4` | Output file path |
@@ -592,7 +931,7 @@ make the high level viable in a single window.
 ### `ltx-video train`
 
 | Flag | Default | Description |
-|------|---------|-------------|
+| --- | --- | --- |
 | `<dataset>` | required | Path to dataset directory (mp4 + txt pairs) |
 | `-o, --output` | required | Output directory for checkpoints and LoRA |
 | `--model` | `dev` | Base model: `dev` (recommended for quality) or `distilled` (validated too) |
