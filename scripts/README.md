@@ -72,3 +72,31 @@ This helps us track performance across different Apple Silicon chips and memory 
 | I2V 1024x576 241f | ~755s (~12.5 min) |
 | Retake 768x512 9f | ~22s |
 | Audio I2V 768x512 9f | ~58s |
+
+## package-release.sh — Distributable CLI archive
+
+Builds Release and packages `dist/ltx-video-macos-arm64.zip` for a GitHub release.
+
+```bash
+./scripts/package-release.sh v0.3.0
+```
+
+The executable **cannot run on its own**: MLX loads its Metal shaders from
+`mlx-swift_Cmlx.bundle` at runtime, so the archive ships the binary together with
+every resource bundle the build produces. The v0.1.0 archive contained only the
+binary and crashed with `Failed to load the default metallib` for everyone who
+downloaded it — hence the guards here.
+
+The script aborts rather than produce a broken archive if:
+
+- no resource bundle was built, or `default.metallib` is missing
+- the binary is coverage-instrumented (it would drop a `default.profraw` in the
+  user's working directory on every run)
+- `ltx-video --version` disagrees with the version being packaged — bump
+  `LTXVideo.version` and the CLI's `CommandConfiguration.version` first
+
+Publish with:
+
+```bash
+gh release create v0.3.0 dist/ltx-video-macos-arm64.zip --title '...' --notes-file NOTES.md
+```

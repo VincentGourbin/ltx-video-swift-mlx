@@ -55,6 +55,9 @@ DerivedData/
 profile_results/
 /benchmarks/
 
+# Release packaging output (scripts/package-release.sh)
+/dist/
+
 # Temporary files
 *.tmp
 /tmp/
