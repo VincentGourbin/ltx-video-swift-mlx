@@ -859,6 +859,11 @@ struct LipDub: AsyncParsableCommand {
     @Flag(name: .long, help: "Enable debug output")
     var debug: Bool = false
 
+    @Option(
+        name: .long,
+        help: "Transformer quantization: bf16 (default), qint8, int4, nvfp4, mxfp8. LipDub applies fine deltas to the mouth region, which is what quantization degrades first — compare against bf16 before shipping a quantized preset.")
+    var transformerQuant: String = "bf16"
+
     @Flag(name: .long, help: "Advertise activity to external monitors (writes a transient manifest in ~/Library/Application Support/ai-runtime-beacons/)")
     var beacon: Bool = false
 
@@ -958,11 +963,22 @@ struct LipDub: AsyncParsableCommand {
             }
         }
 
+        // Hardcoded bf16 until now, which made the CLI unable to reproduce what a
+        // host application does when it quantizes — the one comparison needed to
+        // tell "LipDub is fine" from "LipDub is fine at full precision".
+        guard let quantOption = TransformerQuantization(rawValue: transformerQuant) else {
+            throw ValidationError(
+                "Invalid transformer quantization: \(transformerQuant). Use: bf16, qint8, int4, nvfp4 or mxfp8")
+        }
+        if transformerQuant != "bf16" {
+            print("Transformer quantization: \(transformerQuant)")
+        }
+
         print("Creating pipeline (\(variant.displayName), audio enabled)...")
         fflush(stdout)
         let pipeline = LTXPipeline(
             model: variant,
-            quantization: LTXQuantizationConfig(transformer: .bf16),
+            quantization: LTXQuantizationConfig(transformer: quantOption, textEncoder: quantOption),
             hfToken: hfToken,
             promptEnhancer: try promptEnhancer.resolve()
         )

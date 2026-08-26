@@ -53,6 +53,10 @@ final class DownloadProgressPrinter: @unchecked Sendable {
             guard milestone > lastMilestone else { return }
             lastMilestone = percent >= 100 ? -1 : milestone
             print("  \(line)")
+            // Redirected stdout is block-buffered, so without this a multi-hour
+            // download shows nothing in the log until the buffer happens to fill
+            // — the progress is invisible in exactly the case it is read back.
+            fflush(stdout)
             return
         }
 

@@ -2329,6 +2329,13 @@ public actor LTXPipeline {
             // Record the mtime BEFORE fusing so an overwrite racing the fusion is
             // detected as "changed" on the next run rather than missed.
             let fusedMtime = Self.loraModificationDate(canonicalLoRA)
+            // LipDub fuses on the module directly rather than through
+            // `LTXPipeline.fuseLoRA` — the two paths are disjoint by design, and
+            // the generation check lived only on the other one. That left the IC-LoRA
+            // silent on a mismatch, which is the one adapter published for 2.3 only
+            // and therefore the whole reason `lipdub --model 2.5-*` exists.
+            LoRALoader.warnOnGenerationMismatch(
+                loraPath: lipdubLoraPath, checkpointVersion: model.family.checkpointModelVersion)
             let (_, fuseResult) = try ltx2.fuseLoRA(from: lipdubLoraPath, scale: lipdubLoRAScale)
             let coverage = fuseResult.totalLayerCount > 0
                 ? Float(fuseResult.modifiedLayerCount) / Float(fuseResult.totalLayerCount) * 100.0
