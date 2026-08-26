@@ -68,7 +68,7 @@ struct Generate: AsyncParsableCommand {
     @Option(name: .shortAndLong, help: "Video height in pixels (must be divisible by 64 for two-stage)")
     var height: Int = 512
 
-    @Option(name: .shortAndLong, help: "Number of frames (8n+1, e.g. 9, 17, 25...), or 'auto' to predict it from the prompt (LTX-2.5 only)")
+    @Option(name: .shortAndLong, help: "Number of frames (8n+1, e.g. 9, 17, 25...), a duration ('15s'), or 'auto' to predict it from the prompt (LTX-2.5 only)")
     var frames: String = "121"
 
     @Option(name: .long, help: "Inference steps — dev models only (default 30); distilled models run their fixed 8-step schedule")
@@ -230,13 +230,17 @@ struct Generate: AsyncParsableCommand {
         }
         var frameCount = 121
         if !autoDuration {
-            guard let parsed = Int(frames) else {
-                throw ValidationError("Frames must be a number or 'auto'. Got \(frames)")
+            let parsed: (spec: FrameCountSpec, note: String?)
+            do {
+                parsed = try FrameCountSpec.parse(frames)
+            } catch {
+                throw ValidationError("\(error.localizedDescription)")
             }
-            guard (parsed - 1) % 8 == 0 else {
-                throw ValidationError("Frame count must be 8n+1 (e.g., 9, 17, 25, 33, ...). Got \(parsed)")
+            guard case .frames(let count) = parsed.spec else {
+                throw ValidationError("Frames must be a count, a duration, or 'auto'. Got \(frames)")
             }
-            frameCount = parsed
+            if let note = parsed.note { print("Note: \(note)") }
+            frameCount = count
         }
 
         // Validate dimensions (must be divisible by 64 for two-stage)
@@ -333,6 +337,27 @@ struct Generate: AsyncParsableCommand {
             frameCount = predicted.frames
             let clampNote = predicted.wasClamped ? " (clamped from \(String(format: "%.1f", predicted.seconds))s)" : ""
             print("Duration: \(String(format: "%.2f", Float(frameCount) / 24.0))s → \(frameCount) frames\(clampNote)")
+
+            // The duration head regresses a length from connector tokens; it never
+            // sees the text, so a duration written in the prompt is dropped without
+            // a word. Say so rather than substituting it: `auto` means "let the
+            // model choose the natural length", and quietly overriding that with a
+            // parsed number would change what the mode means.
+            //
+            // Checked against the prompt the user wrote, not the enhanced one — the
+            // enhancer's rewrite tends to drop the duration outright.
+            if let asked = PromptDuration.find(in: prompt) {
+                let got = Double(frameCount - 1) / 24.0
+                if abs(asked - got) > 0.5 {
+                    let (wanted, _) = FrameCountSpec.frames(forSeconds: asked)
+                    let want = String(format: "%.3g", asked)
+                    let have = String(format: "%.3g", got)
+                    print()
+                    print("Note: the prompt asks for \(want)s, but --frames auto predicted \(have)s.")
+                    print("      The duration head reads the scene, not written durations.")
+                    print("      Pass --frames \(wanted) (or \(want)s) to get \(want)s.")
+                }
+            }
         }
 
         // Routing a dev checkpoint:
@@ -518,8 +543,8 @@ struct Retake: AsyncParsableCommand {
     @Option(name: .shortAndLong, help: "Video height in pixels (must be divisible by 64)")
     var height: Int = 512
 
-    @Option(name: .shortAndLong, help: "Number of frames (must be 8n+1, e.g., 9, 17, 25, 33...)")
-    var frames: Int = 121
+    @Option(name: .shortAndLong, help: "Number of frames (8n+1, e.g. 9, 17, 25...) or a duration ('15s')")
+    var frames: String = "121"
 
     @Option(name: .long, help: "Random seed for reproducibility")
     var seed: UInt64?
@@ -623,9 +648,7 @@ struct Retake: AsyncParsableCommand {
         print()
 
         // Validate
-        guard (frames - 1) % 8 == 0 else {
-            throw ValidationError("Frame count must be 8n+1 (e.g., 9, 17, 25, 33, ...). Got \(frames)")
-        }
+        let frameCount = try resolveFrames(frames)
         guard width % 64 == 0 && height % 64 == 0 else {
             throw ValidationError("Width and height must be divisible by 64. Got \(width)x\(height)")
         }
@@ -714,7 +737,7 @@ struct Retake: AsyncParsableCommand {
         let config = LTXVideoGenerationConfig(
             width: width,
             height: height,
-            numFrames: frames,
+            numFrames: frameCount,
             numSteps: numSteps,
             seed: seed,
             enhancePrompt: enhancePrompt,
@@ -841,8 +864,8 @@ struct LipDub: AsyncParsableCommand {
     @Option(name: .shortAndLong, help: "Video height in pixels (must be divisible by 64)")
     var height: Int = 512
 
-    @Option(name: .shortAndLong, help: "Number of frames (must be 8n+1, e.g., 121, 241). Should match the reference video length.")
-    var frames: Int = 121
+    @Option(name: .shortAndLong, help: "Number of frames (8n+1, e.g. 121, 241) or a duration ('10s'). Should match the reference video length.")
+    var frames: String = "121"
 
     @Option(name: .long, help: "Random seed for reproducibility")
     var seed: UInt64?
@@ -936,9 +959,7 @@ struct LipDub: AsyncParsableCommand {
         print()
 
         // Validate
-        guard (frames - 1) % 8 == 0 else {
-            throw ValidationError("Frame count must be 8n+1 (e.g., 9, 17, 25, 33, 121, 241). Got \(frames)")
-        }
+        let frameCount = try resolveFrames(frames)
         guard width % 64 == 0 && height % 64 == 0 else {
             throw ValidationError("Width and height must be divisible by 64. Got \(width)x\(height)")
         }
@@ -1016,7 +1037,7 @@ struct LipDub: AsyncParsableCommand {
         let config = LTXVideoGenerationConfig(
             width: width,
             height: height,
-            numFrames: frames,
+            numFrames: frameCount,
             numSteps: 8,
             seed: seed
         )

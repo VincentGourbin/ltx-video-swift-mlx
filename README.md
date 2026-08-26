@@ -537,7 +537,7 @@ flowchart TD
 | `-o, --output` | `output.mp4` | Output file path |
 | `-w, --width` | `768` | Video width (divisible by 64) |
 | `-h, --height` | `512` | Video height (divisible by 64) |
-| `-f, --frames` | `121` | Frame count (must be 8n+1) |
+| `-f, --frames` | `121` | Frame count (8n+1), a duration (`15s`), or `auto` (LTX-2.5) |
 | `--seed` | random | Random seed |
 | `--image` | none | Input image for I2V (shorthand for `--keyframe PATH:0`) |
 | `--keyframe` | none | Repeatable keyframe spec `PATH:FRAME_IDX[:STRENGTH]` (mutually exclusive with `--image`) |
@@ -586,7 +586,7 @@ ltx-video export-quantized \
 | `-o, --output` | `retake.mp4` | Output file path |
 | `-w, --width` | `768` | Video width (divisible by 32) |
 | `-h, --height` | `512` | Video height (divisible by 32) |
-| `-f, --frames` | `121` | Frame count (must be 8n+1) |
+| `-f, --frames` | `121` | Frame count (8n+1), a duration (`15s`), or `auto` (LTX-2.5) |
 | `--seed` | random | Random seed |
 | `--distilled` | off | Use distilled model (8 steps, fast). Default: dev (30 steps + CFG) |
 | `--steps` | `30` | Inference steps — dev model only (the distilled model runs a fixed trained 8-step schedule; custom counts there produce artifacts) |
@@ -726,6 +726,8 @@ See [docs/benchmarks/](docs/benchmarks/) for full benchmark details and methodol
 
 - **Frame count**: Must be `8n + 1` (9, 17, 25, 33, 41, 49, 57, 65, 73, 81, 89, 97, 105, 113, 121, ...), up to 481 (= 20 s at 24 fps — the model's RoPE positional range; typical training clips are shorter, so expect some quality softening on very long videos)
 - **LipDub segments**: capped at **233 frames** (~9.7 s), not 481 — the audio reference sits at negative RoPE positions, so the audio stream spans twice the segment duration against the same 20 s window. Beyond that the lips lag by a constant offset (measured ~0.75 s at 377 frames). Split longer dialogue and chain with `--continuation-tail`; `generateLipDub` warns when the span overruns.
+- **Asking in seconds**: `--frames 15s` converts for you (a clip of `F` frames lasts `(F-1)/fps`, so 15 s at 24 fps is **361**, not 360). Off-grid durations snap to the nearest valid count and say so.
+- **Writing a duration in the prompt does nothing.** `--frames auto` predicts the length from the *scene*, not from text — see [the pitfall](docs/knowledge/pitfalls/duration-head-does-not-read-written-durations.md). The CLI warns when it spots one.
 - **Resolution**: Width and height divisible by 64
 - **Recommended**: 768x512, 1024x576, 832x480
 
