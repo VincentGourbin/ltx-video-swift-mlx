@@ -128,10 +128,13 @@ public actor ModelDownloader {
         // Extract filenames
         let files = siblings.compactMap { $0["rfilename"] as? String }
 
-        // Filter to relevant files
+        // Filter to relevant files. `.jinja` carries the chat template, which a
+        // generative checkpoint needs and which no other extension covers;
+        // everything dropped here is repo furniture (README, .gitattributes).
         return files.filter { file in
             file.hasSuffix(".safetensors") ||
             file.hasSuffix(".json") ||
+            file.hasSuffix(".jinja") ||
             file == "tokenizer.model"
         }
     }
@@ -569,65 +572,111 @@ public actor ModelDownloader {
 
     // MARK: - Gemma 4 E2B prompt enhancer (LTX-2.5)
 
-    /// HuggingFace repo for the LTX-2.5 prompt enhancer — a small *generative*
-    /// Gemma 4 instruct model. The bundled 12B encoder cannot fill this role:
-    /// upstream declares `gemma4_unified` encode-only, and its LM head is
-    /// measurably vestigial (docs/knowledge). Mirrors upstream's
-    /// `--prompt-enhancer-gemma-root` pointing at a Gemma 4 E2B-it checkpoint.
-    /// Licence: Google Gemma Terms of Use; the mlx-community mirror is not gated.
-    private static let gemma4EnhancerRepoID = "mlx-community/gemma-4-e2b-it-bf16"
-
-    private static let gemma4EnhancerFiles = [
-        "model-00001-of-00003.safetensors",
-        "model-00002-of-00003.safetensors",
-        "model-00003-of-00003.safetensors",
-        "model.safetensors.index.json",
-        "config.json",
-        "generation_config.json",
-        "chat_template.jinja",
-        "processor_config.json",
-        "tokenizer.json",
-        "tokenizer_config.json",
-    ]
-
-    /// Cache directory for the Gemma 4 E2B enhancer (shared across variants,
-    /// under the models dir so `--models-dir` routes it like every other model).
-    internal var gemma4EnhancerCacheDir: URL {
-        cacheDirectory.appendingPathComponent("enhancer-gemma4-e2b-bf16")
+    /// The LTX-2.5 prompt enhancer is a small *generative* Gemma 4 instruct
+    /// model. The bundled 12B encoder cannot fill this role: upstream declares
+    /// `gemma4_unified` encode-only, and its LM head is measurably vestigial
+    /// (docs/knowledge). Mirrors upstream's `--prompt-enhancer-gemma-root`
+    /// pointing at a Gemma 4 E2B-it checkpoint. Licence: Google Gemma Terms of
+    /// Use; the mlx-community mirrors are not gated.
+    ///
+    /// Cache directory for one precision of the Gemma 4 E2B enhancer, under the
+    /// models dir so `--models-dir` routes it like every other model. Keyed by
+    /// precision so switching does not clobber a checkpoint already on disk —
+    /// and `bf16` keeps the directory name earlier versions wrote, so existing
+    /// installs are not re-downloaded.
+    internal func gemma4EnhancerCacheDir(
+        _ precision: PromptEnhancerPrecision = .bf16
+    ) -> URL {
+        cacheDirectory.appendingPathComponent("enhancer-gemma4-e2b-\(precision.rawValue)")
     }
 
-    /// Download the Gemma 4 E2B-it prompt enhancer (bf16, ~10GB — the
-    /// reference space runs it unquantized; 4-bit degraded instruction following).
+    /// Names the files a completed download wrote. Without it "complete" has to
+    /// be inferred from a hardcoded file list, which pins the code to one
+    /// precision's shard layout — bf16 ships three shards, 6-bit ships one.
+    private static let enhancerManifestName = ".ltx-enhancer-manifest.json"
+
+    /// Download the Gemma 4 E2B-it prompt enhancer for `precision`.
+    ///
+    /// The file list comes from the HuggingFace API rather than a constant, so
+    /// any precision works without knowing its shard layout in advance.
     public func downloadGemma4Enhancer(
+        precision: PromptEnhancerPrecision = .bf16,
         progress: DownloadProgressCallback? = nil
     ) async throws -> URL {
-        let localDir = gemma4EnhancerCacheDir
-        // "Complete" means every listed file exists — config.json alone is file 5
-        // of 10, and an interrupted download must heal on rerun, not early-return
-        // into a permanently poisoned cache (downloadFile skips existing files).
-        let allPresent = Self.gemma4EnhancerFiles.allSatisfy {
-            FileManager.default.fileExists(atPath: localDir.appendingPathComponent($0).path)
-        }
-        if allPresent {
+        let localDir = gemma4EnhancerCacheDir(precision)
+        let manifestURL = localDir.appendingPathComponent(Self.enhancerManifestName)
+
+        // Fast path: a previous run recorded what it wrote and all of it is still
+        // there. Avoids a network round-trip on every enhanced generation.
+        if let data = try? Data(contentsOf: manifestURL),
+           let recorded = try? JSONDecoder().decode([String].self, from: data),
+           !recorded.isEmpty,
+           recorded.allSatisfy({
+               FileManager.default.fileExists(atPath: localDir.appendingPathComponent($0).path)
+           }) {
             progress?(DownloadProgress(progress: 1.0, message: "Gemma 4 enhancer already downloaded"))
             return localDir
         }
+
         try FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
-        let totalFiles = Self.gemma4EnhancerFiles.count
-        for (i, file) in Self.gemma4EnhancerFiles.enumerated() {
+        let files = try await listRepoFiles(repoId: precision.repoID)
+        guard !files.isEmpty else {
+            throw LTXError.downloadFailed("\(precision.repoID) listed no usable files")
+        }
+
+        // An interrupted download must heal on rerun rather than early-return
+        // into a permanently poisoned cache — downloadFile skips files already
+        // present, so re-walking the full list is cheap and self-repairing.
+        for (i, file) in files.enumerated() {
             progress?(DownloadProgress(
-                progress: Double(i) / Double(totalFiles),
+                progress: Double(i) / Double(files.count),
                 currentFile: file,
-                message: "Downloading enhancer-gemma4-e2b/\(file)..."
+                message: "Downloading enhancer-gemma4-e2b-\(precision.rawValue)/\(file)..."
             ))
             try await downloadFile(
-                repoId: Self.gemma4EnhancerRepoID,
+                repoId: precision.repoID,
                 filename: file,
                 to: localDir.appendingPathComponent(file)
             )
         }
+
+        // Written last: a manifest present alongside a partial download would
+        // make the fast path above certify a broken cache.
+        try? JSONEncoder().encode(files).write(to: manifestURL)
         progress?(DownloadProgress(progress: 1.0, message: "Gemma 4 enhancer download complete"))
         return localDir
+    }
+
+    /// Resolve the enhancer directory for `source`, downloading only when the
+    /// source is a managed one.
+    ///
+    /// A caller-supplied root is used as-is; it is checked for existence here so
+    /// a typo fails before the model loader reports it as a parsing problem.
+    public func resolveGemma4Enhancer(
+        source: PromptEnhancerSource,
+        progress: DownloadProgressCallback? = nil
+    ) async throws -> URL {
+        switch source {
+        case .managed(let precision):
+            return try await downloadGemma4Enhancer(precision: precision, progress: progress)
+
+        case .localRoot(let path):
+            let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                throw LTXError.fileNotFound(
+                    "Prompt enhancer root is not a directory: \(url.path)")
+            }
+            guard FileManager.default.fileExists(
+                atPath: url.appendingPathComponent("config.json").path) else {
+                throw LTXError.invalidConfiguration(
+                    "\(url.path) holds no config.json — the prompt enhancer root must be a "
+                    + "Gemma 4 E2B-it checkpoint directory.")
+            }
+            progress?(DownloadProgress(progress: 1.0, message: "Using prompt enhancer at \(url.path)"))
+            return url
+        }
     }
 
     /// Download Gemma text encoder — uses shared VLM Gemma (4-bit QAT)

@@ -100,6 +100,8 @@ struct Generate: AsyncParsableCommand {
     @Flag(name: .long, help: "Enhance prompt using Gemma before generation")
     var enhancePrompt: Bool = false
 
+    @OptionGroup var promptEnhancer: PromptEnhancerOptions
+
     @Flag(name: .long, help: "Decode with LTX-2.5's diffusion video VAE instead of the convolutional one (+1.5 GB download, slower, finer detail)")
     var diffvae: Bool = false
 
@@ -263,7 +265,8 @@ struct Generate: AsyncParsableCommand {
         let pipeline = LTXPipeline(
             model: modelVariant,
             quantization: quantConfig,
-            hfToken: hfToken
+            hfToken: hfToken,
+            promptEnhancer: try promptEnhancer.resolve()
         )
         print("Pipeline created")
         fflush(stdout)
@@ -524,6 +527,8 @@ struct Retake: AsyncParsableCommand {
     @Flag(name: .long, help: "Enhance prompt using Gemma before generation")
     var enhancePrompt: Bool = false
 
+    @OptionGroup var promptEnhancer: PromptEnhancerOptions
+
     @Flag(name: .long, help: "Use distilled model (8 steps, fast) instead of dev (30 steps + CFG)")
     var distilled: Bool = false
 
@@ -656,7 +661,8 @@ struct Retake: AsyncParsableCommand {
         let pipeline = LTXPipeline(
             model: retakeModel,
             quantization: quantConfig,
-            hfToken: hfToken
+            hfToken: hfToken,
+            promptEnhancer: try promptEnhancer.resolve()
         )
         print("Pipeline created (\(retakeModel.rawValue) model)")
         fflush(stdout)
@@ -859,6 +865,8 @@ struct LipDub: AsyncParsableCommand {
     @Flag(name: .long, help: "Enhance the prompt via the VLM (Gemma) by analyzing --reference-image. Generates a richer scene description while preserving the `speaking in <LANG> saying: \"...\"` LipDub signature. Image mode only.")
     var enhancePrompt: Bool = false
 
+    @OptionGroup var promptEnhancer: PromptEnhancerOptions
+
     @Option(name: .long, help: "HuggingFace token for gated models (the IC-LoRAs and every LTX-2.5 repo are gated)")
     var hfToken: String?
 
@@ -955,7 +963,8 @@ struct LipDub: AsyncParsableCommand {
         let pipeline = LTXPipeline(
             model: variant,
             quantization: LTXQuantizationConfig(transformer: .bf16),
-            hfToken: hfToken
+            hfToken: hfToken,
+            promptEnhancer: try promptEnhancer.resolve()
         )
         print("Pipeline created")
 

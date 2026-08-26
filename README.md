@@ -327,6 +327,38 @@ ltx-video generate --model 2.5-distilled --frames auto \
     --image first-frame.png "your prompt"
 ```
 
+### Prompt enhancer (LTX-2.5)
+
+`--enhance-prompt` on LTX-2.5 runs a **separate** Gemma 4 E2B-it: the bundled
+26 GB encoder is encode-only (vestigial LM head, measured), so it cannot rewrite
+its own prompt. That second Gemma defaults to bf16 (~10.2 GB), matching the
+reference space. Two ways not to pay for it twice:
+
+```bash
+# Smaller managed checkpoint — 5.5 GB less on disk.
+ltx-video generate --model 2.5-distilled --enhance-prompt \
+    --prompt-enhancer-precision 6bit "your prompt"
+
+# Reuse a Gemma 4 E2B-it you already have — nothing is downloaded.
+ltx-video generate --model 2.5-distilled --enhance-prompt \
+    --prompt-enhancer-root ~/models/gemma-4-e2b-it-6bit "your prompt"
+```
+
+Any precision works for `--prompt-enhancer-root`: a `quantization` block in the
+checkpoint's `config.json` is applied on load. **6-bit output quality is not
+measured** — 4-bit was tried and degraded instruction following, and 6-bit sits
+between that and the reference. Compare on your own prompts
+(`docs/examples/ltx-2.5/enhancer-bench`) before adopting it. The flags are
+LTX-2.3 no-ops: 2.3 self-enhances through the shared Gemma 3 VLM.
+
+From the library, the same choice is an initializer argument:
+
+```swift
+let pipeline = LTXPipeline(
+    model: .v25Distilled,
+    promptEnhancer: .localRoot(myGemmaDirectory.path))   // or .managed(.sixBit)
+```
+
 ## Swift Package Integration
 
 Add to your `Package.swift`:
@@ -514,6 +546,8 @@ flowchart TD
 | `--audio` | off | Enable audio generation |
 | `--audio-gain` | `1.0` | Audio gain (linear) |
 | `--enhance-prompt` | off | Enhance prompt with Gemma VLM |
+| `--prompt-enhancer-root` | none | LTX-2.5: use a Gemma 4 E2B-it checkpoint you already have as the enhancer |
+| `--prompt-enhancer-precision` | `bf16` | LTX-2.5: precision of the downloaded enhancer (`bf16` or `6bit`) |
 | `--diffvae` | off | Decode with LTX-2.5's diffusion VAE (finer detail, ~2x the decode cost) |
 | `--keyframe-slot` | none | Repeatable pixel-frame index for a generated keyframe slot (LTX-2.5) |
 | `--slots-out` | none | Write the generated keyframes (latents) to this path |
@@ -557,6 +591,8 @@ ltx-video export-quantized \
 | `--distilled` | off | Use distilled model (8 steps, fast). Default: dev (30 steps + CFG) |
 | `--steps` | `30` | Inference steps — dev model only (the distilled model runs a fixed trained 8-step schedule; custom counts there produce artifacts) |
 | `--enhance-prompt` | off | Enhance prompt with Gemma VLM |
+| `--prompt-enhancer-root` | none | LTX-2.5: use a Gemma 4 E2B-it checkpoint you already have as the enhancer |
+| `--prompt-enhancer-precision` | `bf16` | LTX-2.5: precision of the downloaded enhancer (`bf16` or `6bit`) |
 | `--transformer-quant` | `bf16` | Quantization: `bf16`, `qint8`, `int4`, `nvfp4`, `mxfp8` |
 | `--mixed-precision` | off | Per-block quantization: first/last 6 blocks qint8, middle int4 |
 | `--regenerate-audio` | off | Regenerate audio via dual denoising (default: preserve source audio) |

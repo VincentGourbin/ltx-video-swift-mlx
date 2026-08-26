@@ -145,6 +145,10 @@ public actor LTXPipeline {
     /// Model downloader
     private let downloader: ModelDownloader
 
+    /// Where the LTX-2.5 prompt enhancer's weights come from. See
+    /// ``PromptEnhancerSource``.
+    public let promptEnhancer: PromptEnhancerSource
+
     /// Resolved unified weights file paths associated with this pipeline, keyed by model.
     ///
     /// When the caller supplies a local unified safetensors file via `loadModels`,
@@ -309,17 +313,25 @@ public actor LTXPipeline {
     ///   - quantization: Quantization settings. Defaults to ``LTXQuantizationConfig/default``.
     ///   - memoryOptimization: Memory optimization preset. Defaults to ``MemoryOptimizationConfig/default`` (light).
     ///   - hfToken: Optional HuggingFace API token for downloading gated models.
+    ///   - promptEnhancer: Where the LTX-2.5 prompt enhancer's weights come from.
+    ///     Defaults to the managed bf16 checkpoint the reference space runs. Point
+    ///     it at ``PromptEnhancerSource/localRoot(_:)`` to reuse a Gemma 4 E2B-it
+    ///     the host application already ships, or at a smaller managed precision;
+    ///     either avoids a second multi-gigabyte Gemma on disk. Ignored on LTX-2.3,
+    ///     which self-enhances through the shared Gemma 3 VLM.
     public init(
         model: LTXModel = .distilled,
         quantization: LTXQuantizationConfig = .default,
         memoryOptimization: MemoryOptimizationConfig = .default,
-        hfToken: String? = nil
+        hfToken: String? = nil,
+        promptEnhancer: PromptEnhancerSource = .default
     ) {
         self.model = model
         self.quantization = quantization
         self.memoryOptimization = memoryOptimization
         self.downloader = ModelDownloader(hfToken: hfToken)
         self.scheduler = LTXScheduler(isDistilled: true)
+        self.promptEnhancer = promptEnhancer
     }
 
     /// Resolve the unified safetensors path for a model.
@@ -3404,22 +3416,29 @@ AESTHETIC QUALITY (in addition to the above, without breaking the objective capt
     ///
     /// Mirrors upstream\'s design: the bundled 12B encoder is encode-only
     /// (vestigial LM head, measured — docs/knowledge), so enhancement runs on a
-    /// separate small generative Gemma 4 E2B-it (bf16, as the reference space
-    /// runs it), greedy, 600 tokens, no_repeat_ngram_size 5
-    /// (`GEMMA4_ENHANCE_GENERATION_KWARGS`). The checkpoint downloads through our
-    /// `ModelDownloader` so `--models-dir` routes it like every other model.
+    /// separate small generative Gemma 4 E2B-it (bf16 by default, as the
+    /// reference space runs it), greedy, 600 tokens, no_repeat_ngram_size 5
+    /// (`GEMMA4_ENHANCE_GENERATION_KWARGS`). A managed checkpoint downloads
+    /// through our `ModelDownloader` so `--models-dir` routes it like every other
+    /// model; ``promptEnhancer`` can instead name weights the caller already has.
     private func enhancePromptWithGemma4(
         _ prompt: String,
         imagePath: String?,
         startTime: Date
     ) async throws -> String {
-        print("Prompt enhancer: Gemma 4 E2B-it bf16 via Gemma4Swift (downloading if needed, ~10GB)...")
+        switch promptEnhancer {
+        case .managed(let precision):
+            print("Prompt enhancer: Gemma 4 E2B-it \(precision.rawValue) via Gemma4Swift "
+                  + "(downloading if needed, ~\(String(format: "%.1f", precision.approximateSizeGB))GB)...")
+        case .localRoot(let path):
+            print("Prompt enhancer: Gemma 4 E2B-it via Gemma4Swift from \(path)")
+        }
         fflush(stdout)
         // Its own phase: enhancement is a separate model and a separate cost,
         // and folding it into text encoding would misattribute both.
         LTXVideoProfiler.shared.start("Prompt Enhancement")
         defer { LTXVideoProfiler.shared.end("Prompt Enhancement") }
-        let dir = try await downloader.downloadGemma4Enhancer { p in
+        let dir = try await downloader.resolveGemma4Enhancer(source: promptEnhancer) { p in
             if let f = p.currentFile { print("  \(f)"); fflush(stdout) }
         }
 

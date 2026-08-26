@@ -1,5 +1,17 @@
 # Directory Update Log
 
+## 2026-08-26
+
+* **Creation**: [Prompt enhancer source](/docs/knowledge/decisions/prompt-enhancer-source.md)
+  — LTX-2.5 enhancement needs a generative E2B-it separate from the encode-only
+  bundled encoder, so `--enhance-prompt` puts a second Gemma on disk. bf16
+  (10.24 GB) stays the default for reference parity; 6-bit (4.74 GB, quality
+  unmeasured) and a caller-supplied root are opt-in. Records why the file list
+  must be enumerated rather than hardcoded — bf16 ships three shards, 6-bit
+  one — and that a quantized checkpoint's `quantization` block is applied by
+  the loader, so a caller's root needs no precision flag. Answers ask 2 of the
+  Fluxforge LTX-2.5 asks.
+
 ## 2026-08-13
 
 * **Creation**: [IC-LoRA stage 2 keeps adapter and reference](/docs/knowledge/decisions/iclora-stage2-keeps-adapter-and-reference.md)
