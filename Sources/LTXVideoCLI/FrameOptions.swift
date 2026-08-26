@@ -9,7 +9,7 @@ import LTXVideo
 ///
 /// `generate` handles this inline because it also accepts `auto`; the commands
 /// that take a fixed length share this.
-func resolveFrames(_ raw: String, maximumFrames: Int = FrameGrid.maximum) throws -> Int {
+func resolveFrames(_ raw: String) throws -> Int {
     let parsed: (spec: FrameCountSpec, note: String?)
     do {
         parsed = try FrameCountSpec.parse(raw)
@@ -21,12 +21,6 @@ func resolveFrames(_ raw: String, maximumFrames: Int = FrameGrid.maximum) throws
             "'auto' needs the duration head; this command takes a count or a duration like 15s.")
     }
     if let note = parsed.note { print("Note: \(note)") }
-    guard count <= maximumFrames else {
-        throw ValidationError(
-            "This command caps at \(maximumFrames) frames "
-            + "(\(FrameCountSpec.format(FrameGrid.seconds(forFrames: maximumFrames, fps: 24)))s at 24 fps). "
-            + "Got \(count).")
-    }
     return count
 }
 
@@ -59,14 +53,15 @@ func resolveFrames(_ raw: String, maximumFrames: Int = FrameGrid.maximum) throws
 ///     threshold disagreed with it on 111 of the predictions in 0.05...24 s —
 ///     the whole band below the 1 s floor, which a `>` comparison can never
 ///     detect at all.
-///   - maximumFrames: this command's ceiling. LipDub's is 233, not 481, and
-///     suggesting 361 there would have the CLI contradict its own help text.
+///   - caveat: an extra sentence for commands whose usable range is narrower
+///     than the model's and not knowable here — LipDub's depends on the length
+///     of the reference audio, so it is stated rather than enforced.
 func noteIgnoredPromptDuration(
     prompt: String,
     resolvedFrames: Int,
     predictedSeconds: Double? = nil,
     predictionWasClamped: Bool = false,
-    maximumFrames: Int = FrameGrid.maximum,
+    caveat: String? = nil,
     fps: Double = 24.0
 ) {
     guard let asked = PromptDuration.find(in: prompt) else { return }
@@ -76,7 +71,7 @@ func noteIgnoredPromptDuration(
     guard abs(asked - got) > 0.5 else { return }
 
     let want = FrameCountSpec.format(asked)
-    let ceiling = FrameGrid.seconds(forFrames: maximumFrames, fps: fps)
+    let ceiling = FrameGrid.seconds(forFrames: FrameGrid.maximum, fps: fps)
 
     print()
     if let predicted = predictedSeconds {
@@ -94,8 +89,9 @@ func noteIgnoredPromptDuration(
     // Only ever suggest something the CLI will accept. A prompt saying "a 2
     // minute short film" asks for more than the model can generate at all.
     guard asked <= ceiling else {
-        print("      \(want)s is beyond this command's \(FrameCountSpec.format(ceiling))s maximum "
-              + "(\(maximumFrames) frames); it cannot be generated in one run.")
+        print("      \(want)s is beyond this model's \(FrameCountSpec.format(ceiling))s maximum "
+              + "(\(FrameGrid.maximum) frames); it cannot be generated in one run.")
+        if let caveat { print("      \(caveat)") }
         return
     }
     let (wanted, exact) = FrameCountSpec.frames(forSeconds: asked, fps: fps)
@@ -107,4 +103,5 @@ func noteIgnoredPromptDuration(
         let actual = FrameCountSpec.format(FrameGrid.seconds(forFrames: wanted, fps: fps))
         print("      Pass --frames \(wanted) (or \(want)s) — the closest the grid allows, \(actual)s.")
     }
+    if let caveat { print("      \(caveat)") }
 }

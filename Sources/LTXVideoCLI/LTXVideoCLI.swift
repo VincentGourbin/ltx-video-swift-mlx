@@ -846,11 +846,18 @@ struct Retake: AsyncParsableCommand {
 // MARK: - LipDub Command
 
 struct LipDub: AsyncParsableCommand {
-    /// LipDub's real per-segment ceiling, well below the 481 the config allows.
-    /// Its audio reference sits at negative RoPE positions, so the audio stream
-    /// spans twice the segment duration against the same 20 s window. Enforced
-    /// here rather than only warned about after the models load.
-    static let maximumSegmentFrames = 233
+    /// What LipDub can take *depends on the reference audio*, which is not known
+    /// until it is decoded: the constraint is
+    /// `referenceDuration + clipDuration + 0.04 <= 20 s`, because the reference
+    /// sits at negative RoPE positions and the stream spans both.
+    ///
+    /// The widely quoted 233 frames is only the symmetric worst case, where the
+    /// reference is as long as the clip. A 2 s reference leaves room for a 15 s
+    /// target. So this is a caveat to state, not a ceiling to enforce — capping
+    /// here at 233 would refuse runs the pipeline accepts.
+    static let segmentCaveat =
+        "LipDub also bounds the segment by the reference audio: reference + target must "
+        + "fit the 20 s window, so ~233 frames when they are the same length."
 
     static let configuration = CommandConfiguration(
         commandName: "lipdub",
@@ -926,7 +933,7 @@ struct LipDub: AsyncParsableCommand {
         // Resolved before anything is printed or recorded: the banner and the
         // profiling metadata must carry the count the run will use, not the raw
         // spec — "frames: 15s" makes per-frame throughput uncomputable.
-        let frameCount = try resolveFrames(frames, maximumFrames: LipDub.maximumSegmentFrames)
+        let frameCount = try resolveFrames(frames)
 
         if let dir = modelsDir {
             LTXModelRegistry.customModelsDirectory = URL(fileURLWithPath: dir)
@@ -977,7 +984,8 @@ struct LipDub: AsyncParsableCommand {
         print("Output: \(output)")
         print("Resolution: \(width)x\(height) (stage 1: \(width / 2)x\(height / 2))")
         print("Frames: \(frameCount)")
-        noteIgnoredPromptDuration(prompt: prompt, resolvedFrames: frameCount)
+        noteIgnoredPromptDuration(
+            prompt: prompt, resolvedFrames: frameCount, caveat: Self.segmentCaveat)
         if let seed = seed { print("Seed: \(seed)") }
         print()
 
