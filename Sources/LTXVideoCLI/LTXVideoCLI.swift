@@ -190,7 +190,10 @@ struct Generate: AsyncParsableCommand {
             session.metadata["model"] = parsedModelVariant.rawValue
             session.metadata["quant"] = mixedPrecision ? "mixed" : transformerQuant
             session.metadata["resolution"] = "\(width)x\(height)"
-            session.metadata["frames"] = String(frameCount)
+            // "auto (pending)" until the prediction lands: the placeholder 121 is not
+            // the count this run uses, and a benchmark filed from a report saying 121
+            // for a 473-frame clip is wrong by 3.9x.
+            session.metadata["frames"] = autoDuration ? "auto (pending)" : String(frameCount)
             profilingSession = session
             LTXVideoProfiler.shared.enable()
             LTXVideoProfiler.shared.activeSession = session
@@ -252,6 +255,7 @@ struct Generate: AsyncParsableCommand {
         // Kept for the advisory: reporting the post-clamp count would attribute
         // the clamp to the model.
         var predictedSeconds: Double?
+        var predictionWasClamped = false
 
         // Validate dimensions (must be divisible by 64 for two-stage)
         guard width % 64 == 0 && height % 64 == 0 else {
@@ -346,6 +350,9 @@ struct Generate: AsyncParsableCommand {
             let predicted = try await pipeline.predictFrameCount(for: effectivePrompt)
             frameCount = predicted.frames
             predictedSeconds = Double(predicted.seconds)
+            predictionWasClamped = predicted.wasClamped
+            // The count is known now; correct what the report will print.
+            profilingSession?.metadata["frames"] = String(frameCount)
             let clampNote = predicted.wasClamped ? " (clamped from \(String(format: "%.1f", predicted.seconds))s)" : ""
             print("Duration: \(FrameCountSpec.format(FrameGrid.seconds(forFrames: frameCount, fps: 24)))s → \(frameCount) frames\(clampNote)")
         }
@@ -355,7 +362,8 @@ struct Generate: AsyncParsableCommand {
         if autoDuration {
             noteIgnoredPromptDuration(
                 prompt: prompt, resolvedFrames: frameCount,
-                predictedSeconds: predictedSeconds)
+                predictedSeconds: predictedSeconds,
+                predictionWasClamped: predictionWasClamped)
         }
 
         // Routing a dev checkpoint:
@@ -838,6 +846,12 @@ struct Retake: AsyncParsableCommand {
 // MARK: - LipDub Command
 
 struct LipDub: AsyncParsableCommand {
+    /// LipDub's real per-segment ceiling, well below the 481 the config allows.
+    /// Its audio reference sits at negative RoPE positions, so the audio stream
+    /// spans twice the segment duration against the same 20 s window. Enforced
+    /// here rather than only warned about after the models load.
+    static let maximumSegmentFrames = 233
+
     static let configuration = CommandConfiguration(
         commandName: "lipdub",
         abstract: "Lip-sync a reference video to a new prompt using the LipDub IC-LoRA"
@@ -912,7 +926,7 @@ struct LipDub: AsyncParsableCommand {
         // Resolved before anything is printed or recorded: the banner and the
         // profiling metadata must carry the count the run will use, not the raw
         // spec — "frames: 15s" makes per-frame throughput uncomputable.
-        let frameCount = try resolveFrames(frames)
+        let frameCount = try resolveFrames(frames, maximumFrames: LipDub.maximumSegmentFrames)
 
         if let dir = modelsDir {
             LTXModelRegistry.customModelsDirectory = URL(fileURLWithPath: dir)

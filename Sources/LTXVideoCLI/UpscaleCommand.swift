@@ -65,6 +65,10 @@ struct Upscale: AsyncParsableCommand {
     var debug: Bool = false
 
     mutating func run() async throws {
+        // Same advisory as generate/retake/lipdub: a duration written into the
+        // prompt is ignored here too, and this command has no `auto` mode that
+        // might otherwise have hinted at it.
+        noteIgnoredPromptDuration(prompt: prompt, resolvedFrames: frames)
         if let dir = modelsDir {
             LTXModelRegistry.customModelsDirectory = URL(fileURLWithPath: dir)
         }

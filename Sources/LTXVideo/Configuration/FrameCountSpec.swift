@@ -22,12 +22,22 @@ public enum FrameGrid {
         Double(frames - 1) / fps
     }
 
-    /// Move `frames` onto the grid.
+    /// Move `frames` onto the grid. On-grid input is a fixed point for every
+    /// rule, so callers need no special case of their own.
     public static func snap(_ frames: Int, rounding: GridRounding) -> Int {
-        let below = ((frames - 1) / Self.step) * Self.step + 1
+        // Floor division, not Swift's truncation-toward-zero: `(-8) / 8` is 0
+        // where the grid point below is -7. Only reachable from a caller passing
+        // a negative floor, but silently wrong there.
+        let offset = frames - 1
+        let quotient = offset >= 0
+            ? offset / Self.step
+            : -((-offset + Self.step - 1) / Self.step)
+        let below = quotient * Self.step + 1
         switch rounding {
         case .down:
             return below
+        case .up:
+            return below == frames ? frames : below + Self.step
         case .nearest:
             let above = below + Self.step
             return (frames - below) <= (above - frames) ? below : above
@@ -53,6 +63,9 @@ public enum FrameGrid {
 public enum GridRounding: Sendable {
     case down
     case nearest
+    /// "give me a count at least this large" — the floor path of a clamped
+    /// window, where landing below the minimum is not allowed.
+    case up
 }
 
 /// How a caller expressed the clip length.
@@ -122,9 +135,11 @@ public enum FrameCountSpec: Sendable, Equatable {
         // reproducing upstream's arithmetic on a prediction.
         let ideal = Int((capped * fps).rounded(.toNearestOrAwayFromZero)) + 1
 
-        let snapped = (ideal - 1) % FrameGrid.step == 0
-            ? ideal : FrameGrid.snap(ideal, rounding: rounding)
-        let bounded = min(max(snapped, FrameGrid.minimum), FrameGrid.maximum)
+        // No on-grid special case: `snap` is the identity on grid points, so a
+        // second branch here would only be another hand-rolled `% step` inside
+        // the type that exists to abolish them.
+        let bounded = min(max(FrameGrid.snap(ideal, rounding: rounding), FrameGrid.minimum),
+                          FrameGrid.maximum)
         return (bounded, bounded == ideal && capped == seconds)
     }
 

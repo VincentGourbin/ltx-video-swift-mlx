@@ -77,6 +77,11 @@ struct Interpolate: AsyncParsableCommand {
     var debug: Bool = false
 
     mutating func run() async throws {
+        // Same advisory as generate/retake/lipdub. Deliberately the default
+        // 24 fps and not `--fps`: `frames` is the *source* count at 24, and
+        // interpolation leaves the duration unchanged — the output is 2n-1
+        // frames at twice the rate.
+        noteIgnoredPromptDuration(prompt: prompt, resolvedFrames: frames)
         if let dir = modelsDir {
             LTXModelRegistry.customModelsDirectory = URL(fileURLWithPath: dir)
         }

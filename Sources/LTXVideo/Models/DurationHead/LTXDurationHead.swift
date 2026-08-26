@@ -108,15 +108,13 @@ final class LTXDurationHead: Module {
         // Rounds **down**, unlike FrameCountSpec's `.nearest`, and deliberately:
         // this is a prediction to stay within, not a duration someone asked for.
         // The gap is a documented contract — see GridRounding.
-        let timeScale = FrameGrid.step
         var frames = FrameGrid.snap(raw, rounding: .down)
         if frames < minFrames {
-            let rounded = ((minFrames - 1) + timeScale - 1) / timeScale * timeScale + 1
             // A [min, max] window may contain no 8k+1 point at all; capping the
             // snap-up at maxFrames would leave the grid. Prefer the grid — the
             // whole contract is "safe to hand to LTXVideoGenerationConfig" —
-            // and exceed maxFrames by at most timeScale-1 frames in that case.
-            frames = rounded <= maxFrames ? rounded : frames + timeScale
+            // and exceed maxFrames by at most step-1 frames in that case.
+            frames = FrameGrid.snap(minFrames, rounding: .up)
         }
         return frames
     }

@@ -60,7 +60,7 @@ all. The enhanced prompt predicted 5.28 s, the same 121 frames.
 
 # Guarded by
 
-`DurationPromptE2ETests` (gated on `LTX25_MODELS_DIR`) asserts the `3 seconds.`
+`DurationPromptE2ETests` (gated on `LTX25_CACHE_ROOT` — a cache *root* with per-component subdirectories, deliberately not the flat `LTX25_MODELS_DIR` four other suites read) asserts the `3 seconds.`
 equivalence directly, so if a future checkpoint *does* learn to read durations,
 the test fails and says the premise needs revisiting. See also
 [the LTX-2.5 checkpoint diff](/docs/knowledge/investigations/ltx-2.5-checkpoint-diff-2026-08.md).

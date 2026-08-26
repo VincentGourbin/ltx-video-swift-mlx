@@ -1723,7 +1723,10 @@ public actor LTXPipeline {
 
         if isPartialRetake {
             let fps: Float = 24.0
-            let totalDuration = Float(config.numFrames) / fps
+            // (F-1)/fps, per FrameGrid: F/fps put the clamp ceiling one frame
+            // past the last frame, so --retake-end 1.375 on a 33-frame clip was
+            // accepted although the clip ends at 1.333 s.
+            let totalDuration = Float(FrameGrid.seconds(forFrames: config.numFrames, fps: Double(fps)))
             let startTime = min(config.retakeStartTime ?? 0.0, totalDuration)
             let endTime = min(config.retakeEndTime ?? totalDuration, totalDuration)
 
@@ -2462,7 +2465,8 @@ public actor LTXPipeline {
         // Measured: a 15.7 s segment lip-syncs with a constant ~0.75 s lag; the same
         // source at 9.7 s is in sync. 481 frames remains correct for generate/retake —
         // it is only LipDub that pays the doubled span.
-        let lipdubAudioSpan = Float(refSamples) / 16000.0 + Float(numFrames) / 24.0 + 0.04
+        let lipdubAudioSpan = Float(refSamples) / 16000.0
+            + Float(FrameGrid.seconds(forFrames: numFrames, fps: 24.0)) + 0.04
         let lipdubAudioBudget = Float(ltx2.config.audioMaxPos.first ?? 20)
         if lipdubAudioSpan > lipdubAudioBudget {
             let maxFrames = Int(((lipdubAudioBudget - 0.04) / 2 * 24 - 1) / 8) * 8 + 1
@@ -2477,7 +2481,8 @@ public actor LTXPipeline {
                 format: "[lipdub] WARNING: audio reference + target span %.1fs exceeds the "
                     + "%.0fs RoPE window — expect a growing lip-sync lag. Split the dialogue "
                     + "into segments of at most %d frames (%.1fs) and %@.",
-                lipdubAudioSpan, lipdubAudioBudget, maxFrames, Float(maxFrames) / 24.0, remedy))
+                lipdubAudioSpan, lipdubAudioBudget, maxFrames,
+                Float(FrameGrid.seconds(forFrames: maxFrames, fps: 24.0)), remedy))
         }
         let refMel = try audioProcessor.melSpectrogram(refWaveform)
         print("[lipdub] reference mel spectrogram: \(refMel.shape)")
