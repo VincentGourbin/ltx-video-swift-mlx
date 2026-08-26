@@ -12,8 +12,12 @@
   re-implementation `DurationHeadE2ETests` used to pin against — it runs
   upstream's `ltx_core.duration_head.DurationHead` on the same weights
   (float64: 11.402804284 s), and its `seconds_to_clamped_num_frames` table now
-  pins `snapToGrid` with no checkpoint required. Settles `num_pooler_heads = 4`,
-  which the checkpoint metadata does not carry.
+  pins `snapToGrid` with no checkpoint required. `num_pooler_heads = 4` is
+  passed explicitly and asserted rather than inherited from a constructor
+  default — it is absent from the checkpoint metadata and not derivable from
+  the head-count-invariant tensor shapes. A 5.6875 s row exposes the one
+  language-semantics gap: Python's `round()` is banker's, Swift's `.rounded()`
+  is half-away-from-zero, 129 frames against 137. The port now matches.
 
 * **Creation**: [URLSession's per-task delegate has no download progress](/docs/knowledge/pitfalls/urlsession-task-delegate-has-no-download-progress.md)
   — `download(for:delegate:)` accepts a `URLSessionDownloadDelegate` and calls

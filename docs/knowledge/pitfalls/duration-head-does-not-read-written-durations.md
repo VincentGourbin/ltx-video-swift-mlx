@@ -1,7 +1,7 @@
 ---
 type: Pitfall
 title: The duration head ignores durations written in the prompt
-description: "--frames auto" regresses a clip length from connector tokens, not from text. A "3 seconds." prefix returns the same value as no prefix at all. Measured August 2026.
+description: '`--frames auto` regresses a clip length from connector tokens, not from text. A "3 seconds." prefix returns the same value as no prefix at all. Measured August 2026.'
 tags: [ltx25, duration-head, frames, prompting]
 timestamp: 2026-08-26T00:00:00Z
 ---
@@ -47,10 +47,12 @@ all. The enhanced prompt predicted 5.28 s, the same 121 frames.
 # Consequences
 
 - **Want a specific length? Pass `--frames`.** 15 s at 24 fps is `--frames 361`.
-- **The effective ceiling of `--frames auto` is 473 frames, not 481.** The clamp
-  is 20 s (upstream's default), 20 × 24 = 480, and 480 floors to 473 on the
-  `8k+1` grid. `LTXVideoGenerationConfig` accepts 481, but auto-duration can
-  never ask for it.
+- **Two ceilings, and they differ on purpose.** An explicit `--frames` reaches
+  481 (20 s). `--frames auto` tops out at **473**: it rounds a *prediction*
+  down to the grid rather than to the nearest point, matching upstream's
+  `seconds_to_clamped_num_frames`. Same reason `--frames 15s` gives 361 while a
+  predicted 15 s gives 353 — a request and an estimate are different questions,
+  and `GridRounding` names both rules.
 - **`wasClamped` distinguishes the two failure shapes.** "The model asked for
   23.5 s and got capped" is not "the model asked for 5 s".
 - A `"15 seconds, 16:9 landscape"` preamble is a prompt shape borrowed from

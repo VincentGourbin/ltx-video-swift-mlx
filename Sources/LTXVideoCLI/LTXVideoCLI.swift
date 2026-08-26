@@ -148,6 +148,28 @@ struct Generate: AsyncParsableCommand {
         // Resolved up front so every message names the variant actually running.
         let parsedModelVariant = try parseModelVariant(model)
 
+        // One parse, one source of truth. `frames.lowercased() == "auto"` used to
+        // sit alongside this and disagree about surrounding whitespace, so
+        // `--frames " auto"` took the non-auto branch and then failed with a
+        // message that named 'auto' as valid.
+        let framesSpec: FrameCountSpec
+        let framesNote: String?
+        do {
+            (framesSpec, framesNote) = try FrameCountSpec.parse(frames)
+        } catch {
+            throw ValidationError("\(error.localizedDescription)")
+        }
+        let autoDuration = framesSpec == .auto
+        if autoDuration && parsedModelVariant.family == .ltx23 {
+            throw ValidationError(
+                "--frames auto needs a duration head, which ships from LTX-2.5 onward; "
+                + "\(parsedModelVariant.displayName) has none. Pass a count (8n+1) or a duration.")
+        }
+        // 121 is only a placeholder for the auto path, replaced by the prediction.
+        var frameCount = 121
+        if case .frames(let count) = framesSpec { frameCount = count }
+        if let framesNote { print("Note: \(framesNote)") }
+
         // Configure custom models directory if specified
         if let dir = modelsDir {
             LTXModelRegistry.customModelsDirectory = URL(fileURLWithPath: dir)
@@ -168,7 +190,7 @@ struct Generate: AsyncParsableCommand {
             session.metadata["model"] = parsedModelVariant.rawValue
             session.metadata["quant"] = mixedPrecision ? "mixed" : transformerQuant
             session.metadata["resolution"] = "\(width)x\(height)"
-            session.metadata["frames"] = String(frames)
+            session.metadata["frames"] = String(frameCount)
             profilingSession = session
             LTXVideoProfiler.shared.enable()
             LTXVideoProfiler.shared.activeSession = session
@@ -203,7 +225,13 @@ struct Generate: AsyncParsableCommand {
         print("Prompt: \(prompt)")
         print("Output: \(output)")
         print("Resolution: \(width)x\(height) (stage 1: \(width/2)x\(height/2))")
-        print("Frames: \(frames)")
+        print("Frames: " + (autoDuration ? "auto (predicted from the prompt)" : "\(frameCount)"))
+        // Said before anything is downloaded or loaded: a note that arrives after
+        // a multi-minute model load has already wasted the run it was warning
+        // about. The auto path cannot report yet — it has no prediction.
+        if !autoDuration {
+            noteIgnoredPromptDuration(prompt: prompt, resolvedFrames: frameCount)
+        }
         if let seed = seed {
             print("Seed: \(seed)")
         }
@@ -221,27 +249,9 @@ struct Generate: AsyncParsableCommand {
         if transformerQuant != "bf16" { print("Transformer quantization: \(transformerQuant)") }
         print()
 
-        // Validate frame count (must be 8n+1)
-        let autoDuration = frames.lowercased() == "auto"
-        if autoDuration && parsedModelVariant.family == .ltx23 {
-            throw ValidationError(
-                "--frames auto needs a duration head, which ships from LTX-2.5 onward; "
-                + "\(parsedModelVariant.displayName) has none. Pass an explicit frame count (8n+1).")
-        }
-        var frameCount = 121
-        if !autoDuration {
-            let parsed: (spec: FrameCountSpec, note: String?)
-            do {
-                parsed = try FrameCountSpec.parse(frames)
-            } catch {
-                throw ValidationError("\(error.localizedDescription)")
-            }
-            guard case .frames(let count) = parsed.spec else {
-                throw ValidationError("Frames must be a count, a duration, or 'auto'. Got \(frames)")
-            }
-            if let note = parsed.note { print("Note: \(note)") }
-            frameCount = count
-        }
+        // Kept for the advisory: reporting the post-clamp count would attribute
+        // the clamp to the model.
+        var predictedSeconds: Double?
 
         // Validate dimensions (must be divisible by 64 for two-stage)
         guard width % 64 == 0 && height % 64 == 0 else {
@@ -335,29 +345,17 @@ struct Generate: AsyncParsableCommand {
             fflush(stdout)
             let predicted = try await pipeline.predictFrameCount(for: effectivePrompt)
             frameCount = predicted.frames
+            predictedSeconds = Double(predicted.seconds)
             let clampNote = predicted.wasClamped ? " (clamped from \(String(format: "%.1f", predicted.seconds))s)" : ""
-            print("Duration: \(String(format: "%.2f", Float(frameCount) / 24.0))s → \(frameCount) frames\(clampNote)")
+            print("Duration: \(FrameCountSpec.format(FrameGrid.seconds(forFrames: frameCount, fps: 24)))s → \(frameCount) frames\(clampNote)")
+        }
 
-            // The duration head regresses a length from connector tokens; it never
-            // sees the text, so a duration written in the prompt is dropped without
-            // a word. Say so rather than substituting it: `auto` means "let the
-            // model choose the natural length", and quietly overriding that with a
-            // parsed number would change what the mode means.
-            //
-            // Checked against the prompt the user wrote, not the enhanced one — the
-            // enhancer's rewrite tends to drop the duration outright.
-            if let asked = PromptDuration.find(in: prompt) {
-                let got = Double(frameCount - 1) / 24.0
-                if abs(asked - got) > 0.5 {
-                    let (wanted, _) = FrameCountSpec.frames(forSeconds: asked)
-                    let want = String(format: "%.3g", asked)
-                    let have = String(format: "%.3g", got)
-                    print()
-                    print("Note: the prompt asks for \(want)s, but --frames auto predicted \(have)s.")
-                    print("      The duration head reads the scene, not written durations.")
-                    print("      Pass --frames \(wanted) (or \(want)s) to get \(want)s.")
-                }
-            }
+        // On the auto path the advisory needs the prediction, so it waits until
+        // here. The explicit path already reported, right after the banner.
+        if autoDuration {
+            noteIgnoredPromptDuration(
+                prompt: prompt, resolvedFrames: frameCount,
+                predictedSeconds: predictedSeconds)
         }
 
         // Routing a dev checkpoint:
@@ -594,6 +592,11 @@ struct Retake: AsyncParsableCommand {
     var ltxWeights: String?
 
     mutating func run() async throws {
+        // Resolved before anything is printed or recorded: the banner and the
+        // profiling metadata must carry the count the run will use, not the raw
+        // spec — "frames: 15s" makes per-frame throughput uncomputable.
+        let frameCount = try resolveFrames(frames)
+
         if let dir = modelsDir {
             LTXModelRegistry.customModelsDirectory = URL(fileURLWithPath: dir)
         }
@@ -612,7 +615,7 @@ struct Retake: AsyncParsableCommand {
             session.metadata["model"] = distilled ? "distilled" : "dev"
             session.metadata["quant"] = mixedPrecision ? "mixed" : transformerQuant
             session.metadata["resolution"] = "\(width)x\(height)"
-            session.metadata["frames"] = String(frames)
+            session.metadata["frames"] = String(frameCount)
             session.metadata["steps"] = String(distilled ? 8 : 30)
             profilingSession = session
             LTXVideoProfiler.shared.enable()
@@ -638,7 +641,8 @@ struct Retake: AsyncParsableCommand {
         }
         print("Output: \(output)")
         print("Resolution: \(width)x\(height)")
-        print("Frames: \(frames)")
+        print("Frames: \(frameCount)")
+        noteIgnoredPromptDuration(prompt: prompt, resolvedFrames: frameCount)
         if let seed = seed {
             print("Seed: \(seed)")
         }
@@ -648,7 +652,6 @@ struct Retake: AsyncParsableCommand {
         print()
 
         // Validate
-        let frameCount = try resolveFrames(frames)
         guard width % 64 == 0 && height % 64 == 0 else {
             throw ValidationError("Width and height must be divisible by 64. Got \(width)x\(height)")
         }
@@ -864,7 +867,7 @@ struct LipDub: AsyncParsableCommand {
     @Option(name: .shortAndLong, help: "Video height in pixels (must be divisible by 64)")
     var height: Int = 512
 
-    @Option(name: .shortAndLong, help: "Number of frames (8n+1, e.g. 121, 241) or a duration ('10s'). Should match the reference video length.")
+    @Option(name: .shortAndLong, help: "Number of frames (8n+1, e.g. 121, 233) or a duration ('9s'). Should match the reference video length. LipDub caps at ~233 frames per segment — its audio reference sits at negative RoPE positions, so the audio spans twice the segment duration.")
     var frames: String = "121"
 
     @Option(name: .long, help: "Random seed for reproducibility")
@@ -906,6 +909,11 @@ struct LipDub: AsyncParsableCommand {
     var model: String = "distilled"
 
     mutating func run() async throws {
+        // Resolved before anything is printed or recorded: the banner and the
+        // profiling metadata must carry the count the run will use, not the raw
+        // spec — "frames: 15s" makes per-frame throughput uncomputable.
+        let frameCount = try resolveFrames(frames)
+
         if let dir = modelsDir {
             LTXModelRegistry.customModelsDirectory = URL(fileURLWithPath: dir)
         }
@@ -954,12 +962,12 @@ struct LipDub: AsyncParsableCommand {
         print("Prompt: \(prompt)")
         print("Output: \(output)")
         print("Resolution: \(width)x\(height) (stage 1: \(width / 2)x\(height / 2))")
-        print("Frames: \(frames)")
+        print("Frames: \(frameCount)")
+        noteIgnoredPromptDuration(prompt: prompt, resolvedFrames: frameCount)
         if let seed = seed { print("Seed: \(seed)") }
         print()
 
         // Validate
-        let frameCount = try resolveFrames(frames)
         guard width % 64 == 0 && height % 64 == 0 else {
             throw ValidationError("Width and height must be divisible by 64. Got \(width)x\(height)")
         }

@@ -12,8 +12,13 @@
 //
 // This previously pinned against a NumPy re-implementation written during the
 // same porting effort, which could only catch a transcription slip — not a
-// shared misreading. Running upstream also settled `num_pooler_heads = 4`,
-// which the checkpoint metadata does not carry (`"duration_head": {}`).
+// shared misreading.
+//
+// `num_pooler_heads = 4` is not in the checkpoint (its metadata carries
+// `"duration_head": {}`) and is not derivable from the tensor shapes, which are
+// head-count invariant. The script therefore passes it explicitly and asserts
+// what it got, and emits `pooler_heads` in its JSON — otherwise "running
+// upstream settled the head count" would be a claim nothing backs.
 //
 // Gated behind LTX25_MODELS_DIR.
 //

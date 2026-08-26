@@ -12,12 +12,19 @@
 // scalar. There is no path by which a numeral survives as a number. The
 // controls below demonstrate that rather than asserting it.
 //
-// Needs the LTX-2.5 checkpoint (gated, ~70 GB) laid out as the downloader
-// expects: <dir>/ltx-2.5-distilled/*.safetensors plus
-// <dir>/ltx-2.5-duration-head/.
+// Needs the LTX-2.5 checkpoint (gated, ~70 GB) laid out as the *downloader*
+// expects — a cache ROOT with per-component subdirectories:
+//   <root>/ltx-2.5-distilled/*.safetensors
+//   <root>/ltx-2.5-duration-head/*.safetensors
+//
+// Deliberately NOT `LTX25_MODELS_DIR`: four existing suites
+// (DurationHeadE2ETests, VAERoundTripE2ETests, BigVGANVocoderE2ETests,
+// LTX25CheckpointSourceE2ETests) read that as a FLAT directory of safetensors.
+// One directory cannot be both, and overloading it would either send this suite
+// on a 70 GB re-download or break all four.
 //
 // Run:
-//   TEST_RUNNER_LTX25_MODELS_DIR=/path/to/models \
+//   TEST_RUNNER_LTX25_CACHE_ROOT=/path/to/models \
 //   xcodebuild -scheme ltx-video-swift-mlx-Package -destination 'platform=macOS' \
 //     -derivedDataPath .xcodebuild-tests -skipPackagePluginValidation \
 //     -skipMacroValidation -configuration Debug test \
@@ -28,19 +35,33 @@ import Testing
 @preconcurrency import MLX
 @testable import LTXVideo
 
-@Suite("Duration head on real prompts (gated: LTX25_MODELS_DIR)",
-       .enabled(if: ProcessInfo.processInfo.environment["LTX25_MODELS_DIR"] != nil),
+@Suite("Duration head on real prompts (gated: LTX25_CACHE_ROOT)",
+       .enabled(if: ProcessInfo.processInfo.environment["LTX25_CACHE_ROOT"] != nil),
        .serialized)
-struct DurationPromptE2ETests {
+final class DurationPromptE2ETests {
 
-    static var modelsDir: URL {
-        URL(fileURLWithPath: ProcessInfo.processInfo.environment["LTX25_MODELS_DIR"]!)
+    static var cacheRoot: URL {
+        URL(fileURLWithPath: ProcessInfo.processInfo.environment["LTX25_CACHE_ROOT"]!)
     }
 
-    static func pipeline() -> LTXPipeline {
-        LTXModelRegistry.customModelsDirectory = modelsDir
-        return LTXPipeline(model: .v25Distilled)
+    /// `customModelsDirectory` is process-global and shared with every other
+    /// suite, so it is restored on teardown rather than left pointing here.
+    private let previousModelsDirectory = LTXModelRegistry.customModelsDirectory
+
+    /// One pipeline for the suite: each `predictFrameCount` is a sub-second
+    /// forward behind a multi-minute load, and building three meant three loads.
+    private let shared: LTXPipeline
+
+    init() {
+        LTXModelRegistry.customModelsDirectory = Self.cacheRoot
+        shared = LTXPipeline(model: .v25Distilled)
     }
+
+    deinit {
+        LTXModelRegistry.customModelsDirectory = previousModelsDirectory
+    }
+
+    func pipeline() -> LTXPipeline { shared }
 
     static let scene = "A quiet late-night laundromat with flickering fluorescent lights."
 
@@ -53,7 +74,7 @@ struct DurationPromptE2ETests {
     /// by learned correlation, not by reading them as quantities. If it parsed
     /// the numeral, "3 seconds" would return 3 s.
     @Test func aWrittenDurationIsNotAnInstruction() async throws {
-        let pipeline = Self.pipeline()
+        let pipeline = pipeline()
 
         let bare = try await pipeline.predictFrameCount(for: Self.scene)
         let asksForThree = try await pipeline.predictFrameCount(for: "3 seconds. \(Self.scene)")
@@ -72,7 +93,7 @@ struct DurationPromptE2ETests {
     /// with close-framing language ("phone-camera feel", "delayed autofocus at
     /// close range"), which is what the head actually weighs.
     @Test func aStyleDensePromptPredictsAShortShot() async throws {
-        let pipeline = Self.pipeline()
+        let pipeline = pipeline()
         let prompt = """
             15 seconds, 16:9 landscape. Combine a live-action late-night \
             laundromat with hand-drawn luminous animation. The small \
@@ -98,7 +119,7 @@ struct DurationPromptE2ETests {
     /// The effective ceiling of `--frames auto` is 473, not the 481 the config
     /// allows: 20 s x 24 fps = 480, and 480 floors to 473 on the 8k+1 grid.
     @Test func theCeilingIs473Frames() async throws {
-        let pipeline = Self.pipeline()
+        let pipeline = pipeline()
         let result = try await pipeline.predictFrameCount(for: Self.scene)
         #expect(result.wasClamped)
         #expect(result.frames == 473)

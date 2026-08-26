@@ -98,13 +98,18 @@ final class LTXDurationHead: Module {
         let minFrames = Int((minSeconds * frameRate).rounded())
         let maxFrames = Int((maxSeconds * frameRate).rounded())
 
-        var raw = Int((seconds * frameRate).rounded())
+        // `.toNearestOrEven`, not `.rounded()`: upstream converts with Python's
+        // round(), which is banker's rounding. At 5.6875 s the product is exactly
+        // 136.5 — half-away-from-zero gives 137 frames, banker's gives 129, a
+        // full grid step apart. Pinned by the 5.6875 row of the parity table.
+        var raw = Int(((seconds.isFinite ? seconds : 0) * frameRate).rounded(.toNearestOrEven))
         raw = max(minFrames, min(raw, maxFrames))
 
-        // Snap down to the causal temporal grid, then back up if that undershot
-        // the floor, so the [min, max] contract always holds.
-        let timeScale = 8
-        var frames = ((raw - 1) / timeScale) * timeScale + 1
+        // Rounds **down**, unlike FrameCountSpec's `.nearest`, and deliberately:
+        // this is a prediction to stay within, not a duration someone asked for.
+        // The gap is a documented contract — see GridRounding.
+        let timeScale = FrameGrid.step
+        var frames = FrameGrid.snap(raw, rounding: .down)
         if frames < minFrames {
             let rounded = ((minFrames - 1) + timeScale - 1) / timeScale * timeScale + 1
             // A [min, max] window may contain no 8k+1 point at all; capping the

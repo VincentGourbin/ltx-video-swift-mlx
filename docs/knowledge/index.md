@@ -30,6 +30,7 @@ or re-litigated.
 * [Generated keyframe slots are appended, denoised and marked](decisions/generated-keyframe-slots.md) - DFR's own anchors: denoised with the video, marked, one pixel frame of RoPE span; and why the 2.5 detailing LoRA needed no work
 * [IC-LoRA stage 2 keeps adapter and reference](decisions/iclora-stage2-keeps-adapter-and-reference.md) - measured 7-run matrix: identity survives the inter-stage renoise only with both active; deliberate divergence from ic_lora.py
 * [LipDub segment continuation anchors on the tail latent](decisions/lipdub-continuation-anchor.md) - position 0 + overlap-and-trim; measured seam PSNR 17.4 → 24.6 dB
+* [The LTX-2.5 prompt enhancer is a second Gemma, and the caller may supply it](decisions/prompt-enhancer-source.md) - encode-only bundled encoder forces a separate E2B-it; bf16 default (10.24 GB), 6-bit and a caller-supplied root opt-in
 
 # Pitfalls
 
@@ -58,6 +59,8 @@ or re-litigated.
 * [The wrong vocoder cost the top octave](pitfalls/wrong-vocoder-lost-the-top-octave.md) - LTX-2's vocoder decoded 2.3/2.5 latents plausibly; +18 dB at 12-16 kHz once corrected, nothing below 8 kHz — and how a two-variable A/B first got this badly wrong
 * [Don't validate the LTX Gemma by generating text](pitfalls/ltx-gemma-head-is-vestigial.md) - its tied head is saturated by design; check parameter coverage, scale band and meaning instead
 * [The continuation-tail clip must be re-encoded](pitfalls/continuation-tail-clip-encoding.md) - an input seek leaves frame 0 off t=0 and the zero-tolerance extractor refuses it
+* [URLSession's per-task delegate never reports download progress](pitfalls/urlsession-task-delegate-has-no-download-progress.md) - download(for:delegate:) calls didWriteData zero times; needs a session delegate on an explicit downloadTask, which then puts error pages on disk
+* [The duration head ignores durations written in the prompt](pitfalls/duration-head-does-not-read-written-durations.md) - a "3 seconds." prefix returns byte-identical output to no prefix; it regresses from connector tokens and never sees the text
 
 # Investigations
 

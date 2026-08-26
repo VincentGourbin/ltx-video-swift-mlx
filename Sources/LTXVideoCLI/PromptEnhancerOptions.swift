@@ -58,20 +58,3 @@ struct PromptEnhancerOptions: ParsableArguments {
     }
 }
 
-/// Resolve a `--frames` value that may be a count or a duration (`15s`).
-///
-/// `generate` handles this inline because it also accepts `auto`; the commands
-/// that take a fixed length share this.
-func resolveFrames(_ raw: String) throws -> Int {
-    let parsed: (spec: FrameCountSpec, note: String?)
-    do {
-        parsed = try FrameCountSpec.parse(raw)
-    } catch {
-        throw ValidationError("\(error.localizedDescription)")
-    }
-    guard case .frames(let count) = parsed.spec else {
-        throw ValidationError("'auto' needs the duration head; this command takes a count or a duration like 15s.")
-    }
-    if let note = parsed.note { print("Note: \(note)") }
-    return count
-}

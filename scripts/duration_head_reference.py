@@ -37,6 +37,7 @@ from ltx_core.types import SpatioTemporalScaleFactors
 
 LTX2_ROOT = os.environ.get("LTX2_ROOT", "LTX-2")
 HELPERS = f"{LTX2_ROOT}/packages/ltx-pipelines/src/ltx_pipelines/utils/helpers.py"
+CONSTANTS = f"{LTX2_ROOT}/packages/ltx-pipelines/src/ltx_pipelines/utils/constants.py"
 
 TOKENS, VIDEO_DIM = 8, 4096
 PREFIX = "duration_head."
@@ -45,6 +46,29 @@ FPS = 24.0
 # The same values LTXDurationHead.predictFrameCount defaults to, which are the
 # same values upstream's DurationPredictor.__call__ defaults to.
 MIN_SECONDS, MAX_SECONDS = 1.0, 20.0
+
+# Not in the checkpoint — its metadata carries `"duration_head": {}` — and not
+# derivable from the tensor shapes. Pinned here against LTXDurationHead.swift.
+POOLER_HEADS = 4
+
+
+def read_upstream_scale_factors():
+    """Evaluate upstream's `VIDEO_SCALE_FACTORS` assignment, nothing else.
+
+    Same reason as `load_upstream_grid_functions`: importing the module pulls in
+    the media stack. Executing the one assignment keeps the value upstream's.
+    """
+    if not os.path.exists(CONSTANTS):
+        raise SystemExit(f"Upstream constants.py not found at {CONSTANTS}. Set LTX2_ROOT.")
+    tree = ast.parse(open(CONSTANTS).read(), filename=CONSTANTS)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "VIDEO_SCALE_FACTORS" for t in node.targets
+        ):
+            namespace = {"SpatioTemporalScaleFactors": SpatioTemporalScaleFactors}
+            exec(compile(ast.Module(body=[node], type_ignores=[]), CONSTANTS, "exec"), namespace)
+            return namespace["VIDEO_SCALE_FACTORS"]
+    raise SystemExit("constants.py no longer defines VIDEO_SCALE_FACTORS — upstream moved it.")
 
 
 def load_upstream_grid_functions() -> dict:
@@ -66,7 +90,10 @@ def load_upstream_grid_functions() -> dict:
 
     namespace = {
         "SpatioTemporalScaleFactors": SpatioTemporalScaleFactors,
-        "VIDEO_SCALE_FACTORS": SpatioTemporalScaleFactors.default(),
+        # Read from upstream's constants.py rather than re-created here: a change
+        # to their temporal grid would otherwise pin the port to the wrong one
+        # while this script still claimed to be running upstream's code.
+        "VIDEO_SCALE_FACTORS": read_upstream_scale_factors(),
     }
     exec(compile(ast.Module(body=picked, type_ignores=[]), HELPERS, "exec"), namespace)
     return namespace
@@ -89,7 +116,15 @@ def run(weights_path: str, dtype: torch.dtype) -> dict:
     if not state:
         raise SystemExit(f"No '{PREFIX}*' tensors in {weights_path}")
 
-    head = DurationHead().to(dtype)
+    # Passed explicitly and asserted: the packed in_proj/out_proj shapes are
+    # head-count invariant, so neither the weights nor load_state_dict can catch
+    # a wrong value. Without this the script silently adopts whatever upstream's
+    # constructor default happens to be, and "running upstream settled
+    # num_pooler_heads" would be a claim nothing here backs.
+    head = DurationHead(num_pooler_heads=POOLER_HEADS).to(dtype)
+    actual = head.attention_pooler.cross_attn.num_heads
+    if actual != POOLER_HEADS:
+        raise SystemExit(f"pooler head count is {actual}, expected {POOLER_HEADS}")
     missing, unexpected = head.load_state_dict(state, strict=False)
     if missing or unexpected:
         # Loud rather than silent: a renamed tensor would otherwise leave a
@@ -102,6 +137,7 @@ def run(weights_path: str, dtype: torch.dtype) -> dict:
 
     value = float(seconds.item())
     return {
+        "pooler_heads": actual,
         "seconds": value,
         "log_duration": float(torch.log(seconds).item()),
         "frames": seconds_to_clamped_num_frames(
@@ -121,7 +157,12 @@ def grid_table() -> dict:
     including one that clamps.
     """
     out = {}
-    for seconds in [5.15625, 5.28125, 16.875, 19.5, 23.5, 0.5, 20.0]:
+    # 5.6875 * 24 == 136.5 exactly, a representable tie. Python's round() is
+    # banker's (-> 136), Swift's .rounded() is half-away-from-zero (-> 137) — a
+    # full grid step apart. Every other value here is a non-tie, so without this
+    # row the harness cannot see the one language-semantics difference between
+    # the two implementations it exists to compare.
+    for seconds in [5.15625, 5.28125, 5.6875, 16.875, 19.5, 23.5, 0.5, 20.0]:
         out[f"{seconds}"] = seconds_to_clamped_num_frames(
             seconds,
             frame_rate=FPS,
