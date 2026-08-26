@@ -2,6 +2,19 @@
 
 ## 2026-08-26
 
+* **Creation**: [The duration head ignores durations written in the prompt](/docs/knowledge/pitfalls/duration-head-does-not-read-written-durations.md)
+  — `--frames auto` regresses a length from connector tokens, not from text: a
+  `3 seconds.` prefix returns byte-identical output to no prefix (23.5 s both
+  times). A style-dense prompt asking for 15 s predicted 5.16 s / 121 frames,
+  and the enhancer's rewrite dropped the "15 seconds" outright. Also records
+  that auto-duration's effective ceiling is 473 frames, not 481.
+* **Validation**: `scripts/duration_head_reference.py` replaces the NumPy
+  re-implementation `DurationHeadE2ETests` used to pin against — it runs
+  upstream's `ltx_core.duration_head.DurationHead` on the same weights
+  (float64: 11.402804284 s), and its `seconds_to_clamped_num_frames` table now
+  pins `snapToGrid` with no checkpoint required. Settles `num_pooler_heads = 4`,
+  which the checkpoint metadata does not carry.
+
 * **Creation**: [URLSession's per-task delegate has no download progress](/docs/knowledge/pitfalls/urlsession-task-delegate-has-no-download-progress.md)
   — `download(for:delegate:)` accepts a `URLSessionDownloadDelegate` and calls
   `didWriteData` zero times (measured: 32 MB transfer, `Content-Length`
