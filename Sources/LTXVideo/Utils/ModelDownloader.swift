@@ -59,6 +59,10 @@ public actor ModelDownloader {
     /// URLSession for downloads
     private let session: URLSession
 
+    /// Session delegate carrying byte progress and completion for download
+    /// tasks. Must be the *session* delegate — see `DownloadCoordinator`.
+    private let coordinator: DownloadCoordinator
+
     public init(hfToken: String? = nil, cacheDir: URL? = nil) {
         self.hfToken = hfToken ?? Self.resolveHFToken()
 
@@ -68,7 +72,20 @@ public actor ModelDownloader {
         // Create session with configuration
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForResource = 3600  // 1 hour timeout for large files
-        self.session = URLSession(configuration: config)
+        let coordinator = DownloadCoordinator()
+        self.coordinator = coordinator
+        // Serial delegate queue: the coordinator's own lock then only ever
+        // guards against the caller, not against itself.
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        queue.name = "ltx-video.model-downloader"
+        self.session = URLSession(
+            configuration: config, delegate: coordinator, delegateQueue: queue)
+    }
+
+    /// A session with a delegate is retained until invalidated.
+    deinit {
+        session.finishTasksAndInvalidate()
     }
 
     /// Resolve an HF token from environment / on-disk credentials when one wasn't passed
@@ -103,9 +120,20 @@ public actor ModelDownloader {
 
     // MARK: - HuggingFace API
 
-    /// List files in a HuggingFace repository
-    private func listRepoFiles(repoId: String) async throws -> [String] {
-        let url = URL(string: "https://huggingface.co/api/models/\(repoId)")!
+    /// One file in a HuggingFace repository listing.
+    struct RepoFile {
+        let path: String
+        /// Size in bytes, or 0 when the API did not report one.
+        let sizeBytes: Int64
+    }
+
+    /// List files in a HuggingFace repository, with their sizes.
+    ///
+    /// `?blobs=true` is what carries `size`; without it a multi-shard download
+    /// can only weight its files equally, and bf16 Gemma 4 ships shards of
+    /// 4.53, 5.37 and 0.31 GB.
+    private func listRepoFiles(repoId: String) async throws -> [RepoFile] {
+        let url = URL(string: "https://huggingface.co/api/models/\(repoId)?blobs=true")!
 
         var request = URLRequest(url: url)
         if let token = hfToken {
@@ -125,25 +153,28 @@ public actor ModelDownloader {
             throw LTXError.downloadFailed("Invalid repository response")
         }
 
-        // Extract filenames
-        let files = siblings.compactMap { $0["rfilename"] as? String }
-
         // Filter to relevant files. `.jinja` carries the chat template, which a
         // generative checkpoint needs and which no other extension covers;
         // everything dropped here is repo furniture (README, .gitattributes).
-        return files.filter { file in
-            file.hasSuffix(".safetensors") ||
-            file.hasSuffix(".json") ||
-            file.hasSuffix(".jinja") ||
-            file == "tokenizer.model"
+        return siblings.compactMap { sibling -> RepoFile? in
+            guard let path = sibling["rfilename"] as? String else { return nil }
+            guard path.hasSuffix(".safetensors") || path.hasSuffix(".json")
+                    || path.hasSuffix(".jinja") || path == "tokenizer.model" else { return nil }
+            return RepoFile(path: path, sizeBytes: (sibling["size"] as? NSNumber)?.int64Value ?? 0)
         }
     }
 
-    /// Download a single file from HuggingFace
+    /// Download a single file from HuggingFace.
+    ///
+    /// `onBytes` receives `(bytesWritten, bytesExpected)` as the transfer runs.
+    /// It is invoked on URLSession's delegate queue, not on this actor, so it
+    /// must not touch actor state — callers pass a closure over immutable
+    /// values.
     private func downloadFile(
         repoId: String,
         filename: String,
-        to destination: URL
+        to destination: URL,
+        onBytes: (@Sendable (Int64, Int64) -> Void)? = nil
     ) async throws {
         // Skip if file already exists
         if FileManager.default.fileExists(atPath: destination.path) {
@@ -163,21 +194,92 @@ public actor ModelDownloader {
             request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        let (tempURL, response) = try await session.download(for: request)
+        // An explicit download task driven by the session delegate. The async
+        // `download(for:delegate:)` overload looks like the shorter route but
+        // never delivers `didWriteData` — measured, see `DownloadCoordinator`.
+        let task = session.downloadTask(with: request)
+        let statusCode: Int? = try await withCheckedThrowingContinuation { continuation in
+            coordinator.register(
+                taskIdentifier: task.taskIdentifier,
+                destination: destination,
+                onBytes: onBytes,
+                finish: { continuation.resume(with: $0) })
+            task.resume()
+        }
 
-        guard let httpResponse = response as? HTTPURLResponse else {
+        guard let statusCode else {
             throw LTXError.downloadFailed("Failed to download \(filename)")
         }
-        guard httpResponse.statusCode == 200 else {
+        guard statusCode == 200 else {
+            // The coordinator moved an error page into place; it is not the
+            // file the caller asked for and must not be cached as one.
+            try? FileManager.default.removeItem(at: destination)
             throw Self.downloadError(
-                statusCode: httpResponse.statusCode,
+                statusCode: statusCode,
                 repoId: repoId,
                 filename: filename,
                 hasToken: hfToken != nil)
         }
+    }
 
-        // Move to destination
-        try FileManager.default.moveItem(at: tempURL, to: destination)
+    /// Fetch every file in `plan` from `repoId`, reporting one fraction that
+    /// only climbs.
+    ///
+    /// Each file contributes its declared size's share of the whole, so a
+    /// 26.3 GB encoder occupies 26.3/70 of the bar rather than one slot out of
+    /// four. Within a file the fraction advances by bytes; between files it
+    /// picks up where the previous one left off.
+    /// Internal rather than private so a gated E2E test can drive the real
+    /// byte-progress path against a small public file.
+    internal func runDownloadPlan(
+        _ plan: WeightedDownloadPlan,
+        repoId: String,
+        progress: DownloadProgressCallback?
+    ) async throws {
+        guard !plan.items.isEmpty else { return }
+
+        let totalGB = plan.totalGB
+        let totalBytesEstimate = Int64(totalGB * 1_073_741_824.0)
+        var completedGB = 0.0
+
+        for item in plan.items {
+            let weight = plan.weight(of: item)
+            // Captured by value into the @Sendable closure below: the delegate
+            // queue must not read anything this actor can mutate.
+            let base = completedGB
+            let throttle = ProgressThrottle()
+            let filename = item.label
+            let sizeGB = item.sizeGB
+
+            progress?(DownloadProgress(
+                progress: base / totalGB,
+                currentFile: filename,
+                bytesDownloaded: Int64(base * 1_073_741_824.0),
+                totalBytes: totalBytesEstimate,
+                message: "Downloading \(filename) (~\(String(format: "%.1f", sizeGB)) GB)..."))
+
+            try await downloadFile(
+                repoId: repoId,
+                filename: item.repoPath,
+                to: item.destination,
+                onBytes: { written, expected in
+                    // No Content-Length means no meaningful within-file
+                    // fraction; leave the bar where the previous file left it
+                    // rather than inventing movement.
+                    guard expected > 0 else { return }
+                    let fileFraction = min(Double(written) / Double(expected), 1.0)
+                    let aggregate = (base + fileFraction * weight) / totalGB
+                    guard throttle.shouldEmit(aggregate) else { return }
+                    progress?(DownloadProgress(
+                        progress: min(aggregate, 1.0),
+                        currentFile: filename,
+                        bytesDownloaded: written,
+                        totalBytes: expected,
+                        message: "Downloading \(filename)..."))
+                })
+
+            completedGB += weight
+        }
     }
 
     /// Turn an HTTP failure into an actionable error.
@@ -374,8 +476,15 @@ public actor ModelDownloader {
 
         try FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
 
-        progress?(DownloadProgress(progress: 0.1, currentFile: filename, message: "Downloading \(filename)..."))
-        try await downloadFile(repoId: repoId, filename: filename, to: destination)
+        // One item, so the plan's weighting is a no-op — but it carries the
+        // byte-level reporting, which used to be a bare 0.1 followed by a
+        // multi-minute silence.
+        let transformer = model.componentFiles.first { $0.kind == .transformer }
+            ?? LTXComponentFile(kind: .transformer, path: filename, sizeGB: 1)
+        try await runDownloadPlan(
+            WeightedDownloadPlan(items: [.init(file: transformer, destination: destination)]),
+            repoId: repoId,
+            progress: progress)
         progress?(DownloadProgress(progress: 1.0, message: "\(destination.lastPathComponent) download complete"))
         return destination
     }
@@ -405,13 +514,11 @@ public actor ModelDownloader {
                 "\(model.family.displayName) ships no diffusion video decoder")
         }
         let destination = componentCacheDir(model: model).appendingPathComponent(file.filename)
-        if !FileManager.default.fileExists(atPath: destination.path) {
-            progress?(DownloadProgress(
-                progress: 0.0, currentFile: file.filename,
-                message: "Downloading \(file.filename) (~\(String(format: "%.1f", file.sizeGB)) GB)..."))
-            try await downloadFile(
-                repoId: model.huggingFaceRepo, filename: file.path, to: destination)
-        }
+        try await runDownloadPlan(
+            WeightedDownloadPlan(items: WeightedDownloadPlan.missing(
+                [.init(file: file, destination: destination)])),
+            repoId: model.huggingFaceRepo,
+            progress: progress)
         return destination
     }
 
@@ -419,38 +526,48 @@ public actor ModelDownloader {
         model: LTXModel,
         progress: DownloadProgressCallback? = nil
     ) async throws -> LTXCheckpointPaths {
-        let unified = try await downloadUnifiedWeights(model: model, progress: progress)
-
         switch model.weightsLayout {
         case .unified:
+            let unified = try await downloadUnifiedWeights(model: model, progress: progress)
             return LTXCheckpointPaths(transformer: unified, videoVAE: unified)
 
         case .split:
+            // One plan across the transformer *and* the shared components. Doing
+            // the transformer through downloadUnifiedWeights first, as this used
+            // to, drove the fraction to 1.0 and then restarted it at 0 for the
+            // components — the bar filled, emptied, and filled again.
             let localDir = componentCacheDir(model: model)
-            var resolved: [LTXComponentFile.Kind: URL] = [:]
-            let wanted: [LTXComponentFile.Kind] = [.videoVAE, .textEncoder, .audioVAE]
-            let files = model.family.sharedComponentFiles.filter { wanted.contains($0.kind) }
+            try FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
 
-            for (index, file) in files.enumerated() {
+            let wanted: Set<LTXComponentFile.Kind> = [
+                .transformer, .videoVAE, .textEncoder, .audioVAE,
+            ]
+            let files = model.componentFiles.filter { wanted.contains($0.kind) }
+
+            var resolved: [LTXComponentFile.Kind: URL] = [:]
+            var candidates: [WeightedDownloadPlan.Item] = []
+            for file in files {
+                // Split checkpoints address files by repo-relative path; the
+                // cache stores them flat, matching downloadUnifiedWeights so
+                // both routes agree on where the transformer lives.
                 let destination = localDir.appendingPathComponent(file.filename)
-                if !FileManager.default.fileExists(atPath: destination.path) {
-                    progress?(DownloadProgress(
-                        progress: Double(index) / Double(files.count),
-                        currentFile: file.filename,
-                        message: "Downloading \(file.filename) (~\(String(format: "%.1f", file.sizeGB)) GB)..."))
-                    try await downloadFile(
-                        repoId: model.huggingFaceRepo, filename: file.path, to: destination)
-                }
                 resolved[file.kind] = destination
+                candidates.append(.init(file: file, destination: destination))
             }
 
-            guard let videoVAE = resolved[.videoVAE], let textEncoder = resolved[.textEncoder],
+            try await runDownloadPlan(
+                WeightedDownloadPlan(items: WeightedDownloadPlan.missing(candidates)),
+                repoId: model.huggingFaceRepo,
+                progress: progress)
+
+            guard let transformer = resolved[.transformer],
+                  let videoVAE = resolved[.videoVAE], let textEncoder = resolved[.textEncoder],
                   let audioBundle = resolved[.audioVAE] else {
                 throw LTXError.downloadFailed("Incomplete split checkpoint for \(model.displayName)")
             }
             progress?(DownloadProgress(progress: 1.0, message: "Checkpoint ready"))
             return LTXCheckpointPaths(
-                transformer: unified, videoVAE: videoVAE,
+                transformer: transformer, videoVAE: videoVAE,
                 textEncoder: textEncoder, audioBundle: audioBundle)
         }
     }
@@ -552,19 +669,25 @@ public actor ModelDownloader {
 
         progress?(DownloadProgress(progress: 0.0, message: "Downloading VLM Gemma (4-bit, ~7.5GB)..."))
 
-        let totalFiles = Self.vlmGemmaFiles.count
-        for (i, file) in Self.vlmGemmaFiles.enumerated() {
-            progress?(DownloadProgress(
-                progress: Double(i) / Double(totalFiles),
-                currentFile: file,
-                message: "Downloading vlm-gemma/\(file)..."
-            ))
-            try await downloadFile(
-                repoId: Self.vlmGemmaRepoID,
-                filename: file,
-                to: localDir.appendingPathComponent(file)
-            )
+        // The curated file list stays authoritative — it is what this loader
+        // needs, not whatever the repo happens to hold. The API is consulted
+        // only for sizes, so the two multi-GB shards weight the bar and the
+        // small configs do not. A size the listing omits weighs 0, which is
+        // accurate for a few-kilobyte config.
+        let sizes = Dictionary(
+            uniqueKeysWithValues: (try? await listRepoFiles(repoId: Self.vlmGemmaRepoID))?
+                .map { ($0.path, $0.sizeBytes) } ?? [])
+        let candidates = Self.vlmGemmaFiles.map { file in
+            WeightedDownloadPlan.Item(
+                label: "vlm-gemma/\(file)",
+                repoPath: file,
+                sizeGB: Double(sizes[file] ?? 0) / 1_073_741_824.0,
+                destination: localDir.appendingPathComponent(file))
         }
+        try await runDownloadPlan(
+            WeightedDownloadPlan(items: WeightedDownloadPlan.missing(candidates)),
+            repoId: Self.vlmGemmaRepoID,
+            progress: progress)
 
         progress?(DownloadProgress(progress: 1.0, message: "VLM Gemma download complete"))
         return localDir
@@ -625,24 +748,23 @@ public actor ModelDownloader {
         }
 
         // An interrupted download must heal on rerun rather than early-return
-        // into a permanently poisoned cache — downloadFile skips files already
-        // present, so re-walking the full list is cheap and self-repairing.
-        for (i, file) in files.enumerated() {
-            progress?(DownloadProgress(
-                progress: Double(i) / Double(files.count),
-                currentFile: file,
-                message: "Downloading enhancer-gemma4-e2b-\(precision.rawValue)/\(file)..."
-            ))
-            try await downloadFile(
-                repoId: precision.repoID,
-                filename: file,
-                to: localDir.appendingPathComponent(file)
-            )
+        // into a permanently poisoned cache — the plan re-walks whatever is
+        // still missing, so a resumed pull is self-repairing.
+        let candidates = files.map { file in
+            WeightedDownloadPlan.Item(
+                label: "enhancer-gemma4-e2b-\(precision.rawValue)/\(file.path)",
+                repoPath: file.path,
+                sizeGB: Double(file.sizeBytes) / 1_073_741_824.0,
+                destination: localDir.appendingPathComponent(file.path))
         }
+        try await runDownloadPlan(
+            WeightedDownloadPlan(items: WeightedDownloadPlan.missing(candidates)),
+            repoId: precision.repoID,
+            progress: progress)
 
         // Written last: a manifest present alongside a partial download would
         // make the fast path above certify a broken cache.
-        try? JSONEncoder().encode(files).write(to: manifestURL)
+        try? JSONEncoder().encode(files.map(\.path)).write(to: manifestURL)
         progress?(DownloadProgress(progress: 1.0, message: "Gemma 4 enhancer download complete"))
         return localDir
     }
@@ -789,11 +911,14 @@ public actor ModelDownloader {
             .appendingPathComponent(aux.cacheDirectoryName)
             .appendingPathComponent(aux.filename)
 
-        progress?(DownloadProgress(
-            progress: 0.1,
-            currentFile: aux.filename,
-            message: "Downloading \(aux.displayName)..."))
-        try await downloadFile(repoId: aux.huggingFaceRepo, filename: aux.filePath, to: destination)
+        // Wrapped in a plan purely for the byte reporting: the 2.5 latent
+        // upscaler is ~1 GB, long enough for a static 0.1 to read as a stall.
+        try await runDownloadPlan(
+            WeightedDownloadPlan(items: [.init(
+                label: aux.displayName, repoPath: aux.filePath,
+                sizeGB: Double(aux.approximateSizeGB), destination: destination)]),
+            repoId: aux.huggingFaceRepo,
+            progress: progress)
         progress?(DownloadProgress(progress: 1.0, message: "\(aux.displayName) download complete"))
         return destination
     }

@@ -110,7 +110,7 @@ struct Interpolate: AsyncParsableCommand {
 
         print("Loading models (this may take a while)...")
         try await pipeline.loadModels { progress in
-            print("  \(progress.message) (\(Int(progress.progress * 100))%)")
+            downloadPrinter.report(progress)
             fflush(stdout)
         }
 

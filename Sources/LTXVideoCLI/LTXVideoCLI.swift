@@ -290,7 +290,7 @@ struct Generate: AsyncParsableCommand {
         let startLoad = Date()
         try await pipeline.loadModels(
             progressCallback: { progress in
-                print("  \(progress.message) (\(Int(progress.progress * 100))%)")
+                downloadPrinter.report(progress)
             },
             gemmaModelPath: gemmaPath,
             ltxWeightsPath: ltxWeights
@@ -303,7 +303,7 @@ struct Generate: AsyncParsableCommand {
             print("Loading audio models...")
             fflush(stdout)
             try await pipeline.loadAudioModels { progress in
-                print("  \(progress.message) (\(Int(progress.progress * 100))%)")
+                downloadPrinter.report(progress)
             }
             print("Audio models loaded")
         }
@@ -673,7 +673,7 @@ struct Retake: AsyncParsableCommand {
         let startLoad = Date()
         try await pipeline.loadModels(
             progressCallback: { progress in
-                print("  \(progress.message) (\(Int(progress.progress * 100))%)")
+                downloadPrinter.report(progress)
             },
             gemmaModelPath: gemmaPath,
             ltxWeightsPath: ltxWeights
@@ -686,7 +686,7 @@ struct Retake: AsyncParsableCommand {
             print("Loading audio models (with encoder)...")
             fflush(stdout)
             try await pipeline.loadAudioModels(includeEncoder: true) { progress in
-                print("  \(progress.message) (\(Int(progress.progress * 100))%)")
+                downloadPrinter.report(progress)
             }
             print("Audio models loaded")
         }
@@ -973,7 +973,7 @@ struct LipDub: AsyncParsableCommand {
         let startLoad = Date()
         try await pipeline.loadModels(
             progressCallback: { progress in
-                print("  \(progress.message) (\(Int(progress.progress * 100))%)")
+                downloadPrinter.report(progress)
             },
             gemmaModelPath: gemmaPath,
             ltxWeightsPath: ltxWeights
@@ -983,7 +983,7 @@ struct LipDub: AsyncParsableCommand {
         print("Loading audio models (with encoder)...")
         fflush(stdout)
         try await pipeline.loadAudioModels(includeEncoder: true) { progress in
-            print("  \(progress.message) (\(Int(progress.progress * 100))%)")
+            downloadPrinter.report(progress)
         }
         let loadTime = Date().timeIntervalSince(startLoad)
         print("Models loaded in \(String(format: "%.1f", loadTime))s")
@@ -1000,7 +1000,7 @@ struct LipDub: AsyncParsableCommand {
             print("Downloading LipDub IC-LoRA (gated, requires HF token)...")
             let downloader = ModelDownloader(hfToken: hfToken)
             let url = try await downloader.downloadLipDubLoRA { progress in
-                print("  \(progress.message) (\(Int(progress.progress * 100))%)")
+                downloadPrinter.report(progress)
             }
             loraPath = url.path
         }
@@ -1123,7 +1123,7 @@ struct ExportQuantized: AsyncParsableCommand {
         let startLoad = Date()
         try await pipeline.loadModels(
             progressCallback: { progress in
-                print("  \(progress.message) (\(Int(progress.progress * 100))%)")
+                downloadPrinter.report(progress)
             },
             ltxWeightsPath: input
         )

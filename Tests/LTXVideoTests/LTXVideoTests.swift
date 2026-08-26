@@ -11,7 +11,17 @@ import Testing
 @Suite("LTXVideo Module")
 struct LTXVideoModuleTests {
     @Test func testVersion() {
-        #expect(LTXVideo.version == "0.1.0")
+        // Deliberately not pinned to a literal. This test asserted "0.1.0"
+        // through both the 0.2.0 and 0.3.0 bumps, so it never verified the
+        // version — it only broke when someone finally changed it.
+        //
+        // What actually matters, that the shipped binary's version matches the
+        // release tag, cannot be checked from here: it is enforced by
+        // scripts/package-release.sh, which refuses to package on a mismatch.
+        // All this can usefully hold is the shape.
+        let components = LTXVideo.version.split(separator: ".")
+        #expect(components.count == 3, "not semver: \(LTXVideo.version)")
+        #expect(components.allSatisfy { Int($0) != nil }, "non-numeric: \(LTXVideo.version)")
     }
 
     @Test func testName() {

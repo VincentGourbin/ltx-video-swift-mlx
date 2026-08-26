@@ -2,6 +2,15 @@
 
 ## 2026-08-26
 
+* **Creation**: [URLSession's per-task delegate has no download progress](/docs/knowledge/pitfalls/urlsession-task-delegate-has-no-download-progress.md)
+  — `download(for:delegate:)` accepts a `URLSessionDownloadDelegate` and calls
+  `didWriteData` zero times (measured: 32 MB transfer, `Content-Length`
+  present, 0 delegate calls). Byte progress needs a session-level delegate on
+  an explicit `downloadTask`, which then puts the response body on disk before
+  the status is checked — so a 404 page can be cached as a checkpoint unless
+  the destination is deleted on non-200. Answers ask 1 of the Fluxforge
+  LTX-2.5 asks, along with the non-monotonic aggregate in `downloadCheckpoint`.
+
 * **Creation**: [Prompt enhancer source](/docs/knowledge/decisions/prompt-enhancer-source.md)
   — LTX-2.5 enhancement needs a generative E2B-it separate from the encode-only
   bundled encoder, so `--enhance-prompt` puts a second Gemma on disk. bf16
