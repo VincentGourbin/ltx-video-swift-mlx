@@ -98,7 +98,12 @@ final class LTXDurationHead: Module {
         let minFrames = Int((minSeconds * frameRate).rounded())
         let maxFrames = Int((maxSeconds * frameRate).rounded())
 
-        var raw = Int((seconds * frameRate).rounded())
+        // `.toNearestOrEven`, not `.rounded()`: upstream converts with Python's
+        // round(), which is banker's rounding. At 5.6875 s the product is exactly
+        // 136.5 — half-away-from-zero gives 137 frames, banker's gives 129, a
+        // full grid step apart. Pinned by the 5.6875 row of the parity table in
+        // DurationGridSnapTests.
+        var raw = Int((seconds * frameRate).rounded(.toNearestOrEven))
         raw = max(minFrames, min(raw, maxFrames))
 
         // Snap down to the causal temporal grid, then back up if that undershot

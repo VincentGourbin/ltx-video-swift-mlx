@@ -3,14 +3,22 @@
 //
 // The head is a regression model: its output is a number nobody can eyeball. A
 // mis-ported attention pooler still returns a plausible-looking duration, so the
-// port is pinned against an independent NumPy implementation of the same
-// forward, reading the same weights, on a deterministic synthetic input.
+// port is pinned against upstream's own module on a deterministic synthetic
+// input: `scripts/duration_head_reference.py` runs
+// `ltx_core.duration_head.DurationHead` over the same weights.
 //
-// Reference computed with (float64, weights read straight from the safetensors):
-//     x    = vid @ video_input_proj.W.T + b + video_modality_emb
-//     q/k/v from the packed in_proj, 4 heads of 64, softmax(qk/sqrt(64)) @ v
-//     pooled -> out_proj -> mlp_hidden -> gelu(tanh) -> mlp_out -> exp
-//   => log_duration = 2.433859, seconds = 11.402804
+//   torch float64 => log_duration = 2.4338593, seconds = 11.402804284
+//   torch float32 => log_duration = 2.4338598, seconds = 11.402810097
+//
+// This previously pinned against a NumPy re-implementation written during the
+// same porting effort, which could only catch a transcription slip — not a
+// shared misreading.
+//
+// `num_pooler_heads = 4` is not in the checkpoint (its metadata carries
+// `"duration_head": {}`) and is not derivable from the tensor shapes, which are
+// head-count invariant. The script therefore passes it explicitly and asserts
+// what it got, and emits `pooler_heads` in its JSON — otherwise "running
+// upstream settled the head count" would be a claim nothing backs.
 //
 // Gated behind LTX25_MODELS_DIR.
 //
@@ -43,7 +51,7 @@ struct DurationHeadE2ETests {
         return MLX.sin(rows + cols).expandedDimensions(axis: 0)
     }
 
-    @Test func matchesTheNumPyReference() throws {
+    @Test func matchesTheUpstreamReference() throws {
         let head = try LTXDurationHead.load(from: Self.headURL)
         let seconds = try head.predictSeconds(
             videoTokens: Self.syntheticTokens(), audioTokens: nil)
@@ -52,7 +60,7 @@ struct DurationHeadE2ETests {
         // and far tighter than any plausible mis-port (a transposed packed
         // projection or a wrong head split moves this by tens of percent).
         #expect(abs(seconds - 11.402804) / 11.402804 < 0.01,
-                "predicted \(seconds)s against the NumPy reference 11.402804s")
+                "predicted \(seconds)s against upstream's 11.402804s")
     }
 
     @Test func snapsFramesToTheGridAndReportsClamping() throws {
@@ -77,6 +85,35 @@ struct DurationHeadE2ETests {
 
 @Suite("Duration grid snapping (pure)")
 struct DurationGridSnapTests {
+
+    /// Every value here came out of `scripts/duration_head_reference.py`, which
+    /// runs upstream's own `seconds_to_clamped_num_frames` with the defaults
+    /// `DurationPredictor.__call__` uses (1 s / 20 s @ 24 fps).
+    ///
+    /// Pure arithmetic, so unlike the rest of this file it needs no checkpoint.
+    /// The four middle rows are durations the head actually produced on real
+    /// prompts, including one that clamps.
+    @Test(arguments: [
+        (Float(5.15625), 121),   // measured, a phone-camera style prompt
+        (Float(5.28125), 121),   // same prompt after enhancement
+        // 5.6875 x 24 == 136.5 exactly. The ONLY row here that is a tie, and so
+        // the only one that can tell banker's rounding from half-away-from-zero:
+        // Python's round() gives 136 -> 129 frames, Swift's .rounded() gives
+        // 137 -> 137. Without it, reverting `.toNearestOrEven` leaves every
+        // other row green.
+        (Float(5.6875), 129),
+        (Float(16.875), 401),
+        (Float(19.5), 465),
+        (Float(23.5), 473),      // above the 20 s ceiling -> clamped
+        (Float(0.5), 25),        // below the 1 s floor -> snapped up off the floor
+        (Float(20.0), 473),      // the ceiling itself is 473, not 481
+    ])
+    func matchesUpstreamSecondsToFrames(seconds: Float, expected: Int) {
+        let frames = LTXDurationHead.snapToGrid(
+            seconds: seconds, frameRate: 24, minSeconds: 1.0, maxSeconds: 20.0)
+        #expect(frames == expected, "\(seconds)s -> \(frames), upstream says \(expected)")
+        #expect((frames - 1) % 8 == 0)
+    }
 
     @Test func gridlessWindowStaysOnGrid() {
         // min = max = 5 s @ 24 fps → [120, 120] contains no 8k+1 point.

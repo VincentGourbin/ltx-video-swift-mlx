@@ -2,6 +2,23 @@
 
 ## 2026-08-26
 
+* **Creation**: [The duration head ignores durations written in the prompt](/docs/knowledge/pitfalls/duration-head-does-not-read-written-durations.md)
+  — `--frames auto` regresses a length from connector tokens, not from text: a
+  `3 seconds.` prefix returns byte-identical output to no prefix (23.5 s both
+  times). A style-dense prompt asking for 15 s predicted 5.16 s / 121 frames,
+  and the enhancer's rewrite dropped the "15 seconds" outright. Also records
+  that auto-duration's ceiling is 473 frames while an explicit `--frames`
+  reaches 481 — the head rounds a *prediction* down.
+
+* **Validation**: `scripts/duration_head_reference.py` replaces the NumPy
+  re-implementation `DurationHeadE2ETests` used to pin against — it runs
+  upstream's `ltx_core.duration_head.DurationHead`, built through upstream's own
+  `DurationHeadConfigurator.from_metadata` so the head count comes from the
+  checkpoint rather than a literal (float64: 11.402804284 s). A 5.6875 s row
+  exposes the one language-semantics gap: Python's `round()` is banker's,
+  Swift's `.rounded()` is half-away-from-zero — 129 frames against 137. The port
+  now matches.
+
 * **Creation**: [URLSession's per-task delegate has no download progress](/docs/knowledge/pitfalls/urlsession-task-delegate-has-no-download-progress.md)
   — `download(for:delegate:)` accepts a `URLSessionDownloadDelegate` and calls
   `didWriteData` zero times (measured: 32 MB transfer, `Content-Length`

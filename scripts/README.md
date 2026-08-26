@@ -100,3 +100,43 @@ Publish with:
 ```bash
 gh release create v0.3.0 dist/ltx-video-macos-arm64.zip --title '...' --notes-file NOTES.md
 ```
+
+## Reference parity scripts
+
+`*_reference.py` run Lightricks' own modules and dump the numbers the Swift port
+must reproduce. They exist because these components are numerical: a mis-ported
+attention pooler or an off-by-one grid still returns a plausible-looking value,
+so eyeballing proves nothing.
+
+| Script | Pins |
+| --- | --- |
+| `transformer_reference.py` | DiT block forward |
+| `diffvae_reference.py` | diffusion decoder |
+| `temporal_upscaler_reference.py` | latent temporal upsampler |
+| `keyframe_slot_reference.py` | generated keyframe RoPE positions |
+| `duration_head_reference.py` | duration head forward + seconds→frames |
+
+All need upstream checked out:
+
+```bash
+git clone https://github.com/Lightricks/LTX-2
+```
+
+`duration_head_reference.py` needs only `torch` and `safetensors`:
+
+```bash
+LTX2_ROOT=$PWD/LTX-2 PYTHONPATH=$LTX2_ROOT/packages/ltx-core/src \
+  python3 scripts/duration_head_reference.py \
+    ~/models/ltx-2.5-duration-head/ltx-2.5-duration-head-bf16.safetensors
+```
+
+It builds the head through upstream's own `DurationHeadConfigurator.from_metadata`,
+so every hyperparameter — `num_pooler_heads` included — comes from the checkpoint
+rather than from a literal this repo chose, and the script fails loudly if what
+upstream resolves disagrees with `LTXDurationHead.swift`. The two grid functions
+are read out of `helpers.py` with `ast` rather than imported, because
+`ltx_pipelines.utils` drags in `av` and `OpenImageIO` for what is integer
+arithmetic; the code executed is upstream's, byte for byte.
+
+Its output is pinned by `DurationHeadE2ETests` (forward) and
+`DurationGridSnapTests` (seconds→frames, no checkpoint needed).
