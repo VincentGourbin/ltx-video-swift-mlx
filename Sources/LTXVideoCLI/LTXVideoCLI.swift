@@ -10,7 +10,7 @@ struct LTXVideoCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ltx-video",
         abstract: "LTX-2 video generation on Mac with MLX (LTX-2.3 and LTX-2.5)",
-        version: "0.3.2",
+        version: "0.3.3",
         subcommands: [Generate.self, Retake.self, LipDub.self, Upscale.self, Interpolate.self, Profile.self, ExportQuantized.self, Download.self, Train.self, TrainingControl.self, Models.self, Info.self],
         defaultSubcommand: Info.self
     )
