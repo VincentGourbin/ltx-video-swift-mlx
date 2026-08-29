@@ -2796,8 +2796,24 @@ public actor LTXPipeline {
         return (trimmed + joiner + signature, signature)
     }
 
-    /// Whether `text` contains any common English speaking-verb wrapper —
-    /// `(speaking|speaks|saying|says)` followed by `in` as a WHOLE WORD.
+    /// Whether `text` contains a speaking-verb wrapper that still names a
+    /// LANGUAGE — `(speaking|speaks|saying|says)`, whole-word `in`, then a
+    /// capitalized word.
+    ///
+    /// The capital matters. "Verb + in + anything" is what this used to accept,
+    /// and Gemma 4's rewrites satisfy it without naming any language: measured
+    /// on a real run, `speaking in French saying:` came back as
+    /// `speaks in a clear, slightly resonant voice` — the wrapper survived the
+    /// old check while the language, the part the LoRA was trained on, was
+    /// gone. Languages in English prose are capitalized (and the original
+    /// wrapper is built from `DubLanguage.englishName`, which always is), so
+    /// requiring the capital separates `in French` from `in a clear voice`.
+    ///
+    /// A capitalized non-language ("speaking in Paris") still passes — rare in
+    /// an enhanced prompt, and no worse than the old behaviour. The failure
+    /// mode of a false NEGATIVE is the safe one: the fallback re-appends the
+    /// original signature.
+    ///
     /// `"speaking individually"` / `"says intermittently"` do NOT match.
     private static func containsSpeakingVerbWrapper(_ text: String) -> Bool {
         let verbs = ["speaking", "speaks", "saying", "says"]
@@ -2807,7 +2823,7 @@ public actor LTXPipeline {
                 of: verb, options: .caseInsensitive, range: searchStart..<text.endIndex
             ) {
                 // After the verb we want: 1+ whitespace, then literal "in",
-                // then a word-boundary char (whitespace, punctuation, EOS).
+                // then a word boundary, then a capitalized word.
                 var i = r.upperBound
                 // Skip whitespace.
                 while i < text.endIndex, text[i].isWhitespace { i = text.index(after: i) }
@@ -2815,11 +2831,17 @@ public actor LTXPipeline {
                 let inEnd = text.index(afterWs, offsetBy: 2, limitedBy: text.endIndex)
                 if let inEnd = inEnd, afterWs < text.endIndex {
                     let twoChars = text[afterWs..<inEnd]
-                    if twoChars.lowercased() == "in" {
-                        // Boundary: end-of-string OR next char is non-letter.
-                        if inEnd == text.endIndex || !text[inEnd].isLetter {
+                    if twoChars.lowercased() == "in",
+                       inEnd == text.endIndex || !text[inEnd].isLetter {
+                        // Word after `in`: skip whitespace, require a capital.
+                        var j = inEnd
+                        while j < text.endIndex, text[j].isWhitespace { j = text.index(after: j) }
+                        if j < text.endIndex, text[j].isUppercase {
                             return true
                         }
+                        // `in` followed by a lowercase word (or nothing) is not
+                        // a language wrapper — keep scanning: a later
+                        // occurrence may still qualify.
                     }
                 }
                 searchStart = r.upperBound

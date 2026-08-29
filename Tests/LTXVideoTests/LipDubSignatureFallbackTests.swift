@@ -51,6 +51,55 @@ struct LipDubSignatureFallbackTests {
 
     // MARK: - Word-boundary check (regression: `speaking individually` must NOT match)
 
+    // MARK: - Language requirement (regression: Gemma 4's "speaks in a clear,
+    // slightly resonant voice" passed the old check while dropping the language)
+
+    @Test func speaksInAClearVoiceDoesNotCountAsALanguageWrapper() {
+        // The exact rewrite measured on a real LTX-2.5 run (28/08/2026): the
+        // verb+in shape survives, the language does not. The old detector
+        // accepted it and the trained `speaking in <LANGUAGE>` format was lost
+        // silently.
+        let enhanced = """
+            The figure slowly turns its head toward the camera, and its mouth \
+            moves as it speaks in a clear, slightly resonant voice, \
+            "Du nouveau dans Fluxforge Studio."
+            """
+        let original = #"A person speaking on camera, speaking in French saying: "Du nouveau dans Fluxforge Studio.""#
+        let (final, reappended) = LTXPipeline.applyLipDubSignatureFallback(
+            enhanced: enhanced, original: original)
+        #expect(reappended == #"speaking in French saying: "Du nouveau dans Fluxforge Studio.""#)
+        #expect(final.contains("speaking in French saying:"))
+    }
+
+    @Test func capitalizedLanguagesStillPass() {
+        for lang in ["French", "Spanish", "Mandarin Chinese", "Portuguese"] {
+            let enhanced = "A man at a desk, speaking in \(lang), \"Bonjour.\""
+            let (_, reappended) = LTXPipeline.applyLipDubSignatureFallback(
+                enhanced: enhanced,
+                original: #"A man, speaking in French saying: "Bonjour.""#)
+            #expect(reappended == nil, "\(lang) should satisfy the wrapper")
+        }
+    }
+
+    @Test func trailingInAtEndOfStringIsNotAWrapper() {
+        // "…speaking in" with nothing after it used to pass the boundary check.
+        let enhanced = "A man gestures at the screen he is speaking in"
+        let (_, reappended) = LTXPipeline.applyLipDubSignatureFallback(
+            enhanced: enhanced,
+            original: #"A man, speaking in French saying: "Bonjour.""#)
+        #expect(reappended != nil, "no language after 'in' must trigger the fallback")
+    }
+
+    @Test func aLaterQualifyingWrapperStillCounts() {
+        // First occurrence fails the language test, a later one passes — the
+        // scan must not stop at the first verb.
+        let enhanced = #"He speaks in a low murmur at first, then speaking in French, "Bonjour.""#
+        let (_, reappended) = LTXPipeline.applyLipDubSignatureFallback(
+            enhanced: enhanced,
+            original: #"A man, speaking in French saying: "Bonjour.""#)
+        #expect(reappended == nil)
+    }
+
     @Test func speakingIndividuallyDoesNotMatchSpeakingIn() {
         // "speaking individually" / "speaks intermittently" used to register as
         // a positive substring hit and silently suppress the fallback.

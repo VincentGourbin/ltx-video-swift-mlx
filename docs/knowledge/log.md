@@ -1,5 +1,19 @@
 # Directory Update Log
 
+## 2026-08-29
+
+* **Creation**: [LipDub on LTX-2.5 — attribution campaign](/docs/knowledge/investigations/lipdub-25-quality-attribution-2026-08.md)
+  — a reported 2.3→2.5 lip-tracking drop, reproduced from the app's own
+  SwiftData store and attributed by matrix runs. Seed variance dominated (the
+  app's rendered seed was a bad draw; another seed beat the 2.3 reference);
+  the one systematic defect is the Gemma 4 enhancer dropping the language from
+  the trained wrapper and appending background music. Cleared: LoRA coverage
+  (1344/1344 both), the audio→video pathway (gate 1.46× STRONGER in 2.5),
+  quantization (qint8 ≈ bf16). Retracted: a single-seed `--lora-scale 1.3`
+  recommendation — variance alone covered the gap. The signature fallback now
+  requires a capitalized language after `speaking in`; "speaks in a clear
+  voice" no longer satisfies it.
+
 ## 2026-08-26
 
 * **Creation**: [The duration head ignores durations written in the prompt](/docs/knowledge/pitfalls/duration-head-does-not-read-written-durations.md)

@@ -69,6 +69,7 @@ or re-litigated.
 * [Cross-modal AdaLN sigma swap (May 2026)](investigations/crossmodal-adaln-sigma-swap-2026-05.md) - the LipDub mouth-modulation root cause, two expensively-refuted hypotheses, and the audio-anchored vs pose-anchored trade-off
 * [LipDub segmentation campaign (July 2026)](investigations/lipdub-segmentation-asks-2026-07.md) - what unit tests, the in-process E2E, the code review and real reruns each caught that the others missed
 * [Custom-voice timbre chain (July 2026)](investigations/custom-voice-timbre-chain-2026-07.md) - attributing a bad custom-voice LipDub across Voxtral enrollment and LTX; the decoder was innocent
+* [LipDub on LTX-2.5 — attributing "worse lip tracking"](investigations/lipdub-25-quality-attribution-2026-08.md) - seed variance dominated; the Gemma 4 enhancer drops the language and adds a soundtrack; quantization and LoRA coverage cleared; a single-seed scale recommendation retracted
 
 # Playbooks
 
