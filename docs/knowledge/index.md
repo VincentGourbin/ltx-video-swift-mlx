@@ -25,12 +25,13 @@ or re-litigated.
 * [Frame cap = 481, derived from the RoPE range](decisions/frame-cap-481-rope-range.md) - temporal RoPE coordinates are seconds normalized by maxPos[0] = 20 s; 481 frames = 20 s at 24 fps
 * [Speech-window thresholds](decisions/speech-window-noise-floor.md) - absolute floor + credible noise-floor offset; peak-relative was tried and rejected
 * [LipDub fusion reuse policy](decisions/lipdub-fusion-reuse-policy.md) - identity by canonical path + mtime, guards instead of unfuse
-* [unloadAfterUse gates all mid-run unloads](decisions/unload-gating-semantics.md) - .disabled means keep everything; the trade-offs that buys
+* [Mid-run unloads are gated per component](decisions/unload-gating-semantics.md) - unloadAfterUse is the default, not the whole story: LTX-2.5's 26 GB encoder made one flag for encoder and transformer unaffordable
 * [QLoRA is the training default on ≤96 GB](decisions/qlora-training-default.md) - qint8 halves peak memory with near-exact loss parity; bf16 swaps
 * [Generated keyframe slots are appended, denoised and marked](decisions/generated-keyframe-slots.md) - DFR's own anchors: denoised with the video, marked, one pixel frame of RoPE span; and why the 2.5 detailing LoRA needed no work
 * [IC-LoRA stage 2 keeps adapter and reference](decisions/iclora-stage2-keeps-adapter-and-reference.md) - measured 7-run matrix: identity survives the inter-stage renoise only with both active; deliberate divergence from ic_lora.py
 * [LipDub segment continuation anchors on the tail latent](decisions/lipdub-continuation-anchor.md) - position 0 + overlap-and-trim; measured seam PSNR 17.4 → 24.6 dB
 * [The LTX-2.5 prompt enhancer is a second Gemma, and the caller may supply it](decisions/prompt-enhancer-source.md) - encode-only bundled encoder forces a separate E2B-it; bf16 default (10.24 GB), 6-bit and a caller-supplied root opt-in
+* [A retake picks its stream with a modality](decisions/retake-modality-frozen-stream.md) - freezing is a σ = 0 timestep, not a strength of zero; .audioOnly re-muxes the source picture instead of decoding it
 
 # Pitfalls
 
@@ -57,6 +58,7 @@ or re-litigated.
 * [Tiled-attention mask caches need the whole window pattern](pitfalls/na-tile-mask-cache-key.md) - border and interior tiles collide on a summary key; 8% error in one stage, invisible without a reference
 * [Dotted parameter names never load](pitfalls/dotted-parameter-names-never-load.md) - unflattened() reads "." as a module boundary; the update lands nowhere and strict key checks miss it
 * [The wrong vocoder cost the top octave](pitfalls/wrong-vocoder-lost-the-top-octave.md) - LTX-2's vocoder decoded 2.3/2.5 latents plausibly; +18 dB at 12-16 kHz once corrected, nothing below 8 kHz — and how a two-variable A/B first got this badly wrong
+* [loadModels() rebuilds everything](pitfalls/loadmodels-is-all-or-nothing.md) - recovering one unloaded component that way rebuilds the 22B mid-run and silently drops any fused LoRA
 * [Don't validate the LTX Gemma by generating text](pitfalls/ltx-gemma-head-is-vestigial.md) - its tied head is saturated by design; check parameter coverage, scale band and meaning instead
 * [The continuation-tail clip must be re-encoded](pitfalls/continuation-tail-clip-encoding.md) - an input seek leaves frame 0 off t=0 and the zero-tolerance extractor refuses it
 * [URLSession's per-task delegate never reports download progress](pitfalls/urlsession-task-delegate-has-no-download-progress.md) - download(for:delegate:) calls didWriteData zero times; needs a session delegate on an explicit downloadTask, which then puts error pages on disk

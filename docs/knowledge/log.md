@@ -1,5 +1,24 @@
 # Directory Update Log
 
+## 2026-08-30
+
+* **Update**: Split the mid-run unload gating per component in
+  [the unload-gating decision](/docs/knowledge/decisions/unload-gating-semantics.md).
+  One flag for the prompt encoder and the transformer made LipDub fusion reuse
+  reachable only at `.disabled` — and `.disabled` holds LTX-2.5's 26 GB encoder
+  resident, against the 7.5 GB the original trade-off was costed on. Reported by
+  Fluxforge (§7) as a missing `Memory.clearCache()`, which was already there.
+
+* **Creation**: [loadModels() rebuilds everything](/docs/knowledge/pitfalls/loadmodels-is-all-or-nothing.md)
+  — the trap that made the split worth doing: recovering one component through
+  `loadModels()` rebuilds the 22B mid-run and drops any fused LoRA with it. The
+  dev retake path did exactly that for its negative prompt.
+
+* **Creation**: [A retake picks its stream with a modality](/docs/knowledge/decisions/retake-modality-frozen-stream.md)
+  — `.videoOnly` / `.both` / `.audioOnly`, why the proposed "strength of zero"
+  shape could not work, and the CFG-multiplied audio Euler step found while
+  implementing it.
+
 ## 2026-08-29
 
 * **Creation**: [LipDub on LTX-2.5 — attribution campaign](/docs/knowledge/investigations/lipdub-25-quality-attribution-2026-08.md)

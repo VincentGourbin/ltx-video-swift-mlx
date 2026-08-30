@@ -73,6 +73,61 @@ struct MemoryOptimizationConfigTests {
         #expect(r128.evalFrequency == 8) // disabled (96+)
     }
 
+    // MARK: - Per-component unload gating
+
+    @Test func testPerComponentFlagsFollowUnloadAfterUseByDefault() {
+        for preset in [MemoryOptimizationConfig.disabled, .light, .moderate, .aggressive] {
+            #expect(preset.unloadTextEncoderAfterUse == nil)
+            #expect(preset.unloadTransformerAfterUse == nil)
+            #expect(preset.unloadsTextEncoder == preset.unloadAfterUse)
+            #expect(preset.unloadsTransformer == preset.unloadAfterUse)
+        }
+    }
+
+    @Test func testPerComponentFlagsOverrideUnloadAfterUse() {
+        var config = MemoryOptimizationConfig.light
+        #expect(config.unloadAfterUse)
+
+        config.unloadTransformerAfterUse = false
+        #expect(!config.unloadsTransformer)
+        #expect(config.unloadsTextEncoder, "the encoder still follows the coarse flag")
+
+        config.unloadTextEncoderAfterUse = true
+        config.unloadAfterUse = false
+        #expect(config.unloadsTextEncoder, "an explicit true survives unloadAfterUse = false")
+        #expect(!config.unloadsTransformer)
+    }
+
+    @Test func testKeepingTransformerKeepsEverythingElseUnloading() {
+        // The setting for chained segments sharing a fused LoRA: the transformer
+        // (and its fusion) survives, the 26 GB LTX-2.5 encoder does not.
+        let config = MemoryOptimizationConfig.light.keepingTransformer()
+        #expect(!config.unloadsTransformer)
+        #expect(config.unloadsTextEncoder)
+        #expect(config.evalFrequency == MemoryOptimizationConfig.light.evalFrequency)
+        #expect(config.vaeTemporalTileSize == MemoryOptimizationConfig.light.vaeTemporalTileSize)
+    }
+
+    @Test func testKeepingTextEncoder() {
+        let config = MemoryOptimizationConfig.light.keepingTextEncoder()
+        #expect(!config.unloadsTextEncoder)
+        #expect(config.unloadsTransformer)
+    }
+
+    @Test func testDerivedPresetsDoNotMutateTheOriginal() {
+        let base = MemoryOptimizationConfig.moderate
+        _ = base.keepingTransformer().keepingTextEncoder()
+        #expect(base.unloadTransformerAfterUse == nil)
+        #expect(base.unloadTextEncoderAfterUse == nil)
+        #expect(base.unloadsTransformer)
+    }
+
+    @Test func testDisabledStillKeepsEverything() {
+        let config = MemoryOptimizationConfig.disabled
+        #expect(!config.unloadsTextEncoder)
+        #expect(!config.unloadsTransformer)
+    }
+
     @Test func testCustomInit() {
         let config = MemoryOptimizationConfig(
             evalFrequency: 3,
@@ -80,8 +135,12 @@ struct MemoryOptimizationConfigTests {
             unloadAfterUse: false,
             unloadSleepSeconds: 2.0,
             vaeTemporalTileSize: 10,
-            vaeTemporalTileOverlap: 2
+            vaeTemporalTileOverlap: 2,
+            unloadTextEncoderAfterUse: true,
+            unloadTransformerAfterUse: false
         )
+        #expect(config.unloadsTextEncoder)
+        #expect(!config.unloadsTransformer)
         #expect(config.evalFrequency == 3)
         #expect(config.clearCacheOnEval)
         #expect(!config.unloadAfterUse)

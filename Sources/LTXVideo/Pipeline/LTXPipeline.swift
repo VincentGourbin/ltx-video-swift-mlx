@@ -156,6 +156,13 @@ public actor LTXPipeline {
     /// instead of falling back to the downloader.
     private var unifiedWeightsPathCache = UnifiedWeightsPathCache()
 
+    /// Where ``loadModels(progressCallback:gemmaModelPath:tokenizerPath:ltxWeightsPath:)``
+    /// was pointed, kept so the prompt encoder can be rebuilt on its own from the
+    /// same source. See ``ensureTextEncoderLoaded(progressCallback:)``.
+    private var lastGemmaModelPath: String?
+    private var lastTokenizerPath: String?
+    private var lastLTXWeightsPath: String?
+
     /// Flow-matching scheduler
     private let scheduler: LTXScheduler
 
@@ -285,13 +292,52 @@ public actor LTXPipeline {
         }
     }
 
-    /// Unload Gemma + tokenizer (~7.5 GB) when the memory config asks for it.
-    /// Kept resident with `unloadAfterUse == false` so consecutive runs can
-    /// re-encode text without reloading models.
+    /// Unload the prompt encoder (7.5 GB for LTX-2.3's Gemma 3, 26 GB for
+    /// LTX-2.5's Gemma 4) when the memory config asks for it.
+    ///
+    /// Gated on ``MemoryOptimizationConfig/unloadsTextEncoder``, which follows
+    /// `unloadAfterUse` unless the caller set the per-component flag. Dropping it
+    /// is cheap to undo: ``ensureTextEncoderLoaded(progressCallback:)`` rebuilds
+    /// the encoder alone at the next text encode, leaving the transformer — and
+    /// anything fused into it — untouched.
     internal func unloadGemmaIfConfigured() {
-        guard memoryOptimization.unloadAfterUse else { return }
+        guard memoryOptimization.unloadsTextEncoder else { return }
         gemmaEncoder = nil
         Memory.clearCache()
+    }
+
+    /// Rebuild the prompt encoder alone when it was unloaded, from the source
+    /// `loadModels()` used.
+    ///
+    /// `loadModels()` is all-or-nothing: it rebuilds the encoder, the 22B
+    /// transformer and the VAEs unconditionally. Calling it just to get the
+    /// encoder back therefore costs a full stack rebuild — and, when a LoRA is
+    /// fused, throws the fusion away with the transformer that carried it. Every
+    /// text-encoding entry point calls this instead.
+    ///
+    /// No-op when the encoder is resident, and — deliberately — when nothing was
+    /// ever loaded: the text-side connector survives every mid-run unload, so its
+    /// presence is what distinguishes "the encoder was dropped" from "`loadModels()`
+    /// was never called", where the right answer is still the "not loaded" error
+    /// the caller expects rather than a surprise 42 GB download.
+    internal func ensureTextEncoderLoaded(
+        progressCallback: DownloadProgressCallback? = nil
+    ) async throws {
+        guard gemmaEncoder == nil, textEncoder != nil else { return }
+        let checkpoint = try await resolveCheckpoint(
+            overrideTransformerPath: lastLTXWeightsPath, progressCallback: progressCallback)
+        let source = LTXCheckpointSource(model: model, paths: checkpoint)
+        let assets = try checkpoint.textEncoder.map { try LTX25TextEncoderAssets(fileURL: $0) }
+        LTXDebug.log("Reloading the prompt encoder only (transformer kept)...")
+        let start = Date()
+        gemmaEncoder = try await loadGemmaEncoder(
+            checkpoint: checkpoint,
+            source: source,
+            textEncoderAssets: assets,
+            gemmaModelPath: lastGemmaModelPath,
+            tokenizerPath: lastTokenizerPath,
+            progressCallback: progressCallback)
+        LTXDebug.log("[TIME] Prompt encoder reload: \(String(format: "%.1f", Date().timeIntervalSince(start)))s")
     }
 
     /// Whether models are loaded (Gemma may be nil after unloading post-encoding)
@@ -546,6 +592,10 @@ public actor LTXPipeline {
         ltxWeightsPath: String? = nil
     ) async throws {
         LTXDebug.log("Loading models for \(model.displayName)...")
+        // Remembered so a later encoder-only reload reads the same weights.
+        lastGemmaModelPath = gemmaModelPath
+        lastTokenizerPath = tokenizerPath
+        lastLTXWeightsPath = ltxWeightsPath
         let beacon = RuntimeBeacon.begin(task: "load-models", model: model.rawValue)
         defer { beacon?.end() }
         var stepStart = Date()
@@ -1131,6 +1181,7 @@ public actor LTXPipeline {
         profiler.start("Text Encoding")
 
         profiler.start("Gemma Forward")
+        try await ensureTextEncoderLoaded()
         let (states, attentionMask) = try encodeHiddenStates(effectivePrompt)
         MLX.eval(states[states.count - 1])
         profiler.end("Gemma Forward")
@@ -1498,7 +1549,7 @@ public actor LTXPipeline {
         }
 
         // Unload transformer
-        if memoryOptimization.unloadAfterUse {
+        if memoryOptimization.unloadsTransformer {
             self.ltx2Transformer = nil
             self.transformer = nil
             self.lipdubFusion = nil
@@ -1585,6 +1636,19 @@ public actor LTXPipeline {
     /// region to regenerate, then denoises with a new prompt using the full sigma schedule.
     /// Frames outside the retake window are preserved via `post_process_latent` at each step.
     ///
+    /// ## Which stream is regenerated
+    ///
+    /// ``LTXVideoGenerationConfig/retakeModality`` picks the stream; the other one
+    /// is frozen at σ = 0 and stays in the forward pass as cross-modal context.
+    ///
+    /// | Modality | Picture | Sound |
+    /// | --- | --- | --- |
+    /// | `.videoOnly` (default) | denoised | source, passed through |
+    /// | `.both` | denoised | denoised from noise |
+    /// | `.audioOnly` | source, re-muxed untouched | denoised from noise |
+    ///
+    /// `.both` and `.audioOnly` need `loadAudioModels(includeEncoder: true)`.
+    ///
     /// - Parameters:
     ///   - prompt: New text description for the retaken video
     ///   - config: Generation config with `videoPath` set. `retakeStrength` is unused
@@ -1662,7 +1726,20 @@ public actor LTXPipeline {
         }
 
         // Encode audio latents for cross-modal attention if LTX2Transformer + AudioVAE encoder are loaded
-        let regenerateAudio = config.regenerateAudio
+        let modality = config.retakeModality
+        let regenerateAudio = modality.regeneratesAudio
+        if modality == .audioOnly {
+            guard ltx2Transformer != nil, audioVAE?.encoder != nil, vocoder != nil else {
+                throw LTXError.modelNotLoaded(
+                    "An audio-only retake denoises the audio stream: call "
+                    + "loadAudioModels(includeEncoder: true) first.")
+            }
+            guard sourceAudioWaveform != nil else {
+                throw LTXError.invalidConfiguration(
+                    "An audio-only retake re-times the source audio, and \(videoPath) carries "
+                    + "no audio track. Use .both to generate sound from scratch.")
+            }
+        }
         if ltx2Transformer != nil, let audioVAE = audioVAE, audioVAE.encoder != nil, let waveform = sourceAudioWaveform {
             LTXDebug.log("Encoding source audio for \(regenerateAudio ? "regeneration" : "cross-modal attention")...")
             let melSpec = try audioProcessor.melSpectrogram(waveform)
@@ -1689,6 +1766,7 @@ public actor LTXPipeline {
         // Phase 1: Text encoding
         let profiler = LTXVideoProfiler.shared
         profiler.start("Text Encoding")
+        try await ensureTextEncoderLoaded()
         let (states, attentionMask) = try encodeHiddenStates(effectivePrompt)
 
         let encoderOutput = try textEncoder.encodeFromHiddenStates(
@@ -1801,13 +1879,11 @@ public actor LTXPipeline {
         var negVideoTextEmbeddings: MLXArray? = nil
         var negAudioTextEmbeddings: MLXArray? = nil
         if useDevModel {
-            // Re-load Gemma for negative prompt encoding — only when it was
-            // actually unloaded above (with unloadAfterUse == false it is still
-            // resident, and an unconditional loadModels() would rebuild the full
-            // Gemma + transformer + VAE stack mid-run on top of the live one).
-            if gemmaEncoder == nil {
-                try await loadModels(progressCallback: nil)
-            }
+            // Re-load the prompt encoder for the negative prompt. This used to
+            // call loadModels(), which rebuilds the 22B transformer and both VAEs
+            // mid-run to recover a text encoder — minutes of work, and a doubled
+            // peak while ARC releases the old transformer.
+            try await ensureTextEncoderLoaded()
             // The official DEFAULT_NEGATIVE_PROMPT — the CFG direction is part of
             // the trained contract (docs/knowledge: empty-cfg-negative pitfall).
             let (negStates, negAttentionMask) = try encodeHiddenStates(Self.defaultNegativePrompt)
@@ -1834,7 +1910,12 @@ public actor LTXPipeline {
         let noise = generateNoise(shape: latentShape, seed: config.seed)
 
         var videoLatent: MLXArray
-        if let mask = denoiseMask5d {
+        if modality == .audioOnly {
+            // Frozen picture: the clean latent, held at σ = 0 for the whole
+            // schedule. It stays in the forward pass as cross-modal context —
+            // dropping it is what makes generated audio drift off the picture.
+            videoLatent = cleanLatent
+        } else if let mask = denoiseMask5d {
             // Partial: pure noise on regen frames, clean on kept frames
             videoLatent = mask * noise + (1 - mask) * cleanLatent
         } else {
@@ -1871,7 +1952,9 @@ public actor LTXPipeline {
 
             // Per-token timestep: kept frames get σ=0, regen frames get σ
             let videoTimestep: MLXArray
-            if let cm = condMask {
+            if modality == .audioOnly {
+                videoTimestep = MLXArray([Float(0)])
+            } else if let cm = condMask {
                 videoTimestep = MLXArray(sigma) * (1 - cm)
             } else {
                 videoTimestep = MLXArray([sigma])
@@ -1887,8 +1970,16 @@ public actor LTXPipeline {
                 sigma5d = MLXArray(sigma)
             }
 
+            // Audio velocity from the *conditioned* pass. The audio Euler step
+            // used to live inside the helper below, which the dev path calls two
+            // or three times per step (CFG, STG) — the audio latent was stepped
+            // once per pass, each time from the already-stepped value.
+            var condAudioVelocity: MLXArray? = nil
+
             // Helper: run transformer and compute denoised x0
-            func runTransformer(context: MLXArray, audioContext: MLXArray) throws -> MLXArray {
+            func runTransformer(
+                context: MLXArray, audioContext: MLXArray, conditioned: Bool = false
+            ) throws -> MLXArray {
                 if let ltx2 = ltx2Transformer {
                     let audioInput = (audioLatentPacked ?? frozenAudioLatentPacked ?? MLXArray.zeros([videoPatchified.dim(0), 1, 128])).asType(DType.bfloat16)
                     let audioFrames = (audioLatentPacked != nil || frozenAudioLatentPacked != nil) ? retakeAudioNumFrames : 1
@@ -1905,11 +1996,11 @@ public actor LTXPipeline {
                         videoLatentShape: (frames: latentShape.frames, height: latentShape.height, width: latentShape.width),
                         audioNumFrames: audioFrames
                     )
-                    // Audio Euler step (when regenerating)
-                    // Keep audio latents in float32 between steps (cast to bf16 only for transformer input)
-                    if regenerateAudio, let ap = audioLatentPacked {
-                        let audioVel = audioVelPred.asType(.float32)
-                        audioLatentPacked = ap.asType(.float32) + MLXArray(sigmaNext - sigma) * audioVel
+                    // Audio velocity is not CFG-guided: only the conditioned
+                    // pass feeds the Euler step, applied once after the loop's
+                    // guidance combination.
+                    if regenerateAudio && conditioned {
+                        condAudioVelocity = audioVelPred.asType(.float32)
                     }
                     let vel = unpatchify(velPred, shape: latentShape).asType(.float32)
                     return videoLatent - sigma5d * vel
@@ -1930,7 +2021,8 @@ public actor LTXPipeline {
 
             // Positive pass (conditioned)
             let audioCtx = (audioTextEmbeddings ?? MLXArray.zeros([videoPatchified.dim(0), 1, ltx2Transformer?.config.audioInnerDim ?? 2048])).asType(.bfloat16)
-            let condDenoised = try runTransformer(context: videoTextEmbeddings, audioContext: audioCtx)
+            let condDenoised = try runTransformer(
+                context: videoTextEmbeddings, audioContext: audioCtx, conditioned: true)
 
             // CFG negative pass (dev model only)
             var negDenoised: MLXArray? = nil
@@ -1959,12 +2051,22 @@ public actor LTXPipeline {
                 denoisedVideo = mask * denoisedVideo + (1 - mask) * cleanLatent
             }
 
+            let dt = sigmaNext - sigma
+
+            // Audio Euler step. Latents stay float32 between steps (cast to
+            // bf16 only for transformer input).
+            if regenerateAudio, let ap = audioLatentPacked, let audioVel = condAudioVelocity {
+                audioLatentPacked = ap.asType(.float32) + MLXArray(dt) * audioVel
+                MLX.eval(audioLatentPacked!)
+            }
+
             // Euler step: sample + velocity * dt
             // velocity = (sample - denoised) / sigma
-            let velocity = (videoLatent - denoisedVideo) / MLXArray(sigma)
-            let dt = sigmaNext - sigma
-            videoLatent = (videoLatent.asType(.float32) + velocity.asType(.float32) * MLXArray(dt)).asType(videoLatent.dtype)
-            MLX.eval(videoLatent)
+            if modality.regeneratesVideo {
+                let velocity = (videoLatent - denoisedVideo) / MLXArray(sigma)
+                videoLatent = (videoLatent.asType(.float32) + velocity.asType(.float32) * MLXArray(dt)).asType(videoLatent.dtype)
+                MLX.eval(videoLatent)
+            }
 
             if (step + 1) % 5 == 0 { Memory.clearCache() }
             let stepDurR = Date().timeIntervalSince(stepStart)
@@ -1976,7 +2078,7 @@ public actor LTXPipeline {
         profiler.end("Denoising")
 
         // Unload transformer
-        if memoryOptimization.unloadAfterUse {
+        if memoryOptimization.unloadsTransformer {
             self.ltx2Transformer = nil
             self.transformer = nil
             self.lipdubFusion = nil
@@ -1990,7 +2092,21 @@ public actor LTXPipeline {
         ))
         LTXMemoryManager.setPhase(.vaeDecode)
         profiler.start("VAE Decode")
-        let videoTensor = decodeFrames(latent: videoLatent)
+        let videoTensor: MLXArray
+        if modality == .audioOnly {
+            // The picture was never denoised, so decoding its latent would only
+            // add a VAE round-trip's losses to frames we already have. Read them
+            // back from the source instead: bit-identical, and no decode paid.
+            let source = try await loadVideo(
+                from: videoPath, width: config.width, height: config.height,
+                numFrames: config.numFrames)
+            // (1, 3, F, H, W) in [-1, 1] → (F, H, W, 3) in [0, 1], the layout
+            // every decode path returns.
+            let fhwc = source.squeezed(axis: 0).transposed(1, 2, 3, 0)
+            videoTensor = MLX.clip((fhwc + 1.0) / 2.0, min: 0, max: 1)
+        } else {
+            videoTensor = decodeFrames(latent: videoLatent)
+        }
         MLX.eval(videoTensor)
         profiler.end("VAE Decode")
 
@@ -2361,7 +2477,10 @@ public actor LTXPipeline {
         let audioNumFrames = computeAudioLatentFrames(videoFrames: numFrames)
         LTXDebug.log("[lipdub] target frames=\(numFrames), Stage1 latent=\(stage1Shape.frames)x\(stage1Shape.height)x\(stage1Shape.width), audio frames=\(audioNumFrames)")
 
-        // 3. Text encode the prompt.
+        // 3. Text encode the prompt. The encoder may have been unloaded by the
+        // previous segment; it comes back on its own, without touching the fused
+        // transformer this run is about to reuse.
+        try await ensureTextEncoderLoaded()
         let (states, attentionMask) = try encodeHiddenStates(effectivePrompt)
         let encoderOutput = try textEncoder.encodeFromHiddenStates(
             hiddenStates: states,
@@ -2693,10 +2812,11 @@ public actor LTXPipeline {
         }
 
         // 14. Unload transformer before VAE decode if memory pressure is a concern.
-        // (With unloadAfterUse the fused transformer is gone — the next LipDub run
-        // must reload models. Use MemoryOptimizationConfig.disabled to keep the
-        // fused transformer across consecutive same-LoRA segments.)
-        if memoryOptimization.unloadAfterUse {
+        // (The unload also drops the fusion record, so the next LipDub segment
+        // reloads *and* re-fuses the 22B. To chain segments, keep the transformer:
+        // `.recommended(forRAMGB:).keepingTransformer()` — the prompt encoder still
+        // unloads after each encode and comes back encoder-only.)
+        if memoryOptimization.unloadsTransformer {
             self.ltx2Transformer = nil
             self.lipdubFusion = nil
             Memory.clearCache()
@@ -3596,6 +3716,7 @@ AESTHETIC QUALITY (in addition to the above, without breaking the objective capt
         guard let textEncoder = textEncoder else {
             throw LTXError.modelNotLoaded("Text encoder not loaded. Call loadModels() first.")
         }
+        try await ensureTextEncoderLoaded()
         guard isGemmaLoaded else {
             throw LTXError.modelNotLoaded("Gemma model not loaded. Call loadModels() first.")
         }
@@ -3702,8 +3823,10 @@ AESTHETIC QUALITY (in addition to the above, without breaking the objective capt
                 "Auto duration needs a duration head, which ships from LTX-2.5 onward — "
                 + "\(model.displayName) has none. Pass an explicit frame count.")
         }
-        if !isGemmaLoaded || textEncoder == nil {
+        if textEncoder == nil {
             try await loadModels(progressCallback: nil)
+        } else {
+            try await ensureTextEncoderLoaded()
         }
         guard let textEncoder else {
             throw LTXError.modelNotLoaded("Text encoder not loaded")
@@ -3919,6 +4042,7 @@ AESTHETIC QUALITY (in addition to the above, without breaking the objective capt
         guard let textEncoder = textEncoder else {
             throw LTXError.modelNotLoaded("Text encoder not loaded")
         }
+        try await ensureTextEncoderLoaded()
         guard isGemmaLoaded else {
             throw LTXError.modelNotLoaded("Gemma model not loaded")
         }

@@ -395,12 +395,12 @@ struct LTXVideoGenerationConfigTests {
         #expect(config.retakeStrength == 0.7)
         #expect(config.retakeStartTime == 2.0)
         #expect(config.retakeEndTime == 5.0)
-        #expect(config.regenerateAudio == false)
+        #expect(config.retakeModality == .videoOnly)
     }
 
     @Test func testRegenerateAudioDefault() {
         let config = LTXVideoGenerationConfig()
-        #expect(config.regenerateAudio == false)
+        #expect(!config.retakeModality.regeneratesAudio)
     }
 
     @Test func testRegenerateAudioEnabled() {
@@ -408,7 +408,8 @@ struct LTXVideoGenerationConfigTests {
             videoPath: "/tmp/vid.mp4",
             regenerateAudio: true
         )
-        #expect(config.regenerateAudio == true)
+        #expect(config.retakeModality == .both)
+        #expect(config.retakeModality.regeneratesAudio)
         #expect(config.videoPath == "/tmp/vid.mp4")
     }
 

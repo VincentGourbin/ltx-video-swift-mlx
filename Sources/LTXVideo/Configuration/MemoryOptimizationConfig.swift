@@ -34,7 +34,33 @@ public struct MemoryOptimizationConfig: Sendable {
 
     /// Whether to unload each component after use in the pipeline
     /// (e.g., unload text encoder before loading transformer)
+    ///
+    /// This is the coarse switch. ``unloadTextEncoderAfterUse`` and
+    /// ``unloadTransformerAfterUse`` override it per component when set.
     public var unloadAfterUse: Bool
+
+    /// Whether to drop the prompt encoder once the text is encoded.
+    /// `nil` (default) follows ``unloadAfterUse``.
+    ///
+    /// Worth setting independently on LTX-2.5: its Gemma 4 encoder is 26 GB,
+    /// against 7.5 GB for the Gemma 3 of LTX-2.3, so keeping it resident to make
+    /// consecutive runs cheap is a very different bargain than it used to be.
+    /// See ``keepingTransformer()``.
+    public var unloadTextEncoderAfterUse: Bool?
+
+    /// Whether to drop the transformer before the VAE decode.
+    /// `nil` (default) follows ``unloadAfterUse``.
+    ///
+    /// Setting this to `false` is what makes LipDub fusion reuse reachable: the
+    /// unload also clears the fusion record, so the next segment has to reload
+    /// **and** re-fuse the 22B.
+    public var unloadTransformerAfterUse: Bool?
+
+    /// Whether the prompt encoder is dropped after text encoding.
+    public var unloadsTextEncoder: Bool { unloadTextEncoderAfterUse ?? unloadAfterUse }
+
+    /// Whether the transformer is dropped before the VAE decode.
+    public var unloadsTransformer: Bool { unloadTransformerAfterUse ?? unloadAfterUse }
 
     /// Sleep duration (seconds) after unloading a component, to allow GPU memory reclaim
     public var unloadSleepSeconds: Double
@@ -53,7 +79,9 @@ public struct MemoryOptimizationConfig: Sendable {
         unloadAfterUse: Bool = true,
         unloadSleepSeconds: Double = 0.5,
         vaeTemporalTileSize: Int = 0,
-        vaeTemporalTileOverlap: Int = 1
+        vaeTemporalTileOverlap: Int = 1,
+        unloadTextEncoderAfterUse: Bool? = nil,
+        unloadTransformerAfterUse: Bool? = nil
     ) {
         self.evalFrequency = evalFrequency
         self.clearCacheOnEval = clearCacheOnEval
@@ -61,6 +89,39 @@ public struct MemoryOptimizationConfig: Sendable {
         self.unloadSleepSeconds = unloadSleepSeconds
         self.vaeTemporalTileSize = vaeTemporalTileSize
         self.vaeTemporalTileOverlap = vaeTemporalTileOverlap
+        self.unloadTextEncoderAfterUse = unloadTextEncoderAfterUse
+        self.unloadTransformerAfterUse = unloadTransformerAfterUse
+    }
+
+    // MARK: - Derived presets
+
+    /// The same preset, but keeping the transformer (and any LoRA fused into it)
+    /// resident across runs.
+    ///
+    /// This is the setting for consecutive segments sharing one adapter — LipDub
+    /// storyboards, chained dialogue. Everything else keeps unloading, so the
+    /// 26 GB LTX-2.5 prompt encoder is still freed after each text encode; the
+    /// pipeline reloads it on its own, encoder-only, at the next segment.
+    ///
+    /// ```swift
+    /// let pipeline = LTXPipeline(
+    ///     model: .v25Distilled,
+    ///     memoryOptimization: .recommended(forRAMGB: ram).keepingTransformer())
+    /// ```
+    public func keepingTransformer() -> MemoryOptimizationConfig {
+        var copy = self
+        copy.unloadTransformerAfterUse = false
+        return copy
+    }
+
+    /// The same preset, but keeping the prompt encoder resident after encoding.
+    ///
+    /// Saves a reload per run at the cost of 26 GB resident on LTX-2.5 — only
+    /// worth it on a machine with headroom to spare.
+    public func keepingTextEncoder() -> MemoryOptimizationConfig {
+        var copy = self
+        copy.unloadTextEncoderAfterUse = false
+        return copy
     }
 
     // MARK: - Presets

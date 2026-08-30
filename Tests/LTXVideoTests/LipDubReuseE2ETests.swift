@@ -141,4 +141,61 @@ struct LipDubReuseE2ETests {
             )
         }
     }
+
+    /// Reuse without keeping the prompt encoder resident.
+    ///
+    /// `.disabled` (above) is the only preset that used to reach the reuse path,
+    /// and it holds the encoder through the whole run — 7.5 GB on LTX-2.3, 26 GB
+    /// on LTX-2.5. `.keepingTransformer()` splits the two: the encoder is freed
+    /// after each text encode and rebuilt on its own at the next segment, while
+    /// the fused transformer survives. Before the split gating, segment 2 failed
+    /// on "Gemma model not loaded" (the unconditional-unload regression this
+    /// suite caught once already).
+    @Test func encoderReloadsAloneWhileTheFusionSurvives() async throws {
+        let refVideo = Self.referenceVideoPath
+        try #require(FileManager.default.fileExists(atPath: refVideo),
+                     "Reference video missing: \(refVideo)")
+        let loraPath = try await Self.resolveLoRAPath()
+
+        let pipeline = LTXPipeline(
+            model: .distilled, memoryOptimization: .light.keepingTransformer())
+        try await pipeline.loadModels()
+        try await pipeline.loadAudioModels(includeEncoder: true)
+        let upscalerPath = try await pipeline.downloadUpscalerWeights()
+        #expect(await pipeline.isGemmaLoaded, "encoder resident after load")
+
+        let config = LTXVideoGenerationConfig(width: 384, height: 256, numFrames: 33)
+        let prompt = "A person speaking in French saying: \"Bonjour à tous, ceci est un test.\""
+
+        let t0 = Date()
+        let result1 = try await pipeline.generateLipDub(
+            prompt: prompt,
+            referenceVideoPath: refVideo,
+            lipdubLoraPath: loraPath,
+            config: config,
+            upscalerWeightsPath: upscalerPath
+        )
+        let run1s = Date().timeIntervalSince(t0)
+        #expect(result1.frames.dim(0) == 33)
+        #expect(await !pipeline.isGemmaLoaded, "encoder freed after the text encode")
+        #expect(await pipeline.fusedLipDubLoRAPath == loraPath,
+                "the fusion survived the encoder unload")
+        #expect(await pipeline.isAudioLoaded, "transformer kept by keepingTransformer()")
+
+        // Segment 2: reloads the encoder alone, reuses the fused transformer.
+        let t1 = Date()
+        let result2 = try await pipeline.generateLipDub(
+            prompt: prompt,
+            referenceVideoPath: refVideo,
+            lipdubLoraPath: loraPath,
+            config: config,
+            upscalerWeightsPath: upscalerPath
+        )
+        let run2s = Date().timeIntervalSince(t1)
+        #expect(result2.frames.dim(0) == 33)
+        #expect(await pipeline.fusedLipDubLoRAPath == loraPath, "still fused, still the same file")
+        #expect(await !pipeline.isGemmaLoaded, "encoder freed again")
+        print("[E2E] keepingTransformer: run1=\(String(format: "%.1f", run1s))s "
+              + "run2=\(String(format: "%.1f", run2s))s (run2 reloads the encoder only)")
+    }
 }
