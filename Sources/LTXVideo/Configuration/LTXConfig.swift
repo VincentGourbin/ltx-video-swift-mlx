@@ -503,6 +503,25 @@ public struct LTXVideoGenerationConfig: Sendable {
     /// `.both` and `.audioOnly` need the audio models loaded with their encoder.
     public var retakeModality: RetakeModality
 
+    /// How far to renoise the source audio in an audio-only retake.
+    ///
+    /// `1.0` (default) starts from pure noise: a new soundtrack, unrelated to
+    /// the source track. Lower values keep a parenté with it — the schedule
+    /// starts at the highest trained sigma `<= this value`, and the audio latent
+    /// enters it as `σ·noise + (1 − σ)·source`, so rhythm and ambience survive
+    /// in proportion. Fewer steps run, so it is also faster.
+    ///
+    /// Only meaningful for ``RetakeModality/audioOnly``: the two streams share
+    /// one sigma schedule, so truncating it for `.both` would truncate the
+    /// picture's schedule too. Setting it below `1.0` in any other modality is a
+    /// configuration error rather than a silent no-op.
+    ///
+    /// The distilled schedule is 9 trained values (`1.0 … 0.421875, 0`), so on
+    /// the distilled model this snaps: `0.9` starts at `0.909375` — the same
+    /// level stage 2 renoises to — `0.8` at `0.725`, `0.5` at `0.421875`, and
+    /// anything below `0.421875` leaves no step to run and throws.
+    public var audioRetakeStrength: Float
+
     /// Whether to regenerate audio during retake.
     ///
     /// Kept as a two-value view of ``retakeModality``: reading it is
@@ -537,7 +556,8 @@ public struct LTXVideoGenerationConfig: Sendable {
         retakeEndTime: Float? = nil,
         regenerateAudio: Bool = false,
         keyframes: [KeyframeInput] = [],
-        retakeModality: RetakeModality? = nil
+        retakeModality: RetakeModality? = nil,
+        audioRetakeStrength: Float = 1.0
     ) {
         self.width = width
         self.height = height
@@ -554,6 +574,7 @@ public struct LTXVideoGenerationConfig: Sendable {
         // `regenerateAudio` is the legacy two-value spelling; an explicit
         // modality wins over it.
         self.retakeModality = retakeModality ?? (regenerateAudio ? .both : .videoOnly)
+        self.audioRetakeStrength = audioRetakeStrength
         self.keyframes = keyframes
     }
 
@@ -574,7 +595,8 @@ public struct LTXVideoGenerationConfig: Sendable {
         retakeEndTime: Float? = nil,
         regenerateAudio: Bool = false,
         keyframes: [KeyframeInput] = [],
-        retakeModality: RetakeModality? = nil
+        retakeModality: RetakeModality? = nil,
+        audioRetakeStrength: Float = 1.0
     ) {
         self.width = width
         self.height = height
@@ -591,6 +613,7 @@ public struct LTXVideoGenerationConfig: Sendable {
         // `regenerateAudio` is the legacy two-value spelling; an explicit
         // modality wins over it.
         self.retakeModality = retakeModality ?? (regenerateAudio ? .both : .videoOnly)
+        self.audioRetakeStrength = audioRetakeStrength
         self.keyframes = keyframes
     }
 
@@ -651,6 +674,19 @@ public struct LTXVideoGenerationConfig: Sendable {
             }
             guard retakeStrength > 0.0 && retakeStrength <= 1.0 else {
                 throw LTXError.invalidConfiguration("Retake strength must be in (0.0, 1.0], got \(retakeStrength)")
+            }
+            guard audioRetakeStrength > 0.0 && audioRetakeStrength <= 1.0 else {
+                throw LTXError.invalidConfiguration(
+                    "Audio retake strength must be in (0.0, 1.0], got \(audioRetakeStrength)")
+            }
+            // Truncating the schedule truncates it for both streams, so a
+            // partial audio renoise only means something when the picture is
+            // frozen. Silently ignoring it would look like it worked.
+            if audioRetakeStrength < 1.0 && retakeModality != .audioOnly {
+                throw LTXError.invalidConfiguration(
+                    "audioRetakeStrength < 1 renoises the source audio partially, which needs "
+                    + "retakeModality == .audioOnly (video and audio share one sigma schedule). "
+                    + "Got \(retakeModality).")
             }
             // A partial window masks *video* latent frames. With the picture
             // frozen there is nothing for it to select, and silently ignoring it

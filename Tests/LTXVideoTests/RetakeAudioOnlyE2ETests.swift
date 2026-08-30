@@ -121,6 +121,49 @@ struct RetakeAudioOnlyE2ETests {
         #expect(maxDiff > 0.0, "video-only retake returned the source frames unchanged")
     }
 
+    /// A partial renoise enters the schedule below pure noise: fewer steps run,
+    /// and the picture is still untouched.
+    @Test func partialAudioStrengthShortensTheScheduleAndKeepsThePicture() async throws {
+        let source = Self.sourceVideoPath
+        try #require(FileManager.default.fileExists(atPath: source),
+                     "Source video missing: \(source)")
+
+        let pipeline = LTXPipeline(model: .distilled)
+        try await pipeline.loadModels()
+        try await pipeline.loadAudioModels(includeEncoder: true)
+
+        // 0.8 snaps to the trained 0.725: [0.725, 0.421875, 0] — 2 steps of the 8.
+        let config = LTXVideoGenerationConfig(
+            width: Self.width, height: Self.height, numFrames: Self.frames,
+            videoPath: source,
+            retakeModality: .audioOnly,
+            audioRetakeStrength: 0.8)
+        try config.validate()
+
+        let collector = StepCollector()
+        let result = try await pipeline.generateRetake(
+            prompt: "The same voice, in a larger room with a long reverb tail.",
+            config: config,
+            upscalerWeightsPath: "",
+            onProgress: { progress in
+                if progress.phase == .denoising { collector.record(progress.totalSteps) }
+            })
+
+        let totals = collector.totals
+        #expect(totals == [2],
+                "expected the truncated 2-step schedule, saw \(totals.sorted())")
+        #expect(result.audioWaveform != nil)
+
+        let sourceTensor = try await loadVideo(
+            from: source, width: Self.width, height: Self.height, numFrames: Self.frames)
+        let expected = MLX.clip(
+            (sourceTensor.squeezed(axis: 0).transposed(1, 2, 3, 0) + 1.0) / 2.0, min: 0, max: 1)
+        MLX.eval(expected)
+        let maxDiff = MLX.abs(result.frames.asType(.float32) - expected.asType(.float32))
+            .max().item(Float.self)
+        #expect(maxDiff == 0.0, "picture drifted from the source (maxdiff=\(maxDiff))")
+    }
+
     /// `.audioOnly` without the audio models is a configuration error, not a
     /// silent fallback to a plain video retake.
     @Test func audioOnlyWithoutAudioModelsThrows() async throws {
@@ -139,6 +182,22 @@ struct RetakeAudioOnlyE2ETests {
         await #expect(throws: LTXError.self) {
             _ = try await pipeline.generateRetake(
                 prompt: "Rain on a roof.", config: config, upscalerWeightsPath: "")
+        }
+    }
+
+    /// Lock-guarded sink for progress callbacks arriving off the test's thread.
+    final class StepCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: Set<Int> = []
+
+        func record(_ totalSteps: Int) {
+            lock.lock(); defer { lock.unlock() }
+            storage.insert(totalSteps)
+        }
+
+        var totals: Set<Int> {
+            lock.lock(); defer { lock.unlock() }
+            return storage
         }
     }
 }

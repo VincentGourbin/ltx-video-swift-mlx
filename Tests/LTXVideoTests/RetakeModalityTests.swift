@@ -116,6 +116,83 @@ struct RetakeModalityTests {
         try config.validate()
     }
 
+    // MARK: - Partial audio renoise
+
+    @Test func testAudioStrengthDefaultsToFullRegeneration() {
+        let config = LTXVideoGenerationConfig(videoPath: "/tmp/vid.mp4")
+        #expect(config.audioRetakeStrength == 1.0)
+    }
+
+    @Test func testAudioStrengthOutOfRangeIsRejected() {
+        let tmpPath = NSTemporaryDirectory() + "ltx_test_audio_strength_range.mp4"
+        FileManager.default.createFile(atPath: tmpPath, contents: nil)
+        defer { try? FileManager.default.removeItem(atPath: tmpPath) }
+
+        for bad: Float in [0.0, -0.5, 1.5] {
+            let config = LTXVideoGenerationConfig(
+                width: 768, height: 512,
+                videoPath: tmpPath,
+                retakeModality: .audioOnly,
+                audioRetakeStrength: bad)
+            #expect(throws: LTXError.self) { try config.validate() }
+        }
+    }
+
+    @Test func testPartialAudioStrengthNeedsAudioOnly() {
+        let tmpPath = NSTemporaryDirectory() + "ltx_test_audio_strength_modality.mp4"
+        FileManager.default.createFile(atPath: tmpPath, contents: nil)
+        defer { try? FileManager.default.removeItem(atPath: tmpPath) }
+
+        // Truncating the schedule truncates it for the picture too, so a partial
+        // renoise outside .audioOnly must fail rather than be ignored.
+        for modality in [RetakeModality.videoOnly, .both] {
+            let config = LTXVideoGenerationConfig(
+                width: 768, height: 512,
+                videoPath: tmpPath,
+                retakeModality: modality,
+                audioRetakeStrength: 0.8)
+            #expect(throws: LTXError.self) { try config.validate() }
+        }
+
+        // 1.0 is the default and means "from pure noise": valid everywhere.
+        for modality in RetakeModality.allCases {
+            let config = LTXVideoGenerationConfig(
+                width: 768, height: 512,
+                videoPath: tmpPath,
+                retakeModality: modality,
+                audioRetakeStrength: 1.0)
+            #expect(throws: Never.self) { try config.validate() }
+        }
+    }
+
+    @Test func testPartialAudioStrengthValidatesWithAudioOnly() throws {
+        let tmpPath = NSTemporaryDirectory() + "ltx_test_audio_strength_ok.mp4"
+        FileManager.default.createFile(atPath: tmpPath, contents: nil)
+        defer { try? FileManager.default.removeItem(atPath: tmpPath) }
+
+        let config = LTXVideoGenerationConfig(
+            width: 768, height: 512,
+            videoPath: tmpPath,
+            retakeModality: .audioOnly,
+            audioRetakeStrength: 0.8)
+        try config.validate()
+    }
+
+    /// The strength selects among the *trained* sigmas — none is invented — so
+    /// the reachable levels on the distilled model are exactly its schedule, and
+    /// a strength below its lowest non-zero sigma leaves no step to run.
+    @Test func testDistilledScheduleTruncation() {
+        func truncated(_ strength: Float) -> [Float] {
+            DISTILLED_SIGMA_VALUES.filter { $0 <= strength || $0 == 0 }
+        }
+        #expect(truncated(0.9) == [0.725, 0.421875, 0.0])
+        #expect(truncated(0.909375).first == 0.909375,
+                "the trained stage-2 entry point is reachable exactly")
+        #expect(truncated(0.5) == [0.421875, 0.0])
+        #expect(truncated(0.4).count < 2, "below the lowest trained sigma, nothing runs")
+        #expect(truncated(1.0) == DISTILLED_SIGMA_VALUES, "full strength keeps the schedule")
+    }
+
     @Test func testWindowStaysValidForTheOtherModalities() throws {
         let tmpPath = NSTemporaryDirectory() + "ltx_test_modality_both.mp4"
         FileManager.default.createFile(atPath: tmpPath, contents: nil)

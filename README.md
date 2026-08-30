@@ -244,6 +244,20 @@ matching it:
 retake — same transformer passes, no VAE decode — and its picture is bit-identical
 to the source.
 
+`--audio-strength` (audio-only) decides how much of the source track survives:
+`1.0` starts from pure noise, lower values enter the schedule at the highest
+trained sigma below that value and blend the source in
+(`σ·noise + (1 − σ)·source`). On the distilled model this snaps to its 9-value
+schedule — `0.9` → `0.909375`, `0.8` → `0.725`, `0.5` → `0.421875` — and anything
+below `0.421875` leaves no step to run.
+
+```bash
+# Keep the rhythm and room of the source track, change its character
+ltx-video retake "The same voice, in a larger room with a long reverb tail" \
+    --video source.mp4 --modality audio --audio-strength 0.8 \
+    -w 768 -h 512 -f 121
+```
+
 ### Audio
 
 ```bash
@@ -616,6 +630,7 @@ ltx-video export-quantized \
 | `--transformer-quant` | `bf16` | Quantization: `bf16`, `qint8`, `int4`, `nvfp4`, `mxfp8` |
 | `--mixed-precision` | off | Per-block quantization: first/last 6 blocks qint8, middle int4 |
 | `--modality` | `video` | Which stream to regenerate: `video` (source audio kept), `both`, or `audio` (picture kept untouched) |
+| `--audio-strength` | `1.0` | `--modality audio` only: how far to renoise the source track. `1` = new soundtrack from noise; lower keeps its rhythm and ambience, and runs fewer steps |
 | `--regenerate-audio` | off | Older spelling of `--modality both` |
 | `--beacon` | off | Advertise activity to external monitors (see [Activity Beacon](#activity-beacon-opt-in)) |
 | `--profile` | off | GPU/CPU profiling report + Chrome Trace export |

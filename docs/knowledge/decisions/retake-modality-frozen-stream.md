@@ -48,15 +48,33 @@ time from the already-advanced value, so a dev-model `regenerateAudio` run took
 the conditioned pass's velocity (audio is not CFG-guided). The distilled path
 makes exactly one pass per step and is unchanged, bit for bit.
 
+# `audioRetakeStrength`, and why it is audio-only
+
+Starting the audio from pure noise gives a new soundtrack with no relation to
+the source. `audioRetakeStrength < 1` instead enters the schedule lower, from
+the source track: `x_σ = σ·noise + (1 − σ)·x₀`, the same renoise the temporal
+refinement pass uses. Rhythm and ambience survive in proportion, and fewer steps
+run.
+
+Two properties are deliberate:
+
+- **Only the trained sigmas are reachable.** The schedule is filtered
+  (`σ <= strength`, plus the terminal `0`), never interpolated, so on the
+  distilled model a strength snaps to its 9-value schedule: `0.9` → `0.909375`
+  (the level stage 2 renoises to), `0.8` → `0.725`, `0.5` → `0.421875`. Below
+  `0.421875` no step remains and the call throws rather than running an empty
+  schedule.
+- **It is refused outside `.audioOnly`.** Video and audio share one sigma
+  schedule, so truncating it for `.both` would truncate the picture's schedule
+  too — a silently different generation. Rejecting the combination is what keeps
+  the knob honest.
+
 # Rejected
 
 - **Two strengths (option a).** See above: no strength participates in freezing,
-  and `0` is already a validation error.
-- **An `audioRetakeStrength` for partial audio re-noise** (start from the source
-  audio at σ = strength rather than from noise). Not implemented: `.both`
-  already starts the audio from pure noise, "same shots, new sound" needs
-  nothing more, and the app was asked which of the two it wants before an extra
-  knob is added to its UI.
+  and `0` is already a validation error. `audioRetakeStrength` is a schedule
+  entry point, not the frozen/regenerated switch the ask conflated it with —
+  which is why both exist rather than one.
 
 # Citations
 

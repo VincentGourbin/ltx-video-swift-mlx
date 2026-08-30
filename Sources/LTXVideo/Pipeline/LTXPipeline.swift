@@ -1649,6 +1649,10 @@ public actor LTXPipeline {
     ///
     /// `.both` and `.audioOnly` need `loadAudioModels(includeEncoder: true)`.
     ///
+    /// ``LTXVideoGenerationConfig/audioRetakeStrength`` (audio-only) starts the
+    /// schedule below pure noise, so the new track keeps a parenté with the
+    /// source one — and runs fewer steps.
+    ///
     /// - Parameters:
     ///   - prompt: New text description for the retaken video
     ///   - config: Generation config with `videoPath` set. `retakeStrength` is unused
@@ -1872,7 +1876,22 @@ public actor LTXPipeline {
             distilled: !useDevModel,
             latentTokenCount: latentShape.tokenCount
         )
-        let sigmas = scheduler.sigmas
+        var sigmas = scheduler.sigmas
+        // A partial audio renoise starts the schedule lower instead of at pure
+        // noise. Only the trained sigmas are kept — none is invented — so on the
+        // distilled model the strength snaps to the nearest trained level.
+        if modality == .audioOnly && config.audioRetakeStrength < 1.0 {
+            let kept = sigmas.filter { $0 <= config.audioRetakeStrength || $0 == 0 }
+            guard kept.count >= 2 else {
+                let lowest = sigmas.filter { $0 > 0 }.min() ?? 1.0
+                throw LTXError.invalidConfiguration(
+                    "audioRetakeStrength \(config.audioRetakeStrength) leaves no step to run: "
+                    + "the lowest trained sigma is \(lowest). Use at least that.")
+            }
+            sigmas = kept
+            LTXDebug.log("[retake] audio renoise from σ=\(sigmas[0]) over \(sigmas.count - 1) steps "
+                + "(strength \(config.audioRetakeStrength))")
+        }
         let numSteps = sigmas.count - 1
 
         // Encode negative prompt for CFG (dev model only)
@@ -1929,9 +1948,19 @@ public actor LTXPipeline {
         if regenerateAudio, let cleanAudio = frozenAudioLatentPacked {
             // Noise in float32 (matching generateVideo pattern — "Float32 latents" rule)
             let audioNoise = MLXRandom.normal(cleanAudio.shape).asType(.float32)
-            audioLatentPacked = audioNoise  // Start from pure noise (full regeneration)
+            if modality == .audioOnly && config.audioRetakeStrength < 1.0 {
+                // Enter the (truncated) schedule at its first sigma, from the
+                // source track: x_σ = σ·noise + (1 − σ)·x₀. The lower the sigma,
+                // the more of the source's rhythm and ambience survives.
+                let s0 = sigmas[0]
+                audioLatentPacked = MLXArray(s0) * audioNoise
+                    + MLXArray(1.0 - s0) * cleanAudio.asType(.float32)
+                LTXDebug.log("Audio latents renoised to σ=\(s0): \(audioNoise.shape)")
+            } else {
+                audioLatentPacked = audioNoise  // Start from pure noise (full regeneration)
+                LTXDebug.log("Audio latents noised for regeneration: \(audioNoise.shape)")
+            }
             frozenAudioLatentPacked = nil   // Don't freeze — will be denoised
-            LTXDebug.log("Audio latents noised for regeneration: \(audioNoise.shape)")
         }
 
         // Denoising loop (matching Lightricks euler_denoising_loop)

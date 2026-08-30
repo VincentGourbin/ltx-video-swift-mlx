@@ -541,6 +541,9 @@ struct Retake: AsyncParsableCommand {
     @Option(name: .long, help: "Which stream to regenerate: video (default, source audio kept), both, or audio (picture kept untouched)")
     var modality: String?
 
+    @Option(name: .long, help: "Audio-only: how far to renoise the source track (0-1]. 1 = new soundtrack from noise (default); lower keeps the source's rhythm and ambience, and runs fewer steps")
+    var audioStrength: Float = 1.0
+
     @Option(name: .long, help: "Transformer quantization: bf16, qint8, int4, nvfp4, mxfp8")
     var transformerQuant: String = "bf16"
 
@@ -660,6 +663,14 @@ struct Retake: AsyncParsableCommand {
         } else {
             retakeModality = regenerateAudio ? .both : .videoOnly
         }
+        guard audioStrength > 0.0 && audioStrength <= 1.0 else {
+            throw ValidationError("--audio-strength must be in (0.0, 1.0]. Got \(audioStrength)")
+        }
+        if audioStrength < 1.0 && retakeModality != .audioOnly {
+            throw ValidationError(
+                "--audio-strength renoises the source audio partially, which needs "
+                + "--modality audio (the two streams share one sigma schedule).")
+        }
         if retakeModality == .audioOnly && (startTime != nil || endTime != nil) {
             throw ValidationError(
                 "--start-time / --end-time select video frames to regenerate, and "
@@ -668,7 +679,11 @@ struct Retake: AsyncParsableCommand {
         switch retakeModality {
         case .videoOnly: break  // the default; the header already reads as a retake
         case .both: print("Regenerating: picture + sound")
-        case .audioOnly: print("Regenerating: sound only (picture kept untouched)")
+        case .audioOnly:
+            print("Regenerating: sound only (picture kept untouched)")
+            if audioStrength < 1.0 {
+                print("Audio renoise strength: \(audioStrength) (keeps part of the source track)")
+            }
         }
         // Parse quantization
         let quantConfig: LTXQuantizationConfig
@@ -749,7 +764,8 @@ struct Retake: AsyncParsableCommand {
             retakeStrength: strength,
             retakeStartTime: startTime,
             retakeEndTime: endTime,
-            retakeModality: retakeModality
+            retakeModality: retakeModality,
+            audioRetakeStrength: audioStrength
         )
 
         // Generate retake (single-stage, no upscaler needed)

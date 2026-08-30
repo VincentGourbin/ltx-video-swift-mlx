@@ -16,8 +16,9 @@
 
 * **Creation**: [A retake picks its stream with a modality](/docs/knowledge/decisions/retake-modality-frozen-stream.md)
   — `.videoOnly` / `.both` / `.audioOnly`, why the proposed "strength of zero"
-  shape could not work, and the CFG-multiplied audio Euler step found while
-  implementing it.
+  shape could not work, the `audioRetakeStrength` schedule entry point (trained
+  sigmas only, audio-only by construction), and the CFG-multiplied audio Euler
+  step found while implementing it.
 
 ## 2026-08-29
 
