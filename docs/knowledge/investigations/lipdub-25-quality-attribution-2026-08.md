@@ -6,6 +6,20 @@ tags: [lipdub, ltx25, attribution, seed-variance, enhancer, lora]
 timestamp: 2026-08-29T00:00:00Z
 ---
 
+> **Measured before the cross-modal fixes of 2026-08-31 (PR #82).** Every run
+> below predates two proven defects in `LTX2Transformer`'s cross-modal AdaLN: the
+> scale/shift pair was fed the wrong modality's sigma, and its output was
+> collapsed from per-token to a single broadcast value. Both express themselves
+> only when the two streams carry *divergent* sigmas — which is exactly the
+> LipDub regime, and PR #82 measured a −4.6× RMS change on a real clip because of
+> it. The conclusions that rest on comparing runs *against each other* (seed
+> variance dominating, the enhancer's language-dropping rewrite, quantization and
+> LoRA coverage cleared) are unaffected: every run carried the same defect. The
+> one conclusion to re-verify is the **absolute** claim about the audio→video
+> pathway ("gate 1.46× stronger in 2.5, pathway cleared") — that measurement was
+> taken on the buggy path. See
+> [the May investigation's 2026-08-31 updates](/docs/knowledge/investigations/crossmodal-adaln-sigma-swap-2026-05.md).
+
 Reported symptom: the Fluxforge Studio Storyboard (image-mode LipDub, Voxtral
 TTS, qint8, VLM enhancement on) produced worse lip tracking on LTX-2.5 than the
 same chain had on 2.3 — "ça fonctionnait bien en 2.3, je peux le certifier."
