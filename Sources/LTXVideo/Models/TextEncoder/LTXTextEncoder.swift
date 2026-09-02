@@ -501,6 +501,17 @@ class BasicTransformerBlock1D: Module {
 /// 1D embeddings connector for processing text features
 /// Applies transformer blocks with RoPE and learnable registers
 class Embeddings1DConnector: Module {
+    /// Compact diagnostic for NaN/Inf propagation on Apple Silicon.
+    private func logFinite(_ label: String, _ value: MLXArray) {
+        guard LTXDebug.isEnabled else { return }
+        let f = value.asType(.float32)
+        MLX.eval(f)
+        let mean = f.mean().item(Float.self)
+        let minValue = f.min().item(Float.self)
+        let maxValue = f.max().item(Float.self)
+        LTXDebug.log("[Connector] \(label): dtype=\(value.dtype), mean=\(mean), min=\(minValue), max=\(maxValue), finite=\(mean.isFinite && minValue.isFinite && maxValue.isFinite)")
+    }
+
     let numAttentionHeads: Int
     let innerDim: Int
     let positionalEmbeddingTheta: Float
@@ -598,9 +609,12 @@ class Embeddings1DConnector: Module {
         _ hiddenStates: MLXArray,
         attentionMask: MLXArray? = nil
     ) throws -> (MLXArray, MLXArray) {
+        // Keep the connector in float32. On Apple M5/macOS 27, the bf16
+        // connector path can collapse to zero and then produce NaNs.
         let inputDtype = hiddenStates.dtype
-        var x = hiddenStates
+        var x = hiddenStates.asType(.float32)
         var mask = attentionMask
+        logFinite("input(f32)", x)
 
         // Replace padded positions with learnable registers (in original dtype)
         if let m = mask {
@@ -608,7 +622,8 @@ class Embeddings1DConnector: Module {
                 hiddenStates: x,
                 attentionMask: m
             )
-            x = newX
+            x = newX.asType(.float32)
+            logFinite("after registers", x)
             // After register replacement, ALL positions are valid.
             // Python connector uses mask=None in SDPA after this point.
             mask = nil
@@ -634,13 +649,15 @@ class Embeddings1DConnector: Module {
         freqsCis = (cos: freqsCis.cos.asType(inputDtype), sin: freqsCis.sin.asType(inputDtype))
 
         // Process through transformer blocks (mask=nil = no mask, matching Python)
-        for block in transformer1DBlocks {
+        for (index, block) in transformer1DBlocks.enumerated() {
             x = block(x, mask: mask, pe: freqsCis)
+            logFinite("after block \(index)", x)
         }
 
         // Final normalization (no learnable weight, identity) - use input dtype for weight
         let normWeight = MLXArray.ones([x.dim(-1)]).asType(x.dtype)
         x = MLXFast.rmsNorm(x, weight: normWeight, eps: normEps)
+        logFinite("after final rmsNorm", x)
 
         let outMask = mask ?? MLXArray.zeros([x.dim(0), 1, 1, x.dim(1)])
 
