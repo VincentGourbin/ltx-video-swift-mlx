@@ -602,6 +602,16 @@ class Embeddings1DConnector: Module {
         var x = hiddenStates
         var mask = attentionMask
 
+        // M5/macOS-26.2+-only workaround for mlx#3797 (see
+        // MLXNAXSplitKWorkaround): this connector's feed-forward down
+        // projection sits exactly on the buggy kernel's dispatch threshold.
+        // Casting to float32 makes the input match the split-K accumulator's
+        // hardcoded float32 dtype, sidestepping the mismatch. Every other
+        // machine keeps the exact bf16 path `ConnectorParityTests` measures.
+        if MLXNAXSplitKWorkaround.isAffectedHardware {
+            x = x.asType(.float32)
+        }
+
         // Replace padded positions with learnable registers (in original dtype)
         if let m = mask {
             let (newX, _) = try replacePaddedWithLearnableRegisters(
@@ -609,6 +619,9 @@ class Embeddings1DConnector: Module {
                 attentionMask: m
             )
             x = newX
+            if MLXNAXSplitKWorkaround.isAffectedHardware {
+                x = x.asType(.float32)
+            }
             // After register replacement, ALL positions are valid.
             // Python connector uses mask=None in SDPA after this point.
             mask = nil

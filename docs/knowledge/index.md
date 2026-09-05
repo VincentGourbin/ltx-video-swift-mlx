@@ -70,6 +70,7 @@ or re-litigated.
 * [The duration head must see audio connector tokens, not just video](pitfalls/duration-head-needs-audio-tokens.md) - `--frames auto` fed it video tokens only; upstream always builds the audio connector too, and the gap was a >6x prediction difference on the same prompt
 * [A quantized transformer load first materialised the entire bf16 checkpoint](pitfalls/quantized-load-materialised-full-bf16.md) - issue #86's GPU timeout; one combined eval() forced ~54 GB peak before quantization could shrink anything, fixed by per-block eval + dropping the source dict early (~37 GB after)
 * [Quantizing the Gemma 4 text encoder adds memory instead of saving it](pitfalls/gemma4-quantize-does-not-release-bf16.md) - measured additive not replacing (bf16 ~22.7 GB, int4 ~29.1 GB); independent of eval ordering, chunking granularity, or reference lifetime — root cause is outside this repo (mlx-swift-lm's SwitchLinear or mlx-swift's quantize())
+* [The text connector goes NaN on M5/macOS 26.2+](pitfalls/nax-splitk-gemm-m5-black-video.md) - mlx#3797: the NAX split-K GEMM templates on the accumulator's hardcoded float32 dtype instead of the input's; worked around with a hardware-gated float32 cast rather than bumping mlx-swift, which changes output ~20-28% on unaffected hardware too
 
 # Investigations
 

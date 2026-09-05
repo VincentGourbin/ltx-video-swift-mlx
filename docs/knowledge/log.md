@@ -1,5 +1,33 @@
 # Directory Update Log
 
+## 2026-09-06
+
+* **Pitfall**: [The text connector goes NaN on M5/macOS 26.2+](/docs/knowledge/pitfalls/nax-splitk-gemm-m5-black-video.md)
+  — issue #69 / PR #85. Root-caused to
+  [mlx#3797](https://github.com/ml-explore/mlx/issues/3797): the NAX split-K
+  GEMM kernel templates on its accumulator's hardcoded `float32` dtype
+  instead of the actual input dtype, misreading bf16 buffers on gen-17+ GPUs
+  — the connector's `[1024,4096]@[4096,16384]ᵀ` feed-forward down-projection
+  sits exactly on the dispatch threshold. Fixed upstream (mlx#3810,
+  2026-07-07) but no mlx-swift tag vendors it. Reviewed PR #85's blanket f32
+  cast (posted to the PR after correcting two errors in the draft: the TF32
+  explanation, and a false claim that LTX-2.3's connector has a different,
+  unaffected shape — it's identical to 2.5's) and requested changes rather
+  than merging: it doesn't cover the video transformer's own same-shape-class
+  exposure, and it changes the connector's output dtype on every machine, not
+  just affected ones. Investigated bumping mlx-swift to `main` instead
+  (`chore/mlx-swift-main-nax-fix`, not merged) — real, reproducible ~20-28%
+  output divergence on non-M5 hardware, bisection blocked by `mlx-c` (a
+  second submodule pinned in lockstep with `mlx`) requiring a very recent
+  `mlx` snapshot to compile at all, leaving almost no independently-testable
+  range. Shipped a narrower fix instead: `MLXNAXSplitKWorkaround` replicates
+  mlx's own `is_nax_available()` hardware check (same
+  `MTLDevice.architecture.name` input, same parsing) and gates the same f32
+  cast behind it — verified byte-identical connector/VAE output on an M3 Max
+  (unaffected hardware) before/after, and a finite/reasonable output when the
+  workaround is forced on via `LTX_NAX_WORKAROUND=1` (can't verify against
+  the actual M5 NaN — no M5 hardware in this repo).
+
 ## 2026-09-05
 
 * **Pitfall**: [The duration head must see audio connector tokens, not just video](/docs/knowledge/pitfalls/duration-head-needs-audio-tokens.md)
