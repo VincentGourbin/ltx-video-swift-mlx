@@ -23,7 +23,12 @@ Swift implementation of [LTX-2](https://github.com/Lightricks/LTX-2) video gener
 
 - macOS 26.3+ (Tahoe)
 - Apple Silicon Mac (M1/M2/M3/M4)
-- 32 GB+ unified memory recommended
+- 32 GB+ unified memory recommended for LTX-2.3. LTX-2.5 needs more: even
+  `--transformer-quant int4` currently peaks around 38 GB just loading models
+  at a small resolution (before denoising/VAE decode add their own cost), because
+  on-the-fly quantization of the bundled Gemma 4 text encoder doesn't yet
+  reduce its memory footprint — see
+  [docs/knowledge/pitfalls/gemma4-quantize-does-not-release-bf16.md](docs/knowledge/pitfalls/gemma4-quantize-does-not-release-bf16.md).
 - Xcode 26+
 
 ## Quick Start

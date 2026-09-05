@@ -107,15 +107,33 @@ final class Gemma4TextEncoder: LTXGemmaEncoding {
             "[Gemma4] \(assets.gemmaVersion ?? "unknown"): \(config.numHiddenLayers) layers, "
             + "hidden \(config.hiddenSize)")
 
+        // Pull everything else out of `assets` *before* touching the Gemma
+        // weights below, so nothing past this point still needs the whole
+        // ~26 GB bundle a second time (see loadModels()/loadTextEncoderModels()
+        // in LTXPipeline.swift for the matching caller-side change).
+        let tokenizerDirectory = try assets.materializeTokenizer(in: tokenizerCacheDirectory)
+        let projectionWeights = assets.projectionWeights()
+
         let model = Gemma4LLMModel(config: config)
-        try applyWeights(assets.gemmaWeights(), to: model)
+        var gemmaWeights = assets.gemmaWeights()
+        try applyWeights(gemmaWeights, to: model)
+        gemmaWeights.removeAll()
 
         if let quantization, quantization != .bf16 {
             try quantize(model, with: quantization)
         }
+        // NOTE (2026-09-05, investigating issue #86): on-the-fly quantization
+        // of this checkpoint does not currently reduce its resident memory —
+        // measured additive, not replacing: bf16 alone evaluates to ~22.7 GB,
+        // int4 evaluates to ~29.1 GB (bf16 + ~6.2 GB of quantized weights on
+        // top), regardless of eval ordering or granularity (whole-model,
+        // count-chunked, or per-layer via `loraLayers` all measured
+        // identical). The likely cause is upstream of this repo — see
+        // docs/knowledge/pitfalls/gemma4-quantize-does-not-release-bf16.md.
+        // A single eval is kept here (no memory benefit was found from
+        // chunking) pending a fix.
         MLX.eval(model.parameters())
 
-        let tokenizerDirectory = try assets.materializeTokenizer(in: tokenizerCacheDirectory)
         let tokenizer = try await AutoTokenizer.from(modelFolder: tokenizerDirectory)
 
         // Gemma 4's tokenizer does not emit BOS from its post-processor (Gemma 3 did),
@@ -127,7 +145,7 @@ final class Gemma4TextEncoder: LTXGemmaEncoding {
             tokenizer: tokenizer,
             bosTokenID: Int32(bos),
             numHiddenLayers: config.numHiddenLayers,
-            projectionWeights: assets.projectionWeights()
+            projectionWeights: projectionWeights
         )
     }
 

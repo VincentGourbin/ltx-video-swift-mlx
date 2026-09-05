@@ -1,5 +1,35 @@
 # Directory Update Log
 
+## 2026-09-05
+
+* **Pitfall**: [A quantized transformer load first materialised the entire bf16 checkpoint](/docs/knowledge/pitfalls/quantized-load-materialised-full-bf16.md)
+  — issue #86 (GPU timeout on a 36 GB M3 Max loading the transformer at
+  50%). `loadModels()` evaluated the whole bf16 transformer in one combined
+  command buffer before quantizing (54519 MB peak measured on int4), then
+  evaluated the whole quantized model again in another. Fixed on
+  `fix/quantized-load-per-block`: `evalParametersPerBlock` evaluates each
+  transformer block individually (both for the bf16-only path and after
+  quantization), and the source weight dictionary is explicitly cleared
+  right after it's applied instead of staying alive for the rest of the
+  function. Peak dropped to 37180 MB (~17 GB less transient overhead);
+  `VAE raw output` byte-identical before/after on a plain generation.
+* **Pitfall**: [Quantizing the Gemma 4 text encoder adds memory instead of saving it](/docs/knowledge/pitfalls/gemma4-quantize-does-not-release-bf16.md)
+  — found while chasing the rest of issue #86's budget: the transformer fix
+  above didn't get a 36 GB machine under budget, because
+  `Gemma4TextEncoder.load` costs *more* quantized (int4: ~29.1 GB active)
+  than unquantized (bf16: ~22.7 GB active) — additive, not replacing. Tested
+  every lever this repo controls (eval ordering relative to `quantize()`,
+  eval granularity — whole-model, fixed-count chunks, and true per-layer via
+  `Gemma4LLMModel.loraLayers` — and Swift-side reference lifetime of the
+  source bf16 dictionary) and none of it moved the number by even 1 MB.
+  Root cause is outside this repo: likely `mlx-swift-lm`'s `SwitchLinear`
+  (the MoE layer type `gemma4-12b-ltx-v1` uses, per `Gemma4Experts.swift`'s
+  own "26B-A4B" comment) not releasing on quantization, or `mlx-swift`'s
+  `quantize(model:)` submodule-replacement mechanism not fully detaching
+  what it replaces for that shape of module. Documented rather than fixed;
+  the transformer-side chantier C fix ships regardless since it's a real,
+  independent improvement.
+
 ## 2026-08-31 (4)
 
 * **Validation**: Sub-task 6 of issue #57 — the last of the six —

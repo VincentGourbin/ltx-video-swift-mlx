@@ -584,6 +584,31 @@ public actor LTXPipeline {
 
     // MARK: - Model Loading
 
+    /// Evaluate a transformer's parameters one block at a time instead of in
+    /// one combined command buffer.
+    ///
+    /// `eval(model.parameters())` schedules every block's weights together;
+    /// on a quantized load that forces MLX to materialize the *entire* bf16
+    /// checkpoint simultaneously before it can discard any of it (issue #86:
+    /// ~44 GB resident on a 36 GB machine). Evaluating block by block bounds
+    /// the transient peak to roughly one block's bf16 weights plus whatever
+    /// quantization intermediates it needs, since each block's graph is
+    /// evaluated (and its temporaries released) before the next one starts.
+    /// The non-block parameters (embeddings, final norm, etc.) are small and
+    /// still evaluated together at the end.
+    private func evalParametersPerBlock(_ model: Module) {
+        if let transformer = model as? LTXTransformer {
+            for block in transformer.transformerBlocks {
+                eval(block.parameters())
+            }
+        } else if let transformer = model as? LTX2Transformer {
+            for block in transformer.transformerBlocks {
+                eval(block.parameters())
+            }
+        }
+        eval(model.parameters())
+    }
+
     /// Load all models required for generation
     ///
     /// Downloads and loads:
@@ -622,8 +647,15 @@ public actor LTXPipeline {
         progressCallback?(DownloadProgress(progress: 0.2, message: "Loading text encoder..."))
         stepStart = Date()
         // Parse the (mmap'd) text-encoder bundle once: both the Gemma encoder
-        // and the aggregate projections read from it.
+        // and the aggregate projections read from it. `earlyProjectionWeights`
+        // is pulled out *before* the Gemma load rather than read from
+        // `textEncoderAssets` again afterward at Step 3 — `textEncoderAssets`
+        // wraps the whole ~26 GB text-encoder file, and holding it alive past
+        // the Gemma load kept that entire file resident through Gemma's own
+        // quantization regardless of what that quantization did internally.
+        // See docs/knowledge/pitfalls/quantized-load-materialised-full-bf16.md.
         let textEncoderAssets = try checkpoint.textEncoder.map { try LTX25TextEncoderAssets(fileURL: $0) }
+        let earlyProjectionWeights = textEncoderAssets?.projectionWeights()
         gemmaEncoder = try await loadGemmaEncoder(
             checkpoint: checkpoint,
             source: source,
@@ -632,12 +664,13 @@ public actor LTXPipeline {
             tokenizerPath: tokenizerPath,
             progressCallback: progressCallback)
         LTXDebug.log("[TIME] Text encoder load: \(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
+        LTXMemoryManager.logMemoryState("after text encoder (Gemma) load")
 
         // Step 3: Load LTX component weights
         progressCallback?(DownloadProgress(progress: 0.3, message: "Loading \(model.family.displayName) weights..."))
         stepStart = Date()
-        let split = try source.loadComponents(textEncoderAssets: textEncoderAssets)
-        let transformerWeights = split.transformer
+        let split = try source.loadComponents(precomputedProjectionWeights: earlyProjectionWeights)
+        var transformerWeights = split.transformer
         let vaeWeights = split.vae
         let connectorWeights = split.connector
         LTXDebug.log("[TIME] Load checkpoint components: \(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
@@ -661,10 +694,25 @@ public actor LTXPipeline {
         LTXVideoProfiler.shared.end("Load Transformer")
         LTXDebug.log("[TIME] Apply transformer weights: \(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
 
-        // Evaluate transformer weights to ensure they're fully materialized
-        stepStart = Date()
-        eval(transformer!.parameters())
-        LTXDebug.log("[TIME] Eval transformer weights: \(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
+        // Drop this dictionary's references to the mmap'd bf16 arrays now
+        // that `transformer` holds its own copies of them. Quantization below
+        // replaces those copies on `transformer` with new quantized arrays,
+        // discarding the bf16 originals — but only if nothing else still
+        // references them. Without this, `transformerWeights` alone would
+        // keep every bf16 block resident for the rest of this function
+        // (issue #86).
+        transformerWeights.removeAll()
+
+        // Only the no-quantization path needs a full eval here: quantize()
+        // below reads these (still lazy, mmap'd) weights itself and does its
+        // own per-tensor evaluation. Evaluating everything up front first
+        // would fold the whole checkpoint into one combined command buffer,
+        // spiking memory to the full bf16 size before quantization even runs.
+        if quantization.mixedPrecision == nil && !quantization.transformer.needsQuantization {
+            stepStart = Date()
+            evalParametersPerBlock(transformer!)
+            LTXDebug.log("[TIME] Eval transformer weights: \(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
+        }
 
         // Step 3b: Apply on-the-fly quantization if configured
         if let mixedConfig = quantization.mixedPrecision {
@@ -672,7 +720,7 @@ public actor LTXPipeline {
             LTXDebug.log("Applying mixed precision: \(mixedConfig.highPrecisionBlocks.count) blocks at \(mixedConfig.highPrecisionBits)-bit, rest at \(mixedConfig.lowPrecisionBits)-bit...")
             progressCallback?(DownloadProgress(progress: 0.6, message: "Applying mixed precision quantization..."))
             applyMixedPrecisionQuantization(to: transformer!, config: mixedConfig)
-            eval(transformer!.parameters())
+            evalParametersPerBlock(transformer!)
             Memory.clearCache()
             LTXDebug.log("[TIME] Mixed precision quantization: \(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
         } else if quantization.transformer.needsQuantization {
@@ -683,10 +731,11 @@ public actor LTXPipeline {
             LTXDebug.log("Quantizing transformer to \(quantization.transformer.rawValue) (groupSize=\(groupSize), mode=\(mode))...")
             progressCallback?(DownloadProgress(progress: 0.6, message: "Quantizing transformer to \(quantization.transformer.displayName)..."))
             quantize(model: transformer!, groupSize: groupSize, bits: bits, mode: mode)
-            eval(transformer!.parameters())
+            evalParametersPerBlock(transformer!)
             Memory.clearCache()
             LTXDebug.log("[TIME] Transformer quantization: \(String(format: "%.1f", Date().timeIntervalSince(stepStart)))s")
         }
+        LTXMemoryManager.logMemoryState("after transformer load")
 
         // Step 4: Create and load VAE decoder
         progressCallback?(DownloadProgress(progress: 0.7, message: "Loading VAE decoder..."))
@@ -735,7 +784,11 @@ public actor LTXPipeline {
         progressCallback?(DownloadProgress(progress: 0.1, message: "Resolving checkpoint..."))
         let checkpoint = try await resolveCheckpoint(progressCallback: progressCallback)
         let source = LTXCheckpointSource(model: model, paths: checkpoint)
+        // See loadModels(): pull the projections out before the Gemma load
+        // rather than reading `textEncoderAssets` again afterward, so the
+        // whole text-encoder bundle doesn't stay resident through it.
         let textEncoderAssets = try checkpoint.textEncoder.map { try LTX25TextEncoderAssets(fileURL: $0) }
+        let earlyProjectionWeights = textEncoderAssets?.projectionWeights()
 
         progressCallback?(DownloadProgress(progress: 0.3, message: "Loading Gemma model..."))
         gemmaEncoder = try await loadGemmaEncoder(
@@ -749,7 +802,9 @@ public actor LTXPipeline {
 
         progressCallback?(DownloadProgress(progress: 0.7, message: "Loading connector weights..."))
         stepStart = Date()
-        let connectorWeights = try source.loadComponents(textEncoderAssets: textEncoderAssets).connector
+        let connectorWeights = try source.loadComponents(
+            precomputedProjectionWeights: earlyProjectionWeights
+        ).connector
 
         textEncoder = createTextEncoder(
             gatedAttention: model.transformerConfig.gatedAttention
@@ -832,7 +887,7 @@ public actor LTXPipeline {
         // would rebuild the encoder below with randomly-initialised projections.
         let checkpoint = checkpointEarly
         let source = LTXCheckpointSource(model: model, paths: checkpoint)
-        let (transformerWeights, _, connectorWeightsFromUnified) =
+        var (transformerWeights, _, connectorWeightsFromUnified) =
             try source.loadComponents(includeAudio: true)
 
         // Create LTX2 dual transformer
@@ -846,20 +901,24 @@ public actor LTXPipeline {
         LTXVideoProfiler.shared.start("Load Dual Transformer")
         try LTXWeightLoader.applyTransformerWeights(transformerWeights, to: ltx2, includeAudio: true)
         LTXVideoProfiler.shared.end("Load Dual Transformer")
+        // See loadModels(): drops this dictionary's references to the bf16
+        // arrays so quantization below can actually release them (issue #86).
+        transformerWeights.removeAll()
 
         // Apply quantization if configured
         if let mixedConfig = quantization.mixedPrecision {
             LTXDebug.log("Applying mixed precision to LTX2 transformer...")
             applyMixedPrecisionQuantization(to: ltx2, config: mixedConfig)
-            eval(ltx2.parameters())
+            evalParametersPerBlock(ltx2)
             Memory.clearCache()
         } else if quantization.transformer.needsQuantization {
             let q = quantization.transformer
             LTXDebug.log("Quantizing LTX2 transformer to \(q.displayName)...")
             quantize(model: ltx2, groupSize: q.groupSize, bits: q.bits, mode: q.quantizationMode)
-            eval(ltx2.parameters())
+            evalParametersPerBlock(ltx2)
             Memory.clearCache()
         }
+        LTXMemoryManager.logMemoryState("after LTX2 transformer load")
 
         ltx2Transformer = ltx2
         lipdubFusion = nil  // fresh weights from the unified file

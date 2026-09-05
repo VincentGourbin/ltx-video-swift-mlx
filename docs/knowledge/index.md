@@ -67,6 +67,8 @@ or re-litigated.
 * [The conv VAE decoder padded every conv with reflect instead of zeros](pitfalls/conv-decoder-wrong-spatial-padding.md) - every clip's default decode path; 17-27% relative error against the reference, ~1e-6 once fixed; found by the new element-wise parity harness (issue #57)
 * [The text connector's register replacement reordered tokens instead of substituting in place](pitfalls/connector-register-replacement-reorders-tokens.md) - every real (left-padded) prompt hit this; 135% relative error against the reference, 0.15% once fixed
 * [The vocoder's float32 policy only ever cast the runtime input, never its checkpoint weights](pitfalls/vocoder-weights-stayed-bf16.md) - every LipDub/audio generation ran BigVGAN's ~108-conv chain on bf16 weights; 2-9% relative error, ~1e-5/1e-4 once the loader casts the parameters too
+* [A quantized transformer load first materialised the entire bf16 checkpoint](pitfalls/quantized-load-materialised-full-bf16.md) - issue #86's GPU timeout; one combined eval() forced ~54 GB peak before quantization could shrink anything, fixed by per-block eval + dropping the source dict early (~37 GB after)
+* [Quantizing the Gemma 4 text encoder adds memory instead of saving it](pitfalls/gemma4-quantize-does-not-release-bf16.md) - measured additive not replacing (bf16 ~22.7 GB, int4 ~29.1 GB); independent of eval ordering, chunking granularity, or reference lifetime — root cause is outside this repo (mlx-swift-lm's SwitchLinear or mlx-swift's quantize())
 
 # Investigations
 

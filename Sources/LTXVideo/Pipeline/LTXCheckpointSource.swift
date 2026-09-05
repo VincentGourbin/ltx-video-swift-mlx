@@ -48,9 +48,19 @@ struct LTXCheckpointSource {
     let paths: LTXCheckpointPaths
 
     /// Weights for the transformer, the video VAE decoder and the text-side stack.
+    ///
+    /// - Parameter precomputedProjectionWeights: the LTX aggregate projections,
+    ///   already extracted from a text-encoder bundle. Prefer this over
+    ///   `textEncoderAssets` when the caller already parsed that bundle for
+    ///   something else (typically the Gemma load): `textEncoderAssets` wraps
+    ///   the whole multi-GB file, and this function reading it a second time
+    ///   here would keep that whole file alive for as long as the caller's
+    ///   reference to it lives — see
+    ///   `docs/knowledge/pitfalls/quantized-load-materialised-full-bf16.md`.
     func loadComponents(
         includeAudio: Bool = false,
-        textEncoderAssets: LTX25TextEncoderAssets? = nil
+        textEncoderAssets: LTX25TextEncoderAssets? = nil,
+        precomputedProjectionWeights: [String: MLXArray]? = nil
     ) throws -> (transformer: [String: MLXArray], vae: [String: MLXArray], connector: [String: MLXArray]) {
         switch model.weightsLayout {
         case .unified:
@@ -65,7 +75,10 @@ struct LTXCheckpointSource {
             let vae = try LTXWeightLoader.loadVAEWeights(from: paths.videoVAE.path)
 
             var textSide = connector
-            textSide.merge(try loadProjectionWeights(textEncoderAssets: textEncoderAssets)) { current, _ in current }
+            textSide.merge(try loadProjectionWeights(
+                textEncoderAssets: textEncoderAssets,
+                precomputed: precomputedProjectionWeights)
+            ) { current, _ in current }
             return (transformer, vae, textSide)
         }
     }
@@ -82,8 +95,10 @@ struct LTXCheckpointSource {
 
     /// LTX aggregate projections. Split layouts keep them with the text encoder.
     private func loadProjectionWeights(
-        textEncoderAssets: LTX25TextEncoderAssets? = nil
+        textEncoderAssets: LTX25TextEncoderAssets? = nil,
+        precomputed: [String: MLXArray]? = nil
     ) throws -> [String: MLXArray] {
+        if let precomputed { return precomputed }
         if let textEncoderAssets { return textEncoderAssets.projectionWeights() }
         guard let textEncoder = paths.textEncoder else {
             throw LTXError.weightLoadingFailed(
