@@ -62,31 +62,41 @@ struct DurationPromptE2ETests {
 
     /// A written duration does not reach the head.
     ///
-    /// Measured August 2026: prefixing the same scene with "3 seconds." returns
-    /// byte-identical output to no prefix at all — 23.5 s both times. "15
-    /// seconds." and "20 seconds." *do* move it, but to 16.9 s and 19.5 s: the
-    /// head responds to what those tokens change in the scene representation,
-    /// by learned correlation, not by reading them as quantities. If it parsed
-    /// the numeral, "3 seconds" would return 3 s.
+    /// Measured August 2026 (video-only tokens): prefixing the same scene with
+    /// "3 seconds." returned byte-identical output to no prefix at all — 23.5 s
+    /// both times.
+    ///
+    /// Re-measured 2026-09-05 after `fix/duration-head-audio-tokens` made the
+    /// head see the audio connector's tokens too, as upstream does (F7/F8 in
+    /// the PR): 4.09375 s bare vs 3.59375 s with the prefix — a real ~0.5 s
+    /// move, no longer byte-identical. The head still isn't parsing the
+    /// numeral (a literal read would land on 3.0 s exactly, not 3.59), but it
+    /// is more sensitive to the prefix's wording now that audio tokens are in
+    /// the mix — noted for the PR rather than re-investigated here.
     @Test func aWrittenDurationIsNotAnInstruction() async throws {
         let pipeline = pipeline()
 
         let bare = try await pipeline.predictFrameCount(for: Self.scene)
         let asksForThree = try await pipeline.predictFrameCount(for: "3 seconds. \(Self.scene)")
 
-        #expect(abs(bare.seconds - asksForThree.seconds) < 0.01,
+        #expect(abs(bare.seconds - asksForThree.seconds) < 1.0,
                 "a '3 seconds' prefix moved the prediction: \(bare.seconds)s -> \(asksForThree.seconds)s")
-        // If this ever approaches 3, the head has started reading durations and
-        // this whole suite's premise needs revisiting.
-        #expect(asksForThree.seconds > 10,
-                "asking for 3 s returned \(asksForThree.seconds)s")
+        // If this ever lands on 3.0s exactly, the head has started reading
+        // durations and this whole suite's premise needs revisiting.
+        #expect(abs(asksForThree.seconds - 3.0) > 0.1,
+                "asking for 3 s returned \(asksForThree.seconds)s, suspiciously close to a literal read")
     }
 
     /// Style-dense prompts read as short shots.
     ///
-    /// The prompt below asks for 15 seconds and predicts ~5. It is saturated
-    /// with close-framing language ("phone-camera feel", "delayed autofocus at
+    /// The prompt below asks for 15 seconds. It is saturated with
+    /// close-framing language ("phone-camera feel", "delayed autofocus at
     /// close range"), which is what the head actually weighs.
+    ///
+    /// Measured 121 frames (video-only) in August 2026; re-measured 153 frames
+    /// (6.6875 s) on 2026-09-05 once the head also sees audio tokens
+    /// (`fix/duration-head-audio-tokens`) — still nowhere near the 361 frames
+    /// the prompt asks for.
     @Test func aStyleDensePromptPredictsAShortShot() async throws {
         let pipeline = pipeline()
         let prompt = """
@@ -104,19 +114,26 @@ struct DurationPromptE2ETests {
             """
 
         let result = try await pipeline.predictFrameCount(for: prompt)
-        #expect(result.frames == 121,
-                "expected 121 frames, got \(result.frames) (\(result.seconds)s)")
+        #expect(result.frames == 153,
+                "expected 153 frames, got \(result.frames) (\(result.seconds)s)")
         #expect(!result.wasClamped)
         // The point of the test: nowhere near the 361 frames the prompt asks for.
         #expect(result.frames < 200)
     }
 
-    /// The effective ceiling of `--frames auto` is 473, not the 481 the config
-    /// allows: 20 s x 24 fps = 480, and 480 floors to 473 on the 8k+1 grid.
-    @Test func theCeilingIs473Frames() async throws {
+    /// Historically this scene was the example of a prompt that hits the
+    /// ceiling: video-only tokens predicted 27.0 s → clamped to 473 frames.
+    ///
+    /// Re-measured 2026-09-05 after `fix/duration-head-audio-tokens`: feeding
+    /// the head both video and audio connector tokens (matching upstream,
+    /// F7/F8) pushes this same scene down to 4.09375 s / 97 frames,
+    /// unclamped. Nothing here demonstrates the 473-frame ceiling any more —
+    /// that grid-snap behavior is covered on synthetic input by the pure
+    /// `DurationGridSnap` suite instead.
+    @Test func aSceneThatUsedToClampNoLongerDoesWithAudioTokens() async throws {
         let pipeline = pipeline()
         let result = try await pipeline.predictFrameCount(for: Self.scene)
-        #expect(result.wasClamped)
-        #expect(result.frames == 473)
+        #expect(!result.wasClamped)
+        #expect(result.frames == 97)
     }
 }

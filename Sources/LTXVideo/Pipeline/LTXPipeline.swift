@@ -3872,12 +3872,31 @@ AESTHETIC QUALITY (in addition to the above, without breaking the objective capt
             throw LTXError.modelNotLoaded("Text encoder not loaded")
         }
 
+        // Upstream always builds the audio connector and feeds the duration head
+        // both video and audio tokens (F7). `loadModels()` builds a video-only
+        // encoder by default (F8), so build a throwaway encoder with the audio
+        // connector here rather than touching `self.textEncoder` — replacing it
+        // would change every other call site that reads `videoEncoding`.
+        let durationEncoder: VideoGemmaTextEncoderModel
+        if textEncoder.audioEmbeddingsConnector == nil {
+            durationEncoder = try await loadConnectorWithAudioForDurationHead()
+        } else {
+            durationEncoder = textEncoder
+        }
+
         let headPath = try await downloader.downloadDurationHead()
         let head = try LTXDurationHead.load(from: headPath)
 
         let (states, attentionMask) = try encodeHiddenStates(prompt)
-        let encoded = try textEncoder.encodeFromHiddenStates(
+        let encoded = try durationEncoder.encodeFromHiddenStates(
             hiddenStates: states, attentionMask: attentionMask, paddingSide: "left")
+        LTXDebug.log("Duration head input: video=\(encoded.videoEncoding.shape), "
+            + "audio=\(encoded.audioEncoding.map { "\($0.shape)" } ?? "nil")")
+        if encoded.audioEncoding == nil {
+            throw LTXError.invalidConfiguration(
+                "Duration head needs the audio connector tokens on \(model.displayName), "
+                + "but the encoder still produced none after loading it.")
+        }
 
         let result = try head.predictFrameCount(
             videoTokens: encoded.videoEncoding,
@@ -3888,6 +3907,29 @@ AESTHETIC QUALITY (in addition to the above, without breaking the objective capt
         LTXDebug.log("Duration head: \(result.rawSeconds)s → \(result.frames) frames"
             + (result.wasClamped ? " (clamped)" : ""))
         return (result.frames, result.rawSeconds, result.wasClamped)
+    }
+
+    /// Build a text encoder with the audio connector, loaded from the already
+    /// resolved checkpoint, for `predictFrameCount` to feed the duration head.
+    /// Never assigned to `self.textEncoder` — the video-only generation path
+    /// reads `videoEncoding` off the pipeline's regular encoder unchanged.
+    private func loadConnectorWithAudioForDurationHead() async throws -> VideoGemmaTextEncoderModel {
+        // `resolveCheckpointSync()` doesn't resolve the text-encoder bundle for
+        // split checkpoints (LTX-2.5), which the projection weights need — go
+        // through the async resolver, which reads the already-cached-on-disk
+        // paths without re-downloading anything.
+        let checkpoint = try await resolveCheckpoint()
+        let source = LTXCheckpointSource(model: model, paths: checkpoint)
+        let textEncoderAssets = try checkpoint.textEncoder.map { try LTX25TextEncoderAssets(fileURL: $0) }
+        let connectorWeights = try source.loadComponents(
+            includeAudio: true, textEncoderAssets: textEncoderAssets
+        ).connector
+
+        let encoder = createTextEncoder(
+            includeAudioConnector: true,
+            gatedAttention: model.transformerConfig.gatedAttention)
+        try LTXWeightLoader.applyTextEncoderWeights(connectorWeights, to: encoder)
+        return encoder
     }
 
     // MARK: - Download Helpers
