@@ -31,9 +31,10 @@ accumulator dtype, so it sidesteps the mismatch entirely — not because it
 avoids the dispatch (it doesn't).
 
 The LTX connector's feed-forward down-projection —
-`[1024 tokens, 4096] @ [4096, 16384]ᵀ` — sits exactly on the `M·N = 2048²`
-boundary (`1024 × 4096 · 4 / 4096 = 2048²`... concretely `1024·4096 =
-4194304 = 2048²`), so it's the first thing to hit this on every LTX-2.5
+`[1024 tokens, 16384] @ [16384, 4096]` (the *down* projection, `ConnectorFeedForward.projectOut`;
+its *up* projection, `projectIn`, is the differently-shaped `[1024, 4096] @ [4096, 16384]`
+and is not the one that hits this) — sits exactly on the `M·N = 2048²`
+boundary (concretely `1024 tokens · 4096 out = 4194304 = 2048²`), so it's the first thing to hit this on every LTX-2.5
 generation on affected hardware. `TextEncoderConfig.default`'s connector
 geometry (32 heads × 128 = 4096, 8 layers) is identical between LTX-2.3 and
 LTX-2.5, so this is not 2.5-specific by shape — if 2.3 hasn't been reported
