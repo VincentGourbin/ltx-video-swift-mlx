@@ -2,6 +2,19 @@
 
 ## 2026-09-05
 
+* **Pitfall**: [The duration head must see audio connector tokens, not just video](/docs/knowledge/pitfalls/duration-head-needs-audio-tokens.md)
+  — `predictFrameCount` fed the LTX-2.5 duration head video connector tokens
+  only, while upstream always builds the audio connector and gives the head
+  both streams. On the reference scene (seed 42, 2.5-distilled) this was a
+  27.0 s → 473 frames (clamped) vs 4.09375 s → 97 frames difference, over 6x,
+  on the identical prompt. Fixed in `fix/duration-head-audio-tokens` by
+  building a throwaway video+audio encoder for the one call that feeds the
+  head, never touching `self.textEncoder` — the actual generation path
+  (`videoEncoding`) is verified byte-identical before/after. Re-measured the
+  before/after tables in
+  [duration-head-does-not-read-written-durations](/docs/knowledge/pitfalls/duration-head-does-not-read-written-durations.md)
+  and updated `DurationPromptE2ETests`' assertions to the new values (not a
+  regression — the old assertions were pinned to the wrong inputs).
 * **Pitfall**: [A quantized transformer load first materialised the entire bf16 checkpoint](/docs/knowledge/pitfalls/quantized-load-materialised-full-bf16.md)
   — issue #86 (GPU timeout on a 36 GB M3 Max loading the transformer at
   50%). `loadModels()` evaluated the whole bf16 transformer in one combined
