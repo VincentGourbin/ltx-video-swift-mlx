@@ -36,7 +36,7 @@ import MLXNN
 /// - **Resolution**: Width and height must be divisible by 64
 public enum LTXVideo {
     /// Framework version
-    public static let version = "0.4.0"
+    public static let version = "0.4.1"
 
     /// Framework name
     public static let name = "LTX-Video-Swift-MLX"
