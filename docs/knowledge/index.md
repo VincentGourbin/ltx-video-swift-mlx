@@ -33,6 +33,7 @@ or re-litigated.
 * [LipDub segment continuation anchors on the tail latent](decisions/lipdub-continuation-anchor.md) - position 0 + overlap-and-trim; measured seam PSNR 17.4 → 24.6 dB
 * [The LTX-2.5 prompt enhancer is a second Gemma, and the caller may supply it](decisions/prompt-enhancer-source.md) - encode-only bundled encoder forces a separate E2B-it; bf16 default (10.24 GB), 6-bit and a caller-supplied root opt-in
 * [A retake picks its stream with a modality](decisions/retake-modality-frozen-stream.md) - freezing is a σ = 0 timestep, not a strength of zero; .audioOnly re-muxes the source picture instead of decoding it
+* [Bumping mlx-swift to main was rejected](decisions/mlx-swift-main-bump-rejected-2026-09.md) - needed for the NAX split-K GEMM fix, but changes generation output ~20-28% on hardware that bug can't even reach; shipped a hardware-gated workaround instead
 
 # Pitfalls
 

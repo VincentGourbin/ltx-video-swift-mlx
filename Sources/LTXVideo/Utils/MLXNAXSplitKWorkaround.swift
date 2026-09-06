@@ -18,7 +18,8 @@ import Foundation
 /// (2026-07-07), but no mlx-swift tag vendors it yet — bumping to `main`
 /// changes generation output on unaffected hardware too (measured ~20-28%
 /// relative on a plain bf16 generation on an M3 Max, unrelated to this bug;
-/// see `docs/knowledge/pitfalls/`). Until a tagged fix lands, this workaround
+/// see `docs/knowledge/decisions/mlx-swift-main-bump-rejected-2026-09.md`).
+/// Until a tagged fix lands, this workaround
 /// casts the one exposed op (the text connector's feed-forward down
 /// projection — `[1024, 16384] @ [16384, 4096]`, `M·N` sits exactly on the
 /// `2048²` dispatch threshold) to float32, matching the accumulator's

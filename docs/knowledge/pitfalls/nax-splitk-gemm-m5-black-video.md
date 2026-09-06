@@ -48,25 +48,11 @@ Fixed upstream by [mlx#3810](https://github.com/ml-explore/mlx/pull/3810)
 
 # Why this repo didn't just bump mlx-swift
 
-No mlx-swift tag vendors the fix yet; only `main`
-(`ab924c82`, "update for mlx v0.32.2", 2026-09-01) does. Bumping to `main`
-changes final generation output substantially — ~20-28% relative on a plain
-bf16 generation — on hardware this NAX bug **cannot** reach at all (measured
-on an M3 Max, gen-15, well under the gen-17 threshold). Text-encoder output
-was ~identical before/after the bump (<0.2% relative, ordinary bf16 rounding
-noise); the divergence enters somewhere in the denoising loop. Bisecting the
-~13 mlx-swift-level commits between `0.31.6` and `main` narrowed it to that
-one vendor-sync commit as a whole; bisecting *inside* it (the ~500 underlying
-mlx commits it carries) hit a structural wall — `mlx-c` (a second submodule,
-pinned in lockstep with `mlx` by mlx-swift's own maintainers) needs a very
-recent `mlx` snapshot to even compile, leaving almost no independently
-testable range without bisecting both submodules together. Not pursued
-further; see `docs/knowledge/log.md` (2026-09-05/06 entries) for the detailed
-trail if someone picks this back up.
-
-Given that, shipping the bump now would fix M5 at the cost of a silent,
-unvalidated numerical change for every other machine. Not an acceptable
-trade for a workaround that has a narrower, verifiable alternative.
+No mlx-swift tag vendors the fix yet; only `main` does, and bumping to it
+was investigated and rejected — it changes final generation output by
+~20-28% relative even on hardware this NAX bug cannot reach at all. Full
+measurement, and why the exact culprit commit wasn't pinned down, in
+[mlx-swift-main-bump-rejected-2026-09](../decisions/mlx-swift-main-bump-rejected-2026-09.md).
 
 # The workaround
 
@@ -108,7 +94,16 @@ Flagged, not fixed, pending a confirmed report.
 
 # Guarded by
 
-No automated test exercises the actual M5 kernel bug (this repo has no M5
-hardware). `swift test` confirms the workaround doesn't change behavior on
-non-affected hardware (`MLXNAXSplitKWorkaround.isAffectedHardware == false`
-on every CI/dev machine so far) and doesn't crash when forced on.
+Nothing automated yet — this is a manual-verification-only fix. No test
+anywhere in the repo sets `LTX_NAX_WORKAROUND` or exercises either branch of
+`MLXNAXSplitKWorkaround`; both the "off on unaffected hardware" and "forced
+on stays finite" claims above were checked by hand (CLI runs, `--debug`
+output), not by `swift test`. Writing that test isn't a trivial follow-up
+either: `isAffectedHardware` memoizes the hardware/OS auto-detection in a
+`static let` (deliberately — the real GPU generation can't change mid-process),
+so a single test process can't cleanly exercise both the auto-detected and
+the env-var-forced path against a *different* underlying "hardware" value —
+it would need a separate process per case (e.g. spawning the CLI, as the
+manual verification above did) rather than an in-process `XCTest`/swift-testing
+case. No automated test exercises the actual M5 kernel bug either way (this
+repo has no M5 hardware).

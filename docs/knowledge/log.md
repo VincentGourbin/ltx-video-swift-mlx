@@ -1,5 +1,31 @@
 # Directory Update Log
 
+## 2026-09-06 (2)
+
+* **Correction**: a `/code-review` gap sweep on PR #89 (already merged) found
+  three real issues, fixed in a follow-up:
+  - `MLXNAXSplitKWorkaround`'s "Guarded by" claim that `swift test` verifies
+    the forced-on path was false — nothing in the repo sets
+    `LTX_NAX_WORKAROUND`; both claims in the pitfall doc were checked by hand,
+    not by an automated test. Corrected the doc, and noted that a real test
+    would need a separate process per case (`isAffectedHardware` memoizes the
+    hardware/OS auto-detection deliberately, so one process can't cleanly
+    exercise both the auto-detected and env-var-forced paths against
+    different underlying "hardware").
+  - `LTXTextEncoder.swift`'s connector correctly leaves RoPE cos/sin at the
+    original (pre-workaround) dtype on affected hardware — matching the
+    Python reference's f64→f32→bf16 pipeline, unrelated to the NAX fix, which
+    only targets the down-projection GEMM. Added a comment at the cast site
+    so a future reader doesn't mistake this file for "everything runs in
+    float32 on affected hardware" and copy an incomplete pattern elsewhere.
+  - The "why not bump mlx-swift" investigation (measured, rejected) was
+    filed only as a pitfall subsection, not in `docs/knowledge/decisions/` —
+    this repo's own established place for "alternative investigated,
+    measured, rejected" (ten existing entries of exactly that shape). Split
+    out to
+    [mlx-swift-main-bump-rejected-2026-09](/docs/knowledge/decisions/mlx-swift-main-bump-rejected-2026-09.md),
+    linked from the pitfall doc, indexed under Decisions.
+
 ## 2026-09-06
 
 * **Pitfall**: [The text connector goes NaN on M5/macOS 26.2+](/docs/knowledge/pitfalls/nax-splitk-gemm-m5-black-video.md)

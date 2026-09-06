@@ -638,6 +638,17 @@ class Embeddings1DConnector: Module {
         // Python connector uses numpy float64 for frequency computation, so we use doublePrecision=true
         // This produces cos/sin of shape (1, H, T, D//2) for per-head application
         // Cast to bf16 to match Python's behavior (Python computes in f64→f32→bf16)
+        //
+        // `inputDtype` is the dtype captured at the top of this function,
+        // before the NAX workaround above may have widened `x` to float32 —
+        // so cos/sin stay at the *original* (typically bf16) precision even
+        // on affected hardware, deliberately: matching the Python reference
+        // exactly matters here, and `applySplitRotaryEmb` (LTXRoPE.swift)
+        // upcasts both its input and these to float32 for the rotation math
+        // regardless, same as it always has. This is not the same as `x`
+        // itself running in float32 for the down-projection GEMM below —
+        // don't read this file as "everything is float32 on affected
+        // hardware", only the one GEMM the workaround targets is.
         var freqsCis = precomputeFreqsCis(
             indicesGrid: indicesGrid,
             dim: innerDim,
